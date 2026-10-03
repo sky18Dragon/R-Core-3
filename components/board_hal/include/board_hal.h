@@ -25,10 +25,13 @@ typedef enum {
     BOARD_TYPE_SEEEDSTUDIO_RETERMINAL_E1003,
     BOARD_TYPE_SEEEDSTUDIO_RETERMINAL_E1004,
     BOARD_TYPE_M5STACK_M5PAPER_V11,
+    BOARD_TYPE_READ_PICO,
     BOARD_TYPE_UNKNOWN
 } board_type_t;
 
-#ifdef CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+#include "board_read_pico.h"
+#elif defined(CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73)
 #include "board_waveshare_photopainter_73.h"
 #elif defined(CONFIG_BOARD_DRIVER_SEEEDSTUDIO_XIAO_EE02)
 #include "board_seeedstudio_xiao_ee02.h"

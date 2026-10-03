@@ -1,0 +1,3 @@
+[submodule "read_pico_reference"]
+	path = third_party/read_pico_firmware
+	url = https://github.com/MindReset/read_pico_firmware.git

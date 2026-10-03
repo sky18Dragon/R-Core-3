@@ -14,6 +14,7 @@ esp_err_t display_manager_show_calibration(void);
 esp_err_t display_manager_clear(void);
 bool display_manager_is_busy(void);
 void display_manager_rotate_from_storage(void);
+esp_err_t display_manager_rotate_from_storage_checked(void);
 const char *display_manager_get_current_image(void);
 void display_manager_initialize_paint(void);
 
@@ -63,6 +64,7 @@ esp_err_t display_manager_push_rgb_row(int y, const uint8_t *rgb_row, int width)
 esp_err_t display_manager_push_rgb_column(int x, const uint8_t *rgb_col, int height);
 // Returns ESP_ERR_NOT_FINISHED when the display succeeded but the snapshot
 // failed (the fallback_name, when given, has been published in its place).
+// A checked Read Pico refresh failure publishes no image/link/snapshot and releases the lock.
 esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub);
 
 #endif

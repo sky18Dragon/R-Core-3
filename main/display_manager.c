@@ -23,10 +23,14 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "storage.h"
 #include "utils.h"
 #include "zlib.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_epaper.h"
+#endif
 
 static const char *TAG = "display_manager";
 #define NVS_LAST_IMAGE_KEY "last_image"
@@ -55,6 +59,24 @@ static char last_displayed_image[256] = {0};  // Internal state: last displayed 
 
 static uint8_t *epd_image_buffer = NULL;
 static uint32_t image_buffer_size;
+
+// Read Pico has a checked synchronous result; legacy boards retain their void contract.
+// Commit current-image metadata only after both GC16 and power-down succeed.
+static esp_err_t refresh_panel(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    read_pico_refresh_result_t result =
+        read_pico_epaper_display(epd_image_buffer, image_buffer_size);
+    if (!result.completed) {
+        ESP_LOGE(TAG, "Read Pico refresh failed: stage=%d operation=%d cleanup=%d", result.error,
+                 result.operation_error, result.cleanup_error);
+        return result.error == READ_PICO_REFRESH_BUSY ? ESP_ERR_TIMEOUT : ESP_FAIL;
+    }
+#else
+    epaper_display(epd_image_buffer);
+#endif
+    return ESP_OK;
+}
 
 // Load last displayed image from NVS
 static void load_last_displayed_image(void)
@@ -195,7 +217,11 @@ esp_err_t display_manager_show_image(const char *filename)
     // This is a blocking call that takes ~25-30 seconds for 7-color e-paper
     // It handles: Power On -> Send Data -> Refresh -> Power Off
     ESP_LOGI(TAG, "Calling epaper_display...");
-    epaper_display(epd_image_buffer);
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
     ESP_LOGI(TAG, "epaper_display returned successfully");
 
     ESP_LOGI(TAG, "E-paper display update complete");
@@ -243,7 +269,11 @@ esp_err_t display_manager_show_rgb_buffer(const uint8_t *rgb_buffer, int width, 
     ESP_LOGI(TAG, "Free heap before epaper_display: %lu bytes", esp_get_free_heap_size());
 
     ESP_LOGI(TAG, "Calling epaper_display...");
-    epaper_display(epd_image_buffer);
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
     ESP_LOGI(TAG, "epaper_display returned successfully");
 
     ESP_LOGI(TAG, "E-paper display update complete");
@@ -414,7 +444,11 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
 
     if (show) {
         ESP_LOGI(TAG, "Starting e-paper display update (this takes ~30 seconds)");
-        epaper_display(epd_image_buffer);
+        esp_err_t refresh = refresh_panel();
+        if (refresh != ESP_OK) {
+            xSemaphoreGive(display_mutex);
+            return refresh;
+        }
         ESP_LOGI(TAG, "E-paper display update complete");
 
         const char *record = pub ? pub->display_name : NULL;
@@ -451,8 +485,17 @@ esp_err_t display_manager_clear(void)
         return ESP_FAIL;
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    Paint_Clear(display_white_color());
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
+#else
     epaper_clear(epd_image_buffer, EPD_7IN3E_WHITE);
     epaper_display(epd_image_buffer);
+#endif
 
     // Remove the current image link so API returns 404
     unlink(CURRENT_IMAGE_LINK);
@@ -484,7 +527,11 @@ esp_err_t display_manager_show_calibration(void)
     }
 
     // Display the buffer
-    epaper_display(epd_image_buffer);
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
 
     xSemaphoreGive(display_mutex);
 
@@ -509,7 +556,7 @@ const char *display_manager_get_current_image(void)
     return current_image;
 }
 
-static void rotate_sequential(char **enabled_albums, int album_count)
+static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
 {
     ESP_LOGI(TAG, "Sequential rotation mode");
     int32_t last_idx = config_manager_get_last_index();
@@ -543,17 +590,25 @@ static void rotate_sequential(char **enabled_albums, int album_count)
 
                     // Keep track of the very first image in case we need to wrap
                     if (first_image[0] == '\0') {
-                        strncpy(first_image, fullpath, sizeof(first_image) - 1);
+                        snprintf(first_image, sizeof(first_image), "%s", fullpath);
                     }
 
                     if (current_idx == target_idx) {
                         ESP_LOGI(TAG, "Found target index %ld: %s", (long) target_idx, fullpath);
-                        display_manager_show_image(fullpath);
+                        esp_err_t displayed = display_manager_show_image(fullpath);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                        if (displayed != ESP_OK) {
+                            closedir(dir);
+                            return displayed;
+                        }
+#else
+                        (void) displayed;
+#endif
                         save_last_displayed_image(fullpath);
                         config_manager_set_last_index(target_idx);
                         found_target = true;
                         closedir(dir);
-                        return;
+                        return ESP_OK;
                     }
                     current_idx++;
                 }
@@ -572,16 +627,25 @@ static void rotate_sequential(char **enabled_albums, int album_count)
     if (!found_target) {
         if (first_image[0] != '\0') {
             ESP_LOGI(TAG, "Wrapping around to start. Displaying: %s", first_image);
-            display_manager_show_image(first_image);
+            esp_err_t displayed = display_manager_show_image(first_image);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (displayed != ESP_OK) {
+                return displayed;
+            }
+#else
+            (void) displayed;
+#endif
             save_last_displayed_image(first_image);
             config_manager_set_last_index(0);  // Reset index to 0
         } else {
             ESP_LOGW(TAG, "No images found in any enabled albums.");
+            return ESP_ERR_NOT_FOUND;
         }
     }
+    return ESP_OK;
 }
 
-static void rotate_random(char **enabled_albums, int album_count)
+static esp_err_t rotate_random(char **enabled_albums, int album_count)
 {
     ESP_LOGI(TAG, "Random rotation mode");
 
@@ -615,14 +679,14 @@ static void rotate_random(char **enabled_albums, int album_count)
 
     if (total_image_count == 0) {
         ESP_LOGW(TAG, "No images found in enabled albums");
-        return;
+        return ESP_ERR_NOT_FOUND;
     }
 
     // Build image list with absolute paths from all enabled albums
     char **image_list = malloc(total_image_count * sizeof(char *));
     if (!image_list) {
         ESP_LOGE(TAG, "Failed to allocate image list");
-        return;
+        return ESP_ERR_NO_MEM;
     }
     int idx = 0;
 
@@ -665,7 +729,7 @@ static void rotate_random(char **enabled_albums, int album_count)
     if (total_image_count == 0) {
         ESP_LOGW(TAG, "No displayable images found in enabled albums");
         free(image_list);
-        return;
+        return ESP_ERR_NOT_FOUND;
     }
 
     // Load last displayed image if not already loaded
@@ -695,19 +759,31 @@ static void rotate_random(char **enabled_albums, int album_count)
     // Display random image
     ESP_LOGI(TAG, "Auto-rotate: Displaying random image %d/%d: %s", random_index + 1,
              total_image_count, image_list[random_index]);
-    display_manager_show_image(image_list[random_index]);
+    esp_err_t displayed = display_manager_show_image(image_list[random_index]);
 
     // Store the displayed image filename in NVS
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (displayed == ESP_OK) {
+        save_last_displayed_image(image_list[random_index]);
+    }
+#else
+    (void) displayed;
     save_last_displayed_image(image_list[random_index]);
+#endif
 
     // Free image list
     for (int i = 0; i < total_image_count; i++) {
         free(image_list[i]);
     }
     free(image_list);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return displayed;
+#else
+    return ESP_OK;
+#endif
 }
 
-void display_manager_rotate_from_storage(void)
+esp_err_t display_manager_rotate_from_storage_checked(void)
 {
     if (!config_manager_get_auto_rotate()) {
         ESP_LOGI(TAG, "Manual rotation triggered (auto-rotate is disabled)");
@@ -717,7 +793,7 @@ void display_manager_rotate_from_storage(void)
 
     if (!storage_has_persistent_storage()) {
         ESP_LOGI(TAG, "Storage not mounted - skipping rotation");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     // Get enabled albums
@@ -726,7 +802,7 @@ void display_manager_rotate_from_storage(void)
     if (album_manager_get_enabled_albums(&enabled_albums, &album_count) != ESP_OK ||
         album_count == 0) {
         ESP_LOGW(TAG, "No enabled albums for auto-rotate");
-        return;
+        return ESP_ERR_NOT_FOUND;
     }
 
     ESP_LOGD(TAG, "Collecting images from %d enabled album(s)", album_count);
@@ -751,20 +827,28 @@ void display_manager_rotate_from_storage(void)
         if (album_manager_get_enabled_albums(&enabled_albums, &album_count) != ESP_OK ||
             album_count == 0) {
             ESP_LOGW(TAG, "No enabled albums remaining after cleanup");
-            return;
+            return ESP_ERR_NOT_FOUND;
         }
         ESP_LOGI(TAG, "After cleanup: %d enabled album(s)", album_count);
     }
 
     // Get rotation mode
     sd_rotation_mode_t mode = config_manager_get_sd_rotation_mode();
+    esp_err_t result;
 
     if (mode == SD_ROTATION_SEQUENTIAL) {
-        rotate_sequential(enabled_albums, album_count);
+        result = rotate_sequential(enabled_albums, album_count);
     } else {
-        rotate_random(enabled_albums, album_count);
+        result = rotate_random(enabled_albums, album_count);
     }
 
     album_manager_free_album_list(enabled_albums, album_count);
     ESP_LOGI(TAG, "Rotation complete");
+    return result;
+}
+
+void display_manager_rotate_from_storage(void)
+{
+    // Preserve the upstream void API for existing boards/callers.
+    (void) display_manager_rotate_from_storage_checked();
 }

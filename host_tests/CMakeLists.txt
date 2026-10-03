@@ -188,3 +188,152 @@ target_link_libraries(
 )
 
 gtest_discover_tests(display_flow_test)
+
+# Read-only PMU codec: no ESP-IDF or board I/O in the portable core.
+add_executable(read_pico_pmu_test
+  test_read_pico_pmu.cpp
+  ../components/board_hal/src/read_pico_pmu_codec.c
+)
+target_include_directories(read_pico_pmu_test PRIVATE
+  ../components/board_hal/include
+  ../third_party/read_pico_firmware/components/read_pico_pmu/include
+)
+target_link_libraries(read_pico_pmu_test GTest::gtest_main)
+gtest_discover_tests(read_pico_pmu_test)
+
+add_executable(read_pico_board_test
+  test_read_pico_board.cpp
+  ../components/board_hal/src/driver_read_pico.c
+  ../components/board_hal/src/read_pico_pmu_codec.c
+)
+target_include_directories(read_pico_board_test PRIVATE
+  read_pico_stubs
+  stubs
+  ../components/board_hal/include
+  ../third_party/read_pico_firmware/components/read_pico_pmu/include
+)
+target_link_libraries(read_pico_board_test GTest::gtest_main)
+gtest_discover_tests(read_pico_board_test)
+
+add_executable(read_pico_display_test
+  test_read_pico_display.cpp
+  ../components/epaper_src/GUI_Paint.c
+  ../components/read_pico_display/src/read_pico_frame.c
+  ../components/read_pico_display/src/read_pico_refresh.c
+)
+target_include_directories(read_pico_display_test PRIVATE
+  ../components/read_pico_display/include
+  ../components/epaper_src
+  ../components/epaper_src/Fonts
+  stubs
+)
+target_link_libraries(read_pico_display_test GTest::gtest_main)
+gtest_discover_tests(read_pico_display_test)
+
+# The locked vendor source is compiled unchanged for its real fault decoder.
+# GPIO/I2C/timing are host fakes, not physical power/timeout validation.
+add_executable(read_pico_sy_power_test
+  test_read_pico_sy_power.cpp
+  ../components/epaper_driver_read_pico/src/read_pico_sy_power.c
+  ../third_party/read_pico_firmware/components/sy7636a/sy7636a.c
+)
+target_include_directories(read_pico_sy_power_test PRIVATE
+  read_pico_sy_stubs read_pico_stubs stubs
+  ../components/epaper_driver_read_pico/include
+  ../components/epaper_driver_read_pico/src
+  ../third_party/read_pico_firmware/components/sy7636a/include
+)
+target_link_libraries(read_pico_sy_power_test GTest::gtest_main)
+gtest_discover_tests(read_pico_sy_power_test)
+
+find_package(ZLIB REQUIRED)
+add_executable(read_pico_display_commit_test
+  test_read_pico_display_commit.cpp
+  ../main/display_manager.c
+  ../components/epaper_src/GUI_Paint.c
+  ../components/epaper_src/GUI_RawBuffer.c
+)
+target_compile_definitions(read_pico_display_commit_test PRIVATE
+  CONFIG_BOARD_DRIVER_READ_PICO=1 FS_MOUNT_POINT="pf_display_checked")
+target_include_directories(read_pico_display_commit_test PRIVATE
+  display_checked_stubs stubs ../main
+  ../components/epaper/include ../components/epaper_src ../components/epaper_src/Fonts
+  ../components/epaper_driver_read_pico/include ../components/read_pico_display/include
+)
+target_link_libraries(read_pico_display_commit_test GTest::gtest_main ZLIB::ZLIB m)
+gtest_discover_tests(read_pico_display_commit_test)
+
+# Real outer backend + real SY adapter/core, renderer/HAL/RTOS/heap boundary fakes.
+# The separately compiled IDF firmware validates actual vendor ABI/types.
+add_executable(read_pico_native_test
+  test_read_pico_native.cpp
+  ../components/epaper_driver_read_pico/src/driver_read_pico.c
+  ../components/epaper_driver_read_pico/src/read_pico_vendor_gray16.c
+  ../components/epaper_driver_read_pico/src/read_pico_sy_power.c
+  ../components/read_pico_display/src/read_pico_frame.c
+  ../components/read_pico_display/src/read_pico_refresh.c
+  ../components/read_pico_display/src/read_pico_pattern.c
+  ../components/read_pico_display/src/read_pico_validation.c
+  ../third_party/read_pico_firmware/components/sy7636a/sy7636a.c
+)
+target_include_directories(read_pico_native_test PRIVATE
+  read_pico_native_stubs read_pico_sy_stubs read_pico_stubs stubs
+  ../components/epaper/include ../components/epaper_driver_read_pico/include
+  ../components/epaper_driver_read_pico/src
+  ../components/read_pico_display/include ../components/board_hal/include
+  ../third_party/read_pico_firmware/components/sy7636a/include
+)
+target_link_libraries(read_pico_native_test GTest::gtest_main)
+target_compile_definitions(read_pico_native_test PRIVATE CONFIG_READ_PICO_DISPLAY_VALIDATION=1)
+gtest_discover_tests(read_pico_native_test)
+
+add_executable(read_pico_validation_test
+  test_read_pico_validation.cpp
+  ../components/read_pico_display/src/read_pico_validation.c
+)
+target_include_directories(read_pico_validation_test PRIVATE
+  ../components/read_pico_display/include
+)
+target_link_libraries(read_pico_validation_test GTest::gtest_main)
+gtest_discover_tests(read_pico_validation_test)
+
+add_executable(read_pico_pattern_test
+  test_read_pico_pattern.cpp
+  ../components/read_pico_display/src/read_pico_pattern.c
+  ../components/read_pico_display/src/read_pico_frame.c
+)
+target_include_directories(read_pico_pattern_test PRIVATE
+  ../components/read_pico_display/include
+)
+target_link_libraries(read_pico_pattern_test GTest::gtest_main)
+gtest_discover_tests(read_pico_pattern_test)
+
+add_executable(read_pico_scan_probe_test
+  test_read_pico_scan_probe.cpp
+  ../components/read_pico_display/src/read_pico_scan_trace.c
+  ../components/epaper_driver_read_pico/src/read_pico_scan_probe.c
+)
+target_include_directories(read_pico_scan_probe_test PRIVATE
+  read_pico_probe_stubs read_pico_stubs stubs ../components/read_pico_display/include
+  ../components/epaper_driver_read_pico/include
+)
+target_link_libraries(read_pico_scan_probe_test GTest::gtest_main)
+gtest_discover_tests(read_pico_scan_probe_test)
+
+# Real locked vendor CPU drawing and highlevel wrapper, never its IO/DMA renderer.
+add_executable(read_pico_vendor_test
+  test_read_pico_vendor.cpp
+  ../components/epaper_driver_read_pico/src/read_pico_vendor_gray16.c
+  ../components/read_pico_display/src/read_pico_pattern.c
+  ../components/read_pico_display/src/read_pico_frame.c
+  ../third_party/read_pico_firmware/components/epdiy/src/epdiy.c
+  ../third_party/read_pico_firmware/components/epdiy/src/highlevel.c
+)
+target_include_directories(read_pico_vendor_test PRIVATE
+  read_pico_vendor_stubs stubs read_pico_stubs
+  ../components/epaper_driver_read_pico/src ../components/read_pico_display/include
+  ../third_party/read_pico_firmware/components/epdiy/src
+  ../third_party/read_pico_firmware/components/epdiy/include
+)
+target_link_libraries(read_pico_vendor_test GTest::gtest_main)
+gtest_discover_tests(read_pico_vendor_test)

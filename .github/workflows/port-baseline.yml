@@ -1,0 +1,59 @@
+name: PhotoFrame Port Baseline
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libpng-dev zlib1g-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+      - name: Test imported baseline
+        run: bash scripts/test_baseline.sh
+
+  firmware-v61:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Generate embedded assets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin
+          pip install -r requirements-build.txt
+          npm --prefix webapp ci
+          npm --prefix webapp run build
+          python3 build.py --board waveshare_photopainter_73 --step splash
+      - name: Compile original board and three Read Pico bring-up profiles
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: esp32s3
+          command: |
+            test "$(git -C "$IDF_PATH" rev-parse HEAD)" = fff9895c82d744c7237be8847347bdd1b07c6643
+            python build.py --board waveshare_photopainter_73 --step firmware
+            python build.py --board read_pico --step firmware
+            python build.py --board read_pico --step firmware --read-pico-factory-diagnostic
+            python build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-display-validation

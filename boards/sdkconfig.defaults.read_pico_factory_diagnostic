@@ -1,0 +1,3 @@
+# Diagnostic only, preserving the verified on-device factory partition layout.
+# Never write bootloader/partition-table/data images from this build.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/partitions.read_pico_factory.csv"

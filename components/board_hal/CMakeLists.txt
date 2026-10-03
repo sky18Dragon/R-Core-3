@@ -6,7 +6,6 @@ set(PRIV_REQS
     epaper_driver_ed2208_gca
     epaper_driver_ed2208_nca
     epaper_driver_it8951
-    esp_driver_i2c
     esp_driver_spi
     pmic_driver_axp2101
     rtc_driver_pcf85063
@@ -17,7 +16,9 @@ set(PRIV_REQS
     sensor_driver_shtc3
 )
 
-if(CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73)
+if(CONFIG_BOARD_DRIVER_READ_PICO)
+    list(APPEND SRCS "src/driver_read_pico.c" "src/read_pico_pmu_codec.c")
+elseif(CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73)
     list(APPEND SRCS "src/driver_waveshare_photopainter_73.c")
 elseif(CONFIG_BOARD_DRIVER_SEEEDSTUDIO_XIAO_EE02)
     list(APPEND SRCS "src/driver_seeedstudio_xiao_ee02.c")
@@ -38,11 +39,12 @@ endif()
 idf_component_register(
     SRCS "${SRCS}"
     INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS "../../third_party/read_pico_firmware/components/read_pico_pmu/include"
     # esp_driver_usb_serial_jtag is registered on every target (with no sources
     # on chips without the peripheral, e.g. the ESP32), so require it
     # unconditionally. Kconfig values such as CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED
     # are not visible during IDF's early requirement expansion, so a conditional
     # here silently drops it and breaks the S3 boards that detect USB through it.
-    REQUIRES esp_timer driver esp_adc esp_driver_gpio esp_driver_usb_serial_jtag epaper sensor
+    REQUIRES esp_timer driver esp_adc esp_driver_gpio esp_driver_i2c esp_driver_usb_serial_jtag epaper sensor
     PRIV_REQUIRES ${PRIV_REQS}
 )

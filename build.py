@@ -81,10 +81,15 @@ def idf_py_command():
     return [python, script]
 
 
-def build_firmware(board, extra_args):
+def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
+                   read_pico_display_validation=False):
     """Build firmware with idf.py."""
     print(f"\n=== Building firmware for {board} ===")
     sdkconfig_defaults = f"sdkconfig.defaults;boards/sdkconfig.defaults.{board}"
+    if read_pico_factory_diagnostic:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_factory_diagnostic"
+    if read_pico_display_validation:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_display_validation"
 
     # Boards differ in target chip (the M5Paper is a plain ESP32, everything
     # else is an ESP32-S3). Pass it explicitly: idf.py resolves the target
@@ -99,6 +104,17 @@ def build_firmware(board, extra_args):
 
     cmake_defines = [a for a in extra_args if a.startswith("-D")]
     post_build_args = [a for a in extra_args if not a.startswith("-D")]
+
+    if board == "read_pico":
+        if extra_args:
+            print("Read Pico P1 is compile-only; extra/flash/monitor arguments are disabled.")
+            sys.exit(1)
+        os.makedirs(".cache", exist_ok=True)
+        suffix = "-factory" if read_pico_factory_diagnostic else ""
+        if read_pico_display_validation:
+            suffix = "-display"
+        idf_base += ["-B", f"build-read-pico{suffix}",
+                     f"-DSDKCONFIG=.cache/sdkconfig.read_pico{suffix}"]
 
     build_cmd = idf_base + cmake_defines + ["build"]
     print(f"Running: {' '.join(build_cmd)}")
@@ -134,6 +150,16 @@ def main():
         help="Board type to build",
     )
     parser.add_argument(
+        "--read-pico-factory-diagnostic",
+        action="store_true",
+        help="Compile an isolated Read Pico diagnostic matching the verified Demo factory layout; never flash",
+    )
+    parser.add_argument(
+        "--read-pico-display-validation",
+        action="store_true",
+        help="Compile command-armed display validation; requires the factory diagnostic profile; never flash",
+    )
+    parser.add_argument(
         "--fullclean",
         action="store_true",
         help="Remove sdkconfig and run idf.py fullclean before building",
@@ -149,6 +175,15 @@ def main():
     args, extra_args = parser.parse_known_args()
 
     steps = args.step if args.step else STEPS
+
+    if args.board == "read_pico" and (args.fullclean or extra_args):
+        parser.error("Read Pico P1 only permits building; no fullclean or extra commands")
+    if args.read_pico_factory_diagnostic and (
+        args.board != "read_pico" or steps != ["firmware"]
+    ):
+        parser.error("factory diagnostic requires --board read_pico --step firmware only")
+    if args.read_pico_display_validation and not args.read_pico_factory_diagnostic:
+        parser.error("display validation requires --read-pico-factory-diagnostic")
 
     if args.fullclean:
         print("Performing full clean...")
@@ -167,7 +202,8 @@ def main():
         generate_splash(args.board)
 
     if "firmware" in steps:
-        build_firmware(args.board, extra_args)
+        build_firmware(args.board, extra_args, args.read_pico_factory_diagnostic,
+                       args.read_pico_display_validation)
 
 
 if __name__ == "__main__":

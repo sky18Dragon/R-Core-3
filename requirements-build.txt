@@ -1,0 +1,2 @@
+# Splash generation; ESP-IDF has its own isolated Python requirements.
+qrcode==8.2

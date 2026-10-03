@@ -1,0 +1,7 @@
+# Explicitly authorized controlled display test, not the default read-only entry.
+CONFIG_READ_PICO_DISPLAY_VALIDATION=y
+# Match the manufacturer's renderer/cache profile, without its experimental 120 MHz/HPM.
+# Debug optimization and 32KB/32B cache are not the tested renderer baseline.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y

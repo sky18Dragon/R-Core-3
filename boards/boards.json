@@ -1,5 +1,15 @@
 [
   {
+    "id": "read_pico",
+    "label": "Read Pico (P1 diagnostic only)",
+    "display": "4.7\" 16-level grayscale (not enabled)",
+    "resolution": [1216, 684],
+    "display_type": "gc16",
+    "target": "esp32s3",
+    "storage": "SDMMC 1-bit (not mounted in P1)",
+    "url": "https://dot.mindreset.tech/docs/read_0"
+  },
+  {
     "id": "waveshare_photopainter_73",
     "label": "Waveshare ESP32-S3-PhotoPainter",
     "display": "7.3\" 6-color",

@@ -1,3 +1,21 @@
+if(CONFIG_BOARD_DRIVER_READ_PICO)
+    set(READ_PICO_ENTRY "read_pico_bringup.c")
+    if(CONFIG_READ_PICO_DISPLAY_VALIDATION)
+        set(READ_PICO_ENTRY "read_pico_display_validation.c")
+    endif()
+    # P1 cannot fall through to the PhotoFrame app (display/NVS/SD are not ready).
+    idf_component_register(
+        # Compile the checked business adapter without starting or linking its unused app flow.
+        SRCS "${READ_PICO_ENTRY}" "display_manager.c" "utils.c"
+        INCLUDE_DIRS "."
+        PRIV_REQUIRES board_hal esp_app_format esp_psram esp_hw_support read_pico_display
+                      epaper_driver_read_pico epaper_src espressif__zlib nvs_flash
+                      esp_http_client esp_netif esp_wifi espressif__cjson
+                      esp_driver_usb_serial_jtag esp_timer esp_partition vfs
+    )
+    return()
+endif()
+
 set(SOURCES
     "album_manager.c"
     "cert_pin.c"
@@ -37,8 +55,14 @@ set(PRIV_REQUIRES
     espressif__qrcode
     epaper
     epaper_src
+    epaper_driver_read_pico
     esp_app_format
+    esp_psram
+    esp_hw_support
+    read_pico_display
     esp_driver_gpio
+    esp_driver_usb_serial_jtag
+    vfs
     esp_event
     esp_http_client
     esp_http_server

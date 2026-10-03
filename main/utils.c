@@ -1414,8 +1414,12 @@ esp_err_t trigger_image_rotation(void)
         }
     } else {
         // Local storage mode - rotate through albums
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        result = display_manager_rotate_from_storage_checked();
+#else
         display_manager_rotate_from_storage();
         result = ESP_OK;
+#endif
     }
 
     return result;
