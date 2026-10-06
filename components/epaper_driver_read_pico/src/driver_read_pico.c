@@ -164,7 +164,9 @@ static void board_deinit(void)
 static esp_err_t stop_rails(void)
 {
     // Outer SY adapter propagates all shutdown errors; also verify output latches and PGOOD.
-    // The caller has already captured the operation error; collect shutdown errors separately.
+    // Collect shutdown errors separately, then restore any earlier operation error so a
+    // vendor poweroff callback (e.g. mid-draw) can never erase it and report success.
+    const esp_err_t prior_error = callback_error;
     callback_error = ESP_OK;
     esp_err_t err = read_pico_board_ioe_update(0x03, 0x01);
     if (sy != NULL) {
@@ -185,6 +187,7 @@ static esp_err_t stop_rails(void)
         err = verify;
     if (err == ESP_OK)
         err = callback_error;
+    callback_error = prior_error != ESP_OK ? prior_error : err;
     rails = false;
     if (err != ESP_OK)
         fault = true;

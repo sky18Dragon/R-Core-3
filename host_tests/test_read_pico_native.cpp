@@ -649,6 +649,20 @@ TEST(ReadPicoNative, FailedDrawLatchesUnknownPhysicalReferenceForThisBoot)
                EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK);
                EXPECT_EQ(read_pico_epaper_init(true), ESP_ERR_INVALID_STATE));
 }
+TEST(ReadPicoNative, CallbackWriteErrorDuringDrawPreservedAcrossStopRails)
+{
+    FRESH_BOOT(start(); white();
+               fail_draw_at = 1;
+               // When draw runs, simulate a failure in poweroff/ctrl
+               // epd_hl_update_screen_full mock will set callback_write_error during draw
+               draw_error = MOCK_DRAW_FAILURE;
+               auto result = read_pico_epaper_display(source.data(), source.size());
+               EXPECT_FALSE(result.completed);
+               EXPECT_EQ(result.error, READ_PICO_REFRESH_DRAW_FAILED);
+               EXPECT_EQ(result.operation_error, MOCK_DRAW_FAILURE);
+               EXPECT_TRUE(read_pico_epaper_faulted());
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
 TEST(ReadPicoNative, PartialPrepareFailureIsStoppedAndLatchedWithoutDrawing)
 {
     FRESH_BOOT(start(); white(); fail_sy_reg = 6;

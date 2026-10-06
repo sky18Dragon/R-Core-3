@@ -139,6 +139,24 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertNotIn('nvs_flash_erase(', guard)
         self.assertNotIn('xTaskCreate(', guard)
 
+    def test_read_pico_storage_failure_stops_without_abort_or_fallback(self):
+        main = (ROOT / "main/main.c").read_text()
+        startup = main[main.index('void app_main(void)'):]
+        block = re.search(r'#if CONFIG_BOARD_DRIVER_READ_PICO\n(.*?)#else\n(.*?)#endif',
+                          startup[startup.index('Initializing storage subsystem'):], re.S)
+        read_pico, legacy = block.group(1), block.group(2)
+        self.assertEqual(read_pico.count('storage_init()'), 1)
+        self.assertNotIn('ESP_ERROR_CHECK', read_pico)
+        self.assertNotIn('abort(', read_pico)
+        self.assertIn('if (storage_start != ESP_OK)', read_pico)
+        self.assertIn('return;', read_pico)
+        for unsafe in ('storage_format(', 'sdcard_format(', 'esp_restart(', 'read_pico_sd_mount(',
+                       'memfs', 'littlefs', 'nvs_flash_erase('):
+            self.assertNotIn(unsafe, read_pico)
+        self.assertIn('ESP_ERROR_CHECK(storage_init());', legacy)
+        self.assertLess(startup.index('storage_start != ESP_OK'),
+                        startup.index('config_manager_init()'))
+
     def test_storage_entry_does_not_fall_through_to_product_or_write_paths(self):
         cmake = (ROOT / "main/CMakeLists.txt").read_text()
         block = re.search(r'if\(CONFIG_READ_PICO_STORAGE_VALIDATION\)(.*?)endif\(\)',

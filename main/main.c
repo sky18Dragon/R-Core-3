@@ -41,6 +41,9 @@
 #include "periodic_tasks.h"
 #include "power_manager.h"
 #include "processing_settings.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_board.h"
+#endif
 #include "splash_screen.h"
 #include "storage.h"
 #include "utils.h"
@@ -543,7 +546,21 @@ void app_main(void)
 
     // Initialize the storage subsystem (handles SD, LittleFS, MemFS fallbacks)
     ESP_LOGI(TAG, "Initializing storage subsystem...");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Read Pico has no fallback storage. A missing/unmountable card must not abort into a
+    // panic-reboot loop: stop startup once, without retry, format or fallback.
+    esp_err_t storage_start = storage_init();
+    if (storage_start != ESP_OK) {
+        esp_err_t hal_release = read_pico_board_deinit();
+        ESP_LOGE(TAG,
+                 "Storage unavailable (%s); insert/check the SD card and restart. "
+                 "No retry, format or fallback. HAL release: %s",
+                 esp_err_to_name(storage_start), esp_err_to_name(hal_release));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(storage_init());
+#endif
 
     // Bring up NVS, config, and debug-log capture as early as possible — before
     // the external-RTC / I2C init below — so the persistent log covers the RTC
