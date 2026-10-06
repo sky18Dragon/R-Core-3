@@ -18,6 +18,9 @@ set(PRIV_REQS
 
 if(CONFIG_BOARD_DRIVER_READ_PICO)
     list(APPEND SRCS "src/driver_read_pico.c" "src/read_pico_pmu_codec.c")
+    if(CONFIG_READ_PICO_STORAGE_VALIDATION OR CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION OR CONFIG_READ_PICO_PHOTO_VALIDATION)
+        list(APPEND SRCS "src/read_pico_sd.c" "src/read_pico_sd_command.c")
+    endif()
 elseif(CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73)
     list(APPEND SRCS "src/driver_waveshare_photopainter_73.c")
 elseif(CONFIG_BOARD_DRIVER_SEEEDSTUDIO_XIAO_EE02)

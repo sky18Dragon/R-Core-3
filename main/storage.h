@@ -20,7 +20,8 @@ typedef enum {
 
 /**
  * @brief Initialize the appropriate storage medium based on kconfig and availability
- *        Handles fallbacks (SD Card -> LittleFS -> MemFS)
+ *        Handles legacy fallbacks; Read Pico requires its owned SD mount and
+ *        never silently substitutes flash or volatile storage at /storage.
  *
  * @return esp_err_t ESP_OK on success, ESP_FAIL or error code on failure
  */
@@ -54,8 +55,12 @@ esp_err_t storage_read_wifi_credentials(char *ssid, char *password);
  */
 void storage_unmount(void);
 
+// Checked teardown; Read Pico retains its ownership on failure until reboot.
+// Callers must close all file handles before invoking this function.
+esp_err_t storage_unmount_checked(void);
+
 /**
- * @brief Format the internal flash storage (LittleFS only)
+ * @brief Explicitly format legacy storage. Not supported on Read Pico.
  *
  * @return esp_err_t ESP_OK on success
  */

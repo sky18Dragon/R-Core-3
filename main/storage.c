@@ -8,8 +8,11 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-#ifdef CONFIG_HAS_SDCARD
+#if defined(CONFIG_HAS_SDCARD) && !defined(CONFIG_BOARD_DRIVER_READ_PICO)
 #include "sdcard.h"
+#endif
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_sd.h"
 #endif
 
 #ifdef CONFIG_USE_INTERNAL_FLASH_STORAGE
@@ -111,6 +114,17 @@ static esp_err_t mount_littlefs(void)
 
 esp_err_t storage_init(void)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    if (current_storage_type != STORAGE_TYPE_NONE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t ret = read_pico_sd_mount();
+    if (ret == ESP_OK) {
+        current_storage_type = STORAGE_TYPE_SDCARD;
+    }
+    // No automatic format, second mount attempt or fallback on this board.
+    return ret;
+#else
     esp_err_t ret = ESP_OK;
 
 #ifdef CONFIG_HAS_SDCARD
@@ -144,31 +158,67 @@ esp_err_t storage_init(void)
     }
 
     return ret;
+#endif
 }
 
 storage_type_t storage_get_type(void)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    read_pico_sd_status_t status;
+    if (current_storage_type == STORAGE_TYPE_SDCARD &&
+        (read_pico_sd_get_status(&status) != ESP_OK || !status.present || !status.mounted ||
+         !status.media_valid || status.exit_failed)) {
+        return STORAGE_TYPE_NONE;
+    }
+#endif
     return current_storage_type;
 }
 
 bool storage_has_persistent_storage(void)
 {
-    return current_storage_type == STORAGE_TYPE_SDCARD ||
-           current_storage_type == STORAGE_TYPE_LITTLEFS;
+    storage_type_t type = storage_get_type();
+    return type == STORAGE_TYPE_SDCARD || type == STORAGE_TYPE_LITTLEFS;
 }
 
 void storage_unmount(void)
 {
+    esp_err_t ret = storage_unmount_checked();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Storage unmount failed (%s); ownership retained", esp_err_to_name(ret));
+    }
+}
+
+esp_err_t storage_unmount_checked(void)
+{
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    // Use ownership, not media availability: removed/invalid media still needs teardown.
+    if (current_storage_type == STORAGE_TYPE_SDCARD) {
+        esp_err_t ret = read_pico_sd_unmount();
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        current_storage_type = STORAGE_TYPE_NONE;
+    }
+#endif
 #ifdef CONFIG_USE_INTERNAL_FLASH_STORAGE
     if (current_storage_type == STORAGE_TYPE_LITTLEFS) {
         ESP_LOGI(TAG, "Unmounting LittleFS before deep sleep");
-        esp_vfs_littlefs_unregister(LITTLEFS_PARTITION_LABEL);
+        esp_err_t ret = esp_vfs_littlefs_unregister(LITTLEFS_PARTITION_LABEL);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        current_storage_type = STORAGE_TYPE_NONE;
     }
 #endif
+    return ESP_OK;
 }
 
 esp_err_t storage_format(void)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    // Product format requires a separately reviewed destructive-operation policy.
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     esp_err_t ret = ESP_ERR_NOT_SUPPORTED;
 
     switch (current_storage_type) {
@@ -213,12 +263,17 @@ esp_err_t storage_format(void)
 
     ESP_LOGI(TAG, "Storage format complete");
     return ESP_OK;
+#endif
 }
 
 esp_err_t storage_read_wifi_credentials(char *ssid, char *password)
 {
 #ifdef CONFIG_HAS_SDCARD
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    if (!storage_has_persistent_storage()) {
+#else
     if (!sdcard_is_mounted()) {
+#endif
         return ESP_ERR_NOT_FOUND;
     }
 

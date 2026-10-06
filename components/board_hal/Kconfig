@@ -116,7 +116,7 @@ menu "Board Configuration"
 
     config READ_PICO_DISPLAY_VALIDATION
         bool "Read Pico controlled display validation (explicit hardware authorization required)"
-        depends on BOARD_DRIVER_READ_PICO
+        depends on BOARD_DRIVER_READ_PICO && !READ_PICO_PHOTO_VALIDATION
         default n
         help
             Factory-layout, command-armed display validation, not a product application.
@@ -124,6 +124,44 @@ menu "Board Configuration"
             human white-confirm command. Each GC16 pattern needs explicit draw and
             visual confirmation; failures prohibit more draws. No automatic cycling.
             No SD/NVS/network/PMU calibration writes.
+
+    config READ_PICO_STORAGE_VALIDATION
+        bool "Read Pico controlled SD validation (explicit hardware authorization required)"
+        depends on BOARD_DRIVER_READ_PICO && !READ_PICO_DISPLAY_VALIDATION && !READ_PICO_PHOTO_VALIDATION
+        select SDCARD_DRIVER_SDIO
+        default n
+        help
+            Isolated command-armed SD entry, not a product application.
+            Startup only reads board/CD state; mount explicitly requests a single
+            PhotoFrame SDMMC attempt at /storage. Explicit file-test exclusively
+            creates RC3T0001.BIN once, writes/syncs/closes/reopens/verifies 4096
+            bytes and retains it; no overwrite/delete or automatic file IO.
+            Explicit file-check only reads/verifies this existing fixed file once,
+            never creating, writing or repairing it. Requires a valid mounted card.
+            No format, display, NVS, network or PMU power/calibration writes.
+            Close errors block unmount/HAL teardown until restart.
+
+    config READ_PICO_PHOTOFRAME_INTEGRATION
+        bool "Read Pico full PhotoFrame integration build (runtime disabled)"
+        depends on BOARD_DRIVER_READ_PICO && !READ_PICO_DISPLAY_VALIDATION && !READ_PICO_STORAGE_VALIDATION && !READ_PICO_PHOTO_VALIDATION
+        select SDCARD_DRIVER_SDIO
+        default n
+        help
+            Compile/link the real PhotoFrame business stack for Read Pico.
+            Boot entry refuses product startup pending hardware/data migration
+            and physical white-reference acceptance. Never a release/flash profile.
+
+    config READ_PICO_PHOTO_VALIDATION
+        bool "Read Pico single-photo diagnostic (explicit hardware authorization required)"
+        depends on BOARD_DRIVER_READ_PICO
+        select SDCARD_DRIVER_SDIO
+        default n
+        help
+            Isolated fixed RC3P0001.JPG read-only photo display diagnostic.
+            No boot mount/display, NVS or network; explicit one mount, one clear,
+            human white-confirm, one photo-show and human photo-confirm/reject.
+            Uses the real JPEG/EXIF/Cover/dither code with RAM-only settings.
+            Stop frees display, unmounts SD, then releases HAL; failure is terminal.
 
     config USE_INTERNAL_FLASH_STORAGE
         bool "Use internal flash as storage (LittleFS)"

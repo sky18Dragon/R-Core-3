@@ -25,6 +25,11 @@ void read_pico_board_unlock(void);
 // Display lease prevents HAL deinit while EPDiy/SY borrow the bus. Caller holds bus lock.
 esp_err_t read_pico_board_display_claim(i2c_master_bus_handle_t *out);
 esp_err_t read_pico_board_display_release(void);
+// SD owner holds a lease until successful unmount; caller holds the bus lock.
+esp_err_t read_pico_board_storage_claim(void);
+esp_err_t read_pico_board_storage_release(void);
+// Fresh, read-only active-low P0.6 observation. Errors never imply card presence.
+esp_err_t read_pico_board_sd_present(bool *present);
 esp_err_t read_pico_board_ioe_read(uint8_t reg, uint8_t *value);
 esp_err_t read_pico_board_ioe_configure_display(void);
 esp_err_t read_pico_board_ioe_update(uint8_t mask, uint8_t value);

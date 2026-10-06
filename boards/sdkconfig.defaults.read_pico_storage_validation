@@ -1,0 +1,2 @@
+# Isolated, command-armed SD software candidate. Compilation does not authorize flashing.
+CONFIG_READ_PICO_STORAGE_VALIDATION=y
