@@ -1,14 +1,125 @@
 # 新方案验证矩阵与记录
 
-边缘供数探针候选299,952字节/SHA256 `daf0b7bffc8f9f723ebe9e861bb0222b6248c995a20d37e14ef55a91d1692eef`已仅factory部署并全长回读一致，分区表前后不变。唯一静态清白78/78帧完整且用户确认整屏正常；同启动仅一张`gc16-gray16-page`完成，36/36相与12条目标行均完整。六组成对轨迹相等、五个边界全部可区分；已部署分析器因688旧计数及CPU1启动预填误分类而锁存FAULT，不把该软件误报当成扫描故障。新实拍仍复现左侧宽连续区，本轮明确不通过；会话已正常STOPPED，P2未完成。
+当前 PM 时钟锁候选 305,104 字节、SHA256 `6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255` 已仅 factory 部署并全长回读一致，分区表前后不变。候选在显示事务内同时固定 CPU 240 MHz/APB 80 MHz；静态清白获人工确认，官方局部 16 灰阶页 36 相合计 399.327 ms，实拍 16 阶中心亮度严格单调，确认后显示/HAL 正常释放并完整 `STOPPED`。
 
-离线修正候选为300,080字节/SHA256 `5069a6d01093006215c76736fcbc6427c86e0bffa4e232b6560a023ea8bd5349`：要求696次回调，并把CPU1上每帧前8次同步启动预填与后续异常跨核分开。定向普通/ASan各19/19、串行全量各300/300及固定IDF 6.1显示编译通过；未部署。软件指纹不等于DMA/物理gate证据。
+旧失败样本的 30.5–48.5 ms/相和 05–15 并白，与加锁后的 11.090–11.112 ms/相和 16 阶恢复构成同机、同页面、同波形/VCOM/PCLK 的单变量 A/B。因此“自动 DFS 下 EPDiy 直接 LL RMT 与 CPU feeder 缺少事务 PM 锁”已确认为本轮持续白偏的具体根因。P2 整体仍未完成：单张标准页不替代重复性、其他图案、照片解码链路或长期稳定验收。
 
 下方按日期记录历史验证，不将旧产物测试或实屏结果转移给新产物。
 
-更新时间：2026-10-04。本文件仅记录 PhotoFrame 移植。P0 完成；历史四角 GC16 单次软件/人工通过（2.140 秒），旧未编号灰阶及新编号灰阶均因白偏未通过。边缘探针已证明关键source回调行关系正确，但局部图实拍仍有左侧宽连续区；P2 未完成，白偏、回调后扫描边界、历史欠载/黑带机制及连续稳定性未核验。标准 SY 易失性启动允许，校准写/完整迁移不批准。
+更新时间：2026-10-04。本文件仅记录 PhotoFrame 移植。P0 完成；16 灰阶长期白偏根因已通过 PM 锁候选的真机时序与实拍共同关闭。历史四角、684 行几何、GC16 铺白和连续高压结果仍按日期保留，不反向改写。16 灰阶重复性、其他标准图案、照片链路、历史欠载/黑带机制及连续稳定性仍待验收；标准 SY 易失性启动允许，校准写/完整迁移不批准。
 
 ## 验证矩阵
+
+### 2026-10-04 · C阶段连续高压实屏仍白偏，已拒绝并停止
+
+用户明确允许上一节本地候选的factory app-only更新、回读/分区复核、新启动清白及人工全白后的单次连续事务，并知悉固定EPDiy同步等待没有安全硬取消。只读核验仍为同类ESP32-S3 v0.2、16MB/3.3V Flash，Secure Boot/Flash Encryption关闭；本地镜像image-info为S3/DIO/80MHz/16MB/MMU64KB且checksum有效。写前4096字节分区表与生成3072字节前缀及1024字节FF尾部一致。
+
+仅写factory应用`[0x10000,0x5a510)`，扇区擦除止于`0x5b000`；304,400字节全长回读与本地逐字节一致，SHA256均为`ec917aafe57fea0bd601182560368021868f377fd9dfd13e9d5082d70a3d9dc1`。写前/写后4096字节分区表逐字节一致，SHA256均为`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。未写bootloader、分区、NVS、PHY、storage或PMU校准；不使用完整flash_args。
+
+新启动核对ELF前缀`cbc71841f`、ESP-IDF v6.1、PERF/65536/64、80MHz Flash/PSRAM、PSRAM自检及PMU 1.0.9/VCOM只读1580mV。显式`status`后唯一静态`clear-white`：12.901秒，78/78帧、每帧696次source回调，coverage/tail/padding/pulse/core及退出观察全部无错。用户确认“整屏白色无异常”，同启动`white-confirm`后只发送一次`gc16-gray16-labeled-continuous`。
+
+连续事务一次prepare/ON=1温度采样/stop，主动31°C、PGOOD=1；两次HL绘制分别约1.713/1.724秒，外层4.174秒。`completed=1/frames=2/stage=0/frame_error=0/operation=0/cleanup=0/faulted=0`，内存从两输入分配后的PSRAM 5,846,932恢复到6,682,524；退出`input0=0x81/out0=0xe5`。相位记录registered/started/done/stored=72/72/72/72、errors/dropped=0，index 0–71连续；第36相前约59ms是两次同步HL调用间的CPU差分/缓冲准备间隔，不是下电或人工等待。
+
+用户照片为私人附件，未复制入库；本机SHA256 `7c9a4a3b799ccaf0effc74d534e5150ffc5427cdea554d5f644184fadcc43690`。照片中00–15编号、条带边界和整屏几何完整，00–03/04有明显变化，但约05后快速趋白、后半大面积合并；曝光/反光不允许精确L*结论，但足以判定16阶未通过，连续HV没有可见改善。发送`pattern-reject`后FAULT_LATCHED/drawn=0x40/confirmed=0；随后`stop/status`，LCD、DISPLAY_DEINIT、HAL_DEINIT均ESP_OK，最终两次完整STOPPED/operation=0。控制台Ctrl-C因管道退出1，端口无占用；不是设备错误。
+
+独立解析私有日志确认命令恰为`status → clear-white → white-confirm → gc16-gray16-labeled-continuous → pattern-reject → stop → status`，连续入口仅一次、相位索引恰72条，无其他GC16、补刷或重试。私有日志/回读为`.cache/continuous-gray-*`，均忽略。静态清白、B阶段GC16白后下电和C阶段连续HV均未解决白偏；下一变量需重新论证和授权，不自动调整VCOM、gamma、频率或waveform。P2仍未完成。
+
+用户随后明确要求“先记录当前验证结果，不再继续执行验证”。本轮至此关闭：不再发送串口命令、复位、烧写、清白、刷新或测试其他变量。设备最后确认状态为`STOPPED/operation=0/pending=invalid/drawn=0x40/visually_confirmed=0`，控制台已关闭且串口无占用；物理屏保留本次未通过的编号灰阶图。后续若恢复，必须重新取得用户指令并建立新的当次白参考，不能沿用本轮会话状态。
+
+### 2026-10-04 · C阶段连续高压对照：离线实现、全量测试与固定IDF编译
+
+在B阶段无改善后，仅进行源码、主机测试和本地固件编译；没有连接串口、复位、烧写或刷新设备。新增精确白名单指令`gc16-gray16-labeled-continuous`，必须在本启动静态清白经人工确认且尚未绘制任何图案时执行。它预先生成并校验白帧与同一编号灰阶帧，在同一个显示锁、一次SY prepare/PGOOD、一次ON=1主动温度采样和一次stop内顺序执行两次普通GC16；第一帧失败不进入第二帧，第二帧结束后立即关电，过程中不等待人工输入。最终图仍进入原有WAIT_PATTERN_CONFIRM，只有事务结束后才接受人工确认或拒绝。
+
+便携结果增加`frames_completed`并新增双帧API；输入长度、空指针、转换/重叠均在上电前失败。故障注入覆盖第二输入非法、第一/第二绘制失败、退出失败、缺少第二帧不启动高压轨、单次温度采样和同一锁/电源区间。扫描相位容量从48扩到72，新增精确72相成功及74相溢出拒绝测试；固件要求`completed=1`、`frames_completed=2`、72/72相且无错误，否则会话锁存失败。固定Read Pico gitlink仍为`28cde682…`且工作树干净，overlay只在主工程构建目录生成，未改厂家波形/校准源码。
+
+| 检查 | 结果 |
+| --- | --- |
+| 普通完整CTest | 309/309，通过 |
+| ASan/UBSan完整CTest | 309/309，通过 |
+| 控制台与构建门禁 | 8/8 + 12/12，通过，无硬件访问 |
+| 固定ESP-IDF | v6.1 / `fff9895c…`，显示配置编译成功 |
+| app | 304,400字节；SHA256 `ec917aafe57fea0bd601182560368021868f377fd9dfd13e9d5082d70a3d9dc1` |
+| ELF / sdkconfig | `cbc71841fb836f130c6515345feb6995e79a885eec28b4903016949152f53acb` / `e16d333ea9818c1030ae2cbe084de301820dca4013f1f836b0a95228671191e5` |
+
+本候选逻辑上限定两帧且所有**已经返回**的失败路径都会执行stop；但固定EPDiy同步绘制在`render_lcd.c`/`render.c`内部仍有`portMAX_DELAY`等待，没有安全的异步取消接口。因而不能把它称为可在驱动卡死时硬中止的超时实现，官方8秒idle规则也不能冒充绘制超时。该限制与既有单帧GC16同源，但连续轮包含两次绘制，必须在新的具体硬件许可中明示。当前设备仍运行已回读的300,096字节`81ac6974…`，最后完整状态STOPPED；新产物没有回读或实屏结论。
+
+### 2026-10-04 · B阶段GC16全白预处理无改善，已拒绝并停止
+
+用户明确“允许”既定B阶段。沿用已部署、全长回读一致的300,096字节`81ac6974…`，未刷写、改代码或调参；精确684行、18MHz、factory VCOM 1580mV、DEFAULT 36相、leading-skip关闭、80MHz存储、gamma及每次刷新后下电流程全部不变。启动核对同一ELF前缀`b8a1dea58`、ESP-IDF v6.1、PSRAM自检、PMU 1.0.9及只读VCOM门禁通过。
+
+显式`status`后唯一静态`clear-white`：初始化79ms、清白12.889秒，78/78帧、每帧696次source回调，coverage/tail/padding/pulse/core和退出观察全部无错。用户确认“整屏白色无异常”后`white-confirm`。随后唯一`gc16-white`：completed=1，stage/frame/operation/cleanup/faulted均0，2.396秒；36/36相完整、31°C/ON=1/PGOOD=1，内存恢复。用户再次确认“整屏白色无异常”，因此`pattern-confirm`登记white位0x1。
+
+确认后只运行一张`gc16-gray16-labeled`：completed=1，所有错误0，2.407秒；36/36相完整、31°C/ON=1/PGOOD=1，内存恢复。私人照片未复制入库，本机附件SHA为`d5d2ab07…`。照片中00–15标签、条带边界和整屏范围完整，但04后快速接近白，约05–15仍难逐级区分；与铺白前照片的光线/曝光并非严格校准，不能量化L*差值，但肉眼没有可见改善，故不通过。
+
+发送`pattern-reject`后状态`FAULT_LATCHED/operation=0/pending=gray16-labeled/drawn=0x41/visually_confirmed=0x1`；随后`stop`和`status`，LCD deinitialized、DISPLAY_DEINIT/HAL_DEINIT均ESP_OK，最终两次完整`STOPPED/operation=0/pending=invalid/drawn=0x41/visually_confirmed=0x1`。Ctrl-C结束，端口无占用。没有补清白、重试、额外图、复位、烧写或校准写；私有日志`.cache/exact684-gc16-white-compare-console-private.log`被忽略。
+
+B阶段只证明“静态清白→GC16全白→下电→人工确认→再次上电绘图”未改善浅阶；它没有复现官方铺白后保持高压并立即绘图的连续事务。下一步先离线实现C阶段有界连续操作、超时和任一子步骤失败清理，经主机故障注入及固定IDF编译后再请求新的app-only/单次硬件许可。仍不改VCOM、gamma、频率、waveform或校准。
+
+### 2026-10-04 · 精确684行编号灰阶仍白偏，已拒绝并停止
+
+沿用已部署并回读一致的300,096字节`81ac6974…`，没有刷写、代码或参数改动。保持精确684行、18MHz、factory VCOM 1580mV、DEFAULT 36相、leading-skip关闭、80MHz存储、gamma及每次操作后下电流程不变。新启动核对ELF前缀`b8a1dea58`、ESP-IDF v6.1、PSRAM自检、PMU 1.0.9及只读VCOM门禁通过。
+
+显式`status`后唯一一次`clear-white`：显示初始化79ms，清白12.875秒；78/78帧、每帧696次source回调，coverage、tail、padding、pulse、core和退出观察全部无错。用户明确回复“整屏白色无异常”，同启动`white-confirm`接受。随后只运行一张`gc16-gray16-labeled`：主动温度31°C、ON=1/PGOOD=1；completed=1，stage/frame/operation/cleanup/faulted均0，外层2.412秒；36/36相完整，errors/dropped均0，内存释放回绘制前水平。
+
+用户提供的私人照片未复制入库，附件SHA仅在本机核对为`52efaf6d…`。照片中00–15标签顺序、条带边界和整屏范围完整，没有裁切、错位或此前左侧宽连续区；但仅00–03差异明显，04后迅速接近白，约05–15难以逐级区分。照片受曝光、反光与透视影响，这是一项定性失败结论，不冒称L*或精确可见级数测量。软件36相不同也不能替代光学验收。
+
+按视觉失败发送`pattern-reject`，会话进入`FAULT_LATCHED/operation=0/pending=gray16-labeled/drawn=0x40/visually_confirmed=0`；随后`status`及`stop`，LCD deinitialized、DISPLAY_DEINIT/HAL_DEINIT均ESP_OK，最终`STOPPED/operation=0/pending=invalid/drawn=0x40/visually_confirmed=0`。Ctrl-C结束控制台，端口无占用；没有补清白、重试、第二张图、复位、烧写或校准写。私有日志`.cache/exact684-gray16-labeled-console-private.log`被忽略。
+
+本轮证明精确684行修复的空间几何不能同时解释灰阶白偏。下一步按方案B，以同固件新启动建立人工白参考，只增加一张`gc16-white`作为GC16全白预处理，人工确认后再显示同一编号图；现有逐张门禁已经支持该序列，不需新增固件。该轮只隔离起始光学状态，不等同官方连续高压流程；保持VCOM、gamma、频率、waveform及校准不变，需新的硬件许可。
+
+### 2026-10-04 · 精确684行候选部署与同图几何通过
+
+用户回复“继续”，允许按上一轮明确范围制作精确684行候选，离线门禁通过后仅更新factory app、完整回读与分区复核，再执行一次清白和一张相同`gc16-gray16-page`。实现位于主工程构建覆盖，不修改固定子模块：生成器要求固定`render.c` SHA `f288db9c…`及`lcd_driver.c` SHA `7287dffa…`，哈希或唯一锚点漂移即失败；两个bounce buffer由4行改为6行，renderer与LCD对齐单位由8改为12，684=57×12。18MHz、factory VCOM、DEFAULT 36相、leading-skip关闭、80MHz存储、测试图和电源流程不变。
+
+构建保护12/12、普通与ASan/UBSan串行全量各300/300通过。固定ESP-IDF v6.1 `fff9895c…`编译成功，实际编译对象来自构建目录`generated/render.c`与`generated/lcd_driver.c`，未编译固定子模块的同名源；运行日志显示`using resolution 152x684`。app 300,096字节，SHA256 `81ac6974935202c3acbf3b40dc8f019893b19ef9320aa4f8717ab727eff1e63d`；ELF SHA256 `b8a1dea58c1676294754d30d57f732c05513075ef950447a03adcd013cf68751`；sdkconfig仍为`e16d333ea9818c1030ae2cbe084de301820dca4013f1f836b0a95228671191e5`。image-info为ESP32-S3/DIO/80MHz/16MB/MMU64KB，checksum与validation hash有效。
+
+写前重新核对同一设备、ESP32-S3 v0.2/8MB PSRAM/16MB Flash/3.3V、安全启动与Flash加密关闭。实际分区仍为NVS `0x9000/0x5000`、PHY `0xe000/0x1000`、factory `0x10000/0x400000`、storage `0x410000/0x500000`；候选表前3072字节一致，尾1024字节全`0xFF`。仅写factory `[0x10000,0x59440)`，工具擦除范围止于`0x5a000`；300,096字节独立全长回读逐字节/SHA一致。写前/写后4096字节分区表逐字节一致，SHA均为`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。未写bootloader、分区、NVS、PHY、storage或PMU校准。
+
+新启动ELF前缀`b8a1dea58`、IDF v6.1、PERF/65536/64，PSRAM自检通过，PMU 1.0.9/VCOM只读1580mV。`status`为WAIT_CLEAR_COMMAND后唯一一次清白：显示初始化80ms，清白12.873秒；78/78帧、每帧696次软件回调、tail/padding/脉冲/覆盖/退出及所有观察错误通过。用户明确确认“整屏白色无异常”，同启动`white-confirm`接受。
+
+随后仅一张`gc16-gray16-page`：`native_equal=1/from_white=1`，GC16 completed=1，stage/frame/operation/cleanup/faulted均0，事务2.035秒；36/36相完整。边缘观察每相696次软件回调、12行齐全，missing/unequal/indistinguishable/dropped/orphan/late/unfinished/wrong_core均0；`core1_start_prefill=156`为13帧×12次允许的同步预填。用户提供的私人照片未复制入库；照片中40像素边距恢复，灰条、黑块、棋盘和细线不再出现共同宽连续区，棋盘从首格起规则交替。按该视觉证据发送`pattern-confirm`，drawn/visually_confirmed均为`0x100`。
+
+随后`stop`：LCD deinitialized、DISPLAY_DEINIT和HAL_DEINIT均ESP_OK，最终`STOPPED/operation=0/pending=invalid/drawn=0x100/visually_confirmed=0x100`；控制台关闭且端口无占用。该结果支持684→688填充参与此前相位间gate错位，但只有一次同图A/B，不能替代示波器级因果证明、长期复现或16个灰阶L*测量。下一步保持精确684行、VCOM/gamma/频率/waveform不变，单独量化灰阶可分辨性。
+
+### 2026-10-04 · 18MHz单变量部署与同图A/B失败
+
+用户明确允许本轮仅更新factory app、完整回读并核对分区表，然后在新启动完成一次清白和一张相同`gc16-gray16-page`。写前确认Secure Boot与Flash Encryption关闭、16MB Flash、分区为nvs `0x9000/20KiB`、phy `0xe000/4KiB`、factory `0x10000/4MiB`、storage `0x410000/5MiB`；构建分区表前3072字节与设备一致，设备剩余1024字节全为`0xFF`。
+
+仅写factory范围`[0x10000,0x59430)`，扇区擦除`[0x10000,0x5a000)`。300,080字节全长独立回读与候选逐字节相等，SHA256均为`66425c9c6340ffad20963d7c0771725c11f8662a8835d504b1a6015a0d2a6167`；写前/写后4096字节分区表逐字节相等，SHA256均为`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。未写bootloader、分区表、NVS、PHY、storage或PMU校准。
+
+新启动为ESP-IDF v6.1、ELF前缀`6c09113cb`，PSRAM自检通过，PMU 1.0.9/VCOM只读1580mV。`status`确认`WAIT_CLEAR_COMMAND`后唯一一次`clear-white`：LCD PCLK 18MHz，solver输出行周期16.0µs/288 cycles、CKV高13.4µs、89.15Hz，显示初始化80ms；清白14.003秒、78/78帧、每帧696次source回调，coverage/tail/padding/edge/core及退出检查全部通过。用户明确确认“整屏均匀白色无异常”，同启动`white-confirm`被接受。
+
+随后只发送一次`gc16-gray16-page`：主动温度32°C、ON=1/PGOOD=1、`native_equal=1/from_white=1`；GC16 completed=1，stage/frame/operation/cleanup错误及faulted均0，外层2.117秒，HL diff/draw/buffer/total为27/1286/13/1326ms。相位registered/started/done/stored均36，errors/dropped均0；每相696次source回调，12条目标行齐全，missing_rows/unequal_pairs/indistinguishable/dropped/orphan/late/unfinished/wrong_core均为0，六对轨迹组内相等且五个相邻组可区分。
+
+用户随后提供的私人照片未复制入库。照片仍显示预期40像素左白边缺失：灰条、实心黑块与细线从可视区左缘开始，棋盘左侧约三格形成连续黑/白带，之后才恢复规则40像素节距；与12MHz失败形态基本一致。因此18MHz单变量没有修复黑白几何，本轮不进入灰阶级数/L*、GC16铺白、VCOM或waveform实验。发送`pattern-reject`后状态进入FAULT_LATCHED，再发送`stop`；LCD deinit、DISPLAY_DEINIT、HAL_DEINIT均ESP_OK，最终`STOPPED/operation=0/pending=invalid/drawn=0x100/visually_confirmed=0`，控制台正常中断。下一步转向source回调之后的DMA首段及LE/STV/CKV物理边沿取证。
+
+### 18MHz实拍后的684/688行只读假设核对
+
+停止设备后只读核对固定`epdiy`源码：面板定义高度为684，但renderer与LCD驱动都按8行向上对齐为688；两个bounce buffer各4行。每相位的逻辑684–687行由renderer写成hold，`epd_lcd_start_frame()`仍按688 active lines启动扫描。源码同时明确记载：曾经截短帧时，帧首STV脉冲不能可靠把gate拉回第0行；该注释只证明作者遇到过复位依赖，不证明本机当前就是同一故障。
+
+在忽略目录编译实际默认36相GC16表，做了一个仅CPU的地址漂移敏感性模型：假设每相位末尾多出的4行没有被STV完全复位，使物理行在第`f`相收到逻辑`u+4f`附近的动作。白参考15→目标页的模拟会把40像素左白边驱成内容色，并在36相内把混合范围扩展到约140行，与照片约112–120逻辑像素的量级相近；灰条、黑块与棋盘会同时受影响。模型输出也会随漂移方向出现模糊或回卷，不能逐像素复现照片，更没有模拟gate模拟电压、STV采样窗口或实际DMA。因此它只把“684/688 + 相位间gate复位”提升为优先假设，不是根因结论或修复证明。
+
+离线模型、文本与预览保存在被忽略的`.cache/gate_drift_model.*`，未包含私人照片、未改厂家源码。下一步有两种可证伪路径：一是跨GC16相位边界同时测GPIO47/STV、GPIO48/CKV、GPIO3/LE、GPIO46/XSTL-DE及GPIO21/PCLK，确认每相位gate复位与有效行数；二是先离线制作一个不改VCOM/gamma/waveform、只把LCD传输周期改成精确684行的单变量候选，再经新的明确许可做同一白参考/单图A/B。后一候选必须让renderer与LCD行数同步，并处理双bounce-buffer边界；不能只删4行或只改一侧。本节没有连接设备、烧写、复位或刷新。
+
+### 2026-10-04 · 新指导说明核对与18MHz单变量候选
+
+用户提供第二份外部指导说明并要求继续解决16灰阶问题；全文只作为参考。其“固定相机/L*、一次只改一个变量、PCLK改变必须用solver重算”的方法可用，但“立即覆盖VCOM、切换/修改waveform、把约11级视为成功”与当前黑白空间故障及项目校准边界不相容。本轮不接受这些高风险或会混淆因果的步骤，不复制附件入库。
+
+固定上游源码确认产品初始化使用18MHz并开启leading-skip，板级SY示例固定1290mV；当前设备PMU实测factory VCOM为1580mV。为只比较扫描工作点，本地只把`driver_read_pico.c`中初始化及apply的PCLK从12MHz改为18MHz，仍由固定`read_pico_epd_scan()`同步计算blanking/CKV。leading-skip保持关闭，factory VCOM 1580mV、DEFAULT 36相、FULL scan、prefill 32、80MHz Flash/PSRAM、静态清白和同一官方页面均不变；没有runtime VCOM override、波形选择或phase mutation。
+
+普通及ASan/UBSan串行全量各300/300通过；`ReadPicoNative`普通/ASan各26/26再次通过，Python构建保护与控制台合计18/18。首次固件命令遗漏必需的factory诊断显式标志，被`build.py`在编译前安全拒绝；补齐`--read-pico-factory-diagnostic --read-pico-display-validation`后，固定ESP-IDF v6.1编译成功。镜像300,080字节，SHA256 `66425c9c6340ffad20963d7c0771725c11f8662a8835d504b1a6015a0d2a6167`；ELF SHA256 `6c09113cb40f7d6780f9961daed67784310dc3ebd1472c53b4a38ae5a7b2c678`；sdkconfig仍`e16d333ea9818c1030ae2cbe084de301820dca4013f1f836b0a95228671191e5`。image-info为ESP32-S3、DIO/80MHz/16MB、MMU 64KB、secure version 0，checksum和validation hash有效。本段记录当时的离线状态；随后部署结果见上一节。
+
+该候选同时包含先前离线完成的696行/CPU1启动预填分析器修正。后续已按限定范围完成硬件A/B且18MHz仍失败，因此不进入灰阶L*或waveform标定，改做source-edge之后的DMA首段及LE/STV/CKV物理证据。
+
+### 2026-10-04 · 驱动差异报告后的官方页面重测
+
+用户提供外部驱动差异报告并要求重新发起16灰阶验证；报告只作为分析依据，其中建议先判定黑白几何、再讨论GC16光学等级的顺序与现有证据一致。本轮沿用已部署的299,952字节/`daf0b7bf…`诊断应用，不刷写、不改gamma、VCOM、PCLK、leading-skip或厂家waveform。显式USB复位进入新会话，启动为ESP-IDF v6.1、ELF前缀`55d5514b4`、80MHz Flash、12MHz LCD、FULL scan、prefill 32、leading skip关闭，PMU 1.0.9/VCOM只读1580mV。
+
+先发送`status`确认`WAIT_CLEAR_COMMAND`，再唯一一次`clear-white`：显示初始化80ms，静态清白13.993秒，78/78帧、每帧696次source回调，tail/padding/覆盖与退出检查通过；用户明确确认本启动整屏白色。`white-confirm`后仅发送一张`gc16-gray16-page`：主动温度32°C、ON=1/PGOOD=1，厂家原生绘图与目标全帧相等`native_equal=1`，36/36相完成，每相696行，绘制事务2.064秒，12条目标行齐全、六组成对轨迹相等、五个边界轨迹互异，missing/unequal/indistinguishable/dropped/orphan/late/unfinished均为0。
+
+已部署分析器仍把部分CPU1供数归为`wrong_core=280`，因此`GC16_EDGE complete=0`并按安全策略进入`FAULT_LATCHED`；这是分析器判定失败，不能把画面标记为通过。用户随后提供的私人照片未复制入库。照片再次显示预期40像素左白边缺失：灰条、实心黑块和细线均从有效显示区左缘开始，棋盘约前三格宽形成连续区域，之后恢复规则节距；这与前两轮空间异常一致。本轮明确不通过，且纯黑白元素共同失败，不能归因于灰阶waveform或浅阶反射率。
+
+观察后只发送`stop`；LCD deinit、DISPLAY_DEINIT、HAL_DEINIT均ESP_OK，最终`STOPPED/operation=0/pending=invalid`，控制台由人工中断正常关闭。没有pattern-confirm/reject、第二张图、自动重试、GC16铺白、升频、波形或校准写入。下一步应使用纯黑白source-edge图和回调后DMA首段/LE/STV/CKV证据定位固定偏移；没有这类证据前不进入B/C或36/48相光学A/B。
 
 ### 2026-10-03 边缘探针候选部署与白参考门
 
@@ -70,7 +181,7 @@ HL日志diff27ms/draw1408ms/buffer13ms/total1448ms；FULL日志16µs行/89.15Hz/
 | --- | --- | --- | --- | --- |
 | P0 基线 | 118 CTest + 6 方向 + 60 Web 通过 | 原板/v6.1，独立目录及当前根目录通过 | 未操作设备 | 已完成；远端 CI 未运行 |
 | P1 板级 | HAL/PMU、10 构建保护及 8 控制台测试通过 | factory/双 OTA 只读、factory 显示及原板回归通过 | 扫描诊断回读/分区表不变、启动/PMU/VCOM/清白退出及显示/HAL 清理通过 | PCB/产品时序/连续电源待验收；放弃完整备份 |
-| P2 显示 | 修正后300 CTest及300 ASan/UBSan通过，含真实厂家CPU绘图、官方局部布局、边缘故障注入及双核启动预填分类 | daf0b7bf…/299,952字节已仅factory部署/回读一致；唯一清白人工通过，唯一局部图36相和12条目标行完整；5069a6d0…修正候选未部署 | 历史四角通过；旧/编号灰阶白偏失败；前次局部图左边缘失败；本次关键行回调关系通过但实屏待用户复核 | 当前FAULT由已知旧分析器误判触发，屏幕保留局部图；先取目视/照片，不做GC16铺白，灰阶/温度精度/长期稳定待验收 |
+| P2 显示 | PM锁候选310/310，构建/控制台20/20通过 | `6f2a4ea…`/305,104字节仅factory部署并全长回读一致 | 清白通过；局部页36相399.327ms，照片16阶严格单调，确认后STOPPED | 16灰阶根因关闭；硬取消、温度精度、重复性、其他图案/照片链路与长期稳定待验收 |
 | P3 相册 | 图片处理、路径、容量/错误返回 | 完整业务集成 | Web 上传→SD→显示、重启、轮播 | 未开始 |
 | P4 输入/电源 | 手势、并发请求、睡眠顺序/失败 | PMU/Touch 及其他板型回归 | 左滑、电池、按键/定时唤醒、实测电流 | 未开始 |
 | P5 完整验收 | 格式/OOM/缓存完整性、回归 | 发布配置与产物身份 | 满卡/拔卡/写中断、Web/REST/OTA、长稳 | 未开始 |
@@ -867,3 +978,727 @@ WAIT_WHITE_CONFIRM 后请求本轮实屏观察，用户回复“整屏白色，�
 收尾：21份当前/索引文档108个本地链接、3份工作流YAML及 git diff --check 通过；系统python3缺PyYAML后改用已有固定IDF Python完成检查，未安装依赖。固定SDK分区解析器核对本地生成表与已保存实板表的4个逻辑条目一致，生成文件与4096字节设备回读不是同一原始二进制，不冒称新一轮设备表回读。旧应用回读仍03be87b6…、设备表前后仍f078383d…，本地显示app仍eea27432…/配置e16d333e…；厂家gitlink固定且clean，构建/日志/私人回读均被忽略。无提交、推送或设备操作。
 
 收尾：21 份当前入口/文档的 87 个本地链接、CI YAML 解析及 git diff --check 通过；sdkconfig 摘要不变、SDK 指向固定 v6.1，厂家子模块固定 commit/工作树干净；临时预览/审计/构建与私人日志均被忽略。没有提交/推送、新硬件操作或公开私人照片/设备标识。
+
+## 2026-10-04 · 官方示例独立克隆与真机烧录
+
+用户明确要求新建文件夹、拉取并烧录官方 `MindReset/read_pico_firmware`。该新指令将本轮范围扩展到官方完整 `flash_args`，但不授权整片擦除、SD 格式化、VCOM/PMU 标定或其他页面操作。仓库独立克隆到主工程旁的 `/Users/zhanghuilong/Documents/ChatGPT/read_pico_firmware_official`，HEAD/main 为 `28cde682a4468a581c278761922724f57d976418`，与固定参考基线一致；源码保持 clean。
+
+烧录前核对官方入口、ONBOARDING、启动流程、NVS、VCOM 与 SD 格式化路径。SD 格式化需要页面内两次人工确认；VCOM 写入只存在于未标定拦截页。本机现有 NVS 只读备份 20 KiB，解析为 5 页、13 个 written、0 invalid、各页 CRC OK，空余充足；备份 SHA256 `63ad8691100bb218f04dff2af1409b6c6226ea0cf59c1b04fe5143e19ce8ac89`，保存在官方克隆的忽略目录。设备分区表前 3072 字节与官方生成表一致，SHA256 均为 `205e21ddff471bce79c29a846bd04a48854cb42d406c784405d4c8e3ec1e6061`。Flash 为 Zbit `5e/4018`、16 MB、3.3 V；未公开 MAC/UID。
+
+ESP-IDF v6.1 默认 `sdkconfig.defaults` 编译成功：bootloader `2a875d61daf2b05640020188e1cc0eca2fd76a266c067a45f85c7d08bd519eb2`，app `be4959a234d0f1cddbe6b895edd67800b82e9cd62bc90326c21aa87eb66eb721`，应用大小 `0x2efd20`。按生成的 `flash_args` 写 bootloader `0x0`、分区表 `0x8000`、app `0x10000`，三段均 `Hash of data verified`；没有 erase-flash，也不写 NVS/PHY/storage。该120 MHz产品配置从 `0x10000` 载入并识别Zbit HPM与AP 8 MB PSRAM，但两次均停在 `MSPI Timing: Enter psram timing tuning`，未进入 `app_main`，不记为启动通过。
+
+随后不改源码，使用官方仓库自带 `sdkconfig.ci` 的80 MHz安全配置重新构建并按同一地址表烧录。当前 bootloader SHA256 `c7f769530b03d105c6563d535482507db0cda0c57ebf208bbc2acc85afe5081a`，app SHA256 `24e52ec860e4e5e7ceccc67ec0fe392117244411360515df44e6f7f5731de2d9`，应用大小 `0x2ef150`；三段写入和哈希校验通过。启动日志确认：factory app从 `0x10000` 加载、ESP-IDF v6.1、8 MB PSRAM 80 MHz及内存测试通过、I2C扫描4设备、PMU 1.0.9、VCOM从PMU读取为1580 mV、SY轨电压对应VCOM -1580 mV、SD已挂载，最终 `app_loop: UI ready on 概览 Overview`；随后屏电源轨按8秒空闲策略关闭。串口已释放。
+
+本轮没有进入 `EPD Refresh` 或触发16灰阶；未执行SD格式化、NVS/PMU/VCOM校准写、整片擦除或网络功能。官方源码中的NVS异常恢复分支仍存在，但写前分区完整且有充足空位，本次没有观察到初始化异常；不能将80 MHz CI配置冒充官方120 MHz产品时序验收。当前设备运行官方提交的80 MHz构建并停在概览页；需要人工目视确认屏幕内容后，才可把显示结果记为实屏通过。
+
+## 2026-10-04 · 官方独立灰阶通过后的根因收敛：项目刷新缺少 DFS 时钟锁
+
+### 同机基线与已排除差异
+
+从固定官方仓库抽出的独立 16 灰阶固件已烧入同一设备，应用 831,728 字节，SHA256 `8b7483bbbdee59702f9fb13d345467f14592d4f13af67c0f83437f8e1246523e`，全长回读一致。该固件先 `epd_hl_set_all_white → GC16 full`，再以官方 `epd_fill_rect(i * 17)` 页面执行 `epd_hl_update_screen_from_white`；18 MHz、FULL、1K LUT、默认裁剪 GC16 36 相、PMU factory VCOM 1580 mV、25°C 均来自官方路径。用户实拍确认局部灰条可见连续阶次、40 像素边距/棋盘/黑白块几何正确。它证明同一块面板、同一 VCOM 和同一官方波形能够正常工作，项目长期白偏不是面板“不支持16阶”的结果。
+
+按“先刷白、再展示16灰阶”复验后的新实拍仍为官方独立页（页眉明确显示 `Standalone`）：16个灰条槽位完整，从0黑到15白方向正确，肉眼未见项目旧结果中约05–15大面积并白。对JPEG中各灰条中心等面积区域取亮度中位数得到 `55, 58, 65, 78, 85, 100, 113, 124, 139, 145, 152, 161, 165, 170, 175, 180`，15个相邻差均为正，因而这张照片提供了单调性的辅助证据。相机曝光、环境光和JPEG处理未经标定，这组数值不作为反射率或严格16级光学计量；它也不能替代下述项目PM锁候选的真机验证。
+
+项目侧此前已经逐字节证明：官方 `i*17` 经高 nibble 得到的码正是 0–15；厂家 `epd_fill_rect` 页面与便携参考完全相等；from-white 入口、波形对象、36相选择、FULL扫描、18 MHz及factory VCOM均一致。精确684行修复恢复了黑白几何，但普通、GC16铺白后下电及连续高压三种流程都留下约05–15趋白。因此灰码、图案、gamma、VCOM、白参考启停和页面几何不再是解释3–4倍刷新时差的首要候选。
+
+### 决定性差异与机制
+
+官方独立固件的 `sdkconfig` 没有启用 `CONFIG_PM_ENABLE`，CPU固定240 MHz。项目显示诊断配置则为 `CONFIG_PM_ENABLE=y`、`CONFIG_PM_DFS_INIT_AUTO=y`、最高240 MHz、最低由40 MHz XTAL确定；旧显示适配层从未在刷新期间申请 PM lock。ESP-IDF 6.1 的ESP32-S3功耗管理表明确：没有锁时CPU/APB处于配置的最低频点；`ESP_PM_CPU_FREQ_MAX`请求240/80 MHz，`ESP_PM_APB_FREQ_MAX`请求APB 80 MHz。
+
+这对当前 EPDiy 路径不是无关配置：
+
+- LCD PCLK显式选择PLL240M，所以日志仍会显示正确的18 MHz，不能据此证明整条扫描链时钟稳定。
+- EPDiy没有调用新版RMT驱动，而是通过 `rmt_compat.c` 直接写LL寄存器；ESP32-S3的 `RMT_CLK_SRC_DEFAULT` 是 `SOC_MOD_CLK_APB`，此兼容层只启用时钟源，不申请PM锁。
+- ESP-IDF 6.1自己的非DMA RMT驱动会创建 `ESP_PM_CPU_FREQ_MAX`，源码注释说明CPU降频会使供数/编码不稳定；EPDiy的CPU renderer/feed任务同样没有自行加锁。
+- 项目真机日志直接在 `epd_lcd_start_frame` 到frame-done之间量得：官方页36相为30.492–34.492 ms/相；编号页为43.484–48.489 ms/相；连续两帧大多43–48 ms/相。相间空档仅约22 µs，所以额外时间发生在每个物理扫描相位内部，而不是相位间业务代码。
+- 18 MHz扫描求解值是约11.2 ms/相、36相约404 ms；官方同机页面显示16灰刷新约399 ms。项目HL draw为1.206–1.686 s，恰为约3–4倍。探针会增加少量软件开销，但无法解释稳定的每相30–48 ms以及无探针早期同量级draw时长。
+
+综合以上证据，当前最具体且能解释全部现象的根因候选是：**项目开启DFS，却让绕过官方驱动的APB-RMT和CPU供数链在无PM锁状态下刷新；GC16每相被拉长约3–4倍，改变了面板实际驱动剂量，使多个浅灰码过驱并塌缩到接近白色。** 这是已由代码、SDK文档和旧相位测量支持的因果模型；在新固件真机恢复约11 ms/相及灰阶之前，仍标为“待硬件证实”，不倒推为已闭环。
+
+### 单变量修复与离线验证
+
+`epaper_driver_read_pico` 现于初始化创建CPU/APB两把PM锁，在静态清白和每个GC16事务上电前同时持有，直到rails安全关闭后释放；初始化失败、prepare失败、绘制失败、温度失败和deinit均走同一释放/删除路径。这样保持项目的自动DFS策略，但在显示事务内复现官方固件的稳定240/80 MHz条件。候选另通过ESP32-S3时钟树API记录加锁前后的CPU/APB实频；该API在此芯片上直接读取当前CPU/APB硬件频率，不是配置上限。未修改gamma、VCOM、频率上限、18 MHz PCLK、leading-skip、波形、灰码、页面或固定第三方子模块。
+
+| 检查 | 结果 |
+| --- | --- |
+| 新PM锁主机替身与生命周期断言 | 清白和GC16内部必须同时持有2把锁；每次事务后acquire计数归0；deinit后锁对象归0 |
+| 完整主机CTest | 310/310通过，7.02秒 |
+| 构建/控制台Python检查 | 20/20通过 |
+| 固定ESP-IDF v6.1显示诊断编译 | 成功；`esp_pm`真实组件编译并链接 |
+| 本地候选 | 305,104字节；SHA256 `6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255`；ELF `44ec27ed6eb7d2783415a5629f296dfe6be2da9a30892731b415c9bcf4983545` |
+| 配置 | DIO/80 MHz/16 MB；CPU 240 MHz；DFS仍开启；64 KB cache/64 B line |
+
+本节没有串口打开、复位、烧写、清白或GC16；设备仍是已回读一致的官方独立固件。下一步只需一次严格A/B：app-only写入factory并回读，分区表前后不变；新启动执行一次静态清白，人工确认全白后只显示一次官方局部页。软件通过门槛为36/36相且单相回到约11 ms、HL draw接近0.4 s；光学门槛为16条单调、相邻可分且无旧白偏。若时间恢复而灰阶不恢复，则DFS只解释性能而非白偏；若时间仍为30–48 ms，则本候选被否证并转查探针开销/renderer调度和外部CKV测量。未经这次真机证据不标记P2通过。
+
+## 2026-10-04 · PM时钟锁候选真机A/B（时序与16阶光学通过）
+
+用户明确回复“执行”后开始严格单变量验证。写前候选仍为305,104字节、SHA256 `6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255`，image-info为ESP32-S3、16 MB、DIO/80 MHz、ESP-IDF v6.1，ELF摘要`44ec27ed6eb7d2783415a5629f296dfe6be2da9a30892731b415c9bcf4983545`。设备为ESP32-S3 v0.2、Zbit `5e/4018`、16 MB/3.3 V，Secure Boot与Flash Encryption关闭。
+
+写前读取完整4096字节分区扇区，逻辑布局仍为NVS `0x9000/0x5000`、PHY `0xe000/0x1000`、factory `0x10000/0x400000`、storage `0x410000/0x500000`；前3072字节与候选生成表逐字节一致，尾1024字节全`0xFF`。仅写factory应用 `[0x10000,0x5a7d0)`，工具报告写入305,104字节并验证数据哈希；全长独立回读与候选逐字节/SHA一致。写前后4096字节分区表逐字节相等，SHA均为`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。未写bootloader、分区、NVS、PHY、storage或PMU校准。
+
+新启动从factory加载正确候选，应用身份、ELF摘要和编译时间匹配；DIO/80 MHz、16 MB Flash及8 MB AP PSRAM 80 MHz内存测试通过。启动仅进入`WAIT_CLEAR_COMMAND`，没有自动清白或GC16。显式一次`clear-white`后：扫描配置为18 MHz、288 cycles/line、16.0 µs/line、理论89.15 Hz/约404 ms GC16；锁日志为CPU `240→240 MHz`、APB `80→80 MHz`（命令任务在取锁前已经唤醒CPU，锁的作用是阻止扫描等待期间再次降频）。静态清白78/78帧、每帧696次软件回调，padding/边缘/欠载/孤儿/迟到/跨核等计数全0，关轨观察`ESP_OK`，总耗时1.630秒、faulted=0。此前同类静态清白为12.873秒，本轮时长显著恢复，但静态清白不是GC16光学验收，不能单独关闭根因。
+
+会话当前停在`WAIT_WHITE_CONFIRM`，尚未发送`white-confirm`或任何灰阶命令。下一步必须先由用户目视确认本启动整屏均匀白色，随后只发送一次`gc16-gray16-page`并同时核对36相计时和光学阶次；若白屏异常则拒绝图案并停止。
+
+用户随后明确确认“整屏白色无异常”。同一启动发送一次`white-confirm`后只执行`gc16-gray16-page`，实际命令序列截至当前严格为`status → clear-white → white-confirm → gc16-gray16-page`，无其他GC16、重试或调参。ON态温度27°C、PMU VCOM 1580 mV，锁日志仍为CPU 240 MHz/APB 80 MHz；厂家控制页再次确认`i*17 epd_fill_rect native_equal=1 from_white=1`。
+
+GC16软件结果为completed=1、operation/cleanup/fault均0，36/36相全部启动并完成，leading-skip=0、prefill=32；单相`start_to_done`最小11,090 µs、最大11,112 µs、平均11,092.42 µs、中位11,091 µs，36相合计399.327 ms。HL记录diff 27 ms、draw 419 ms、buffer copy 13 ms。相间gap除首相外约22–36 µs；12条边缘目标行配对/边界全部可区分，696行、欠载、错误、dropped/orphan/late/unfinished/wrong-core均为0，关轨观察`ESP_OK`。这与波形常量11,090 µs/相及官方同机约399 ms完全同量级，而旧项目为30.5–48.5 ms/相、HL draw 1.206–1.686 s；因此“缺少PM事务锁导致扫描时钟/供数在DFS下失稳”对**时序异常**的因果关系已经由真机单变量A/B证实。
+
+用户随后提供本轮实拍。对16条灰带中心等面积区域取照片亮度中位数，依次为`48, 53, 60, 68, 78, 86, 91, 99, 115, 121, 133, 148, 156, 162, 165, 169`；15个相邻差为`5, 7, 8, 10, 8, 5, 8, 16, 6, 12, 15, 8, 6, 3, 4`，全部为正。三个纵向采样窗也保持单调；40像素白边、灰条、黑白块、棋盘和细线几何正确，没有旧样本约05–15大面积并白。JPEG、环境光和透视不构成校准反射率测量，但足以支持本轮同照片内的顺序与旧故障对比。
+
+收到照片后发送一次`pattern-confirm`，再发送`stop → status`。最终`drawn=0x100/visually_confirmed=0x100`，`LCD deinitialized`、DISPLAY_DEINIT/HAL_DEINIT均`ESP_OK`，状态为`STOPPED/operation=0`；控制台关闭后串口无占用。完整实际命令序列为`status → clear-white → white-confirm → gc16-gray16-page → pattern-confirm → stop → status`，仅一条GC16_BEGIN/RETURN，无重试、其他图案、调参或校准写。
+
+最终回归：`ctest --test-dir host_tests/build --output-on-failure`为310/310通过（7.22秒），构建/控制台Python检查20/20通过。时序恢复和光学恢复同时发生，且唯一功能变量是显示事务CPU/APB PM锁，因此本轮持续白偏的具体根因已闭环。该结论只关闭16灰阶故障调查，不把单张结果扩展为P2重复性、照片链路或长期稳定全部通过。
+
+## 2026-10-04 · P3 SDMMC 1/4-bit 软件准备（无设备操作）
+
+用户要求继续 R-Core-3 开发，本轮完成独立于 P2 剩余硬件验收的 SD 软件准备。优先上下文搜索因缺少 Windsurf Key 不可用，回退限定目录 rg 与真实函数读取，未提取或绕过凭据。固定 SDK 仍为 v6.1 `fff9895c82d744c7237be8847347bdd1b07c6643`；Read Pico gitlink `28cde682…` 与其工作树保持原样。
+
+PhotoFrame 原 SDMMC backend 固定4-bit，现通过 `sdcard_config_t.bus_width` 显式选择1/4-bit。1-bit 强制 D1/D2/D3 为 `GPIO_NUM_NC`，原 WaveShare 初始化显式填写4-bit；Read Pico 板级静态定义 CLK38/CMD42/D0=44、D1–D3未连接、bus_width=1。既有 Kconfig 符号 `SDCARD_DRIVER_SDIO` 保留，菜单说明改为 SDMMC。
+
+新增配置检查拒绝空配置、空挂载路径、超过31字节的路径、不支持的总线宽度与缺失必要引脚；过长路径不再出现挂载完整路径但卸载截断路径的不一致。重复挂载在调用IDF前拒绝；挂载失败清除card handle，成功后才保存挂载路径。`format_if_mount_failed=false`保持，显式 `sdcard_format()` 接口仍保留；本轮所有mount/unmount/format调用均为主机替身，无实体介质IO。卸载错误行为沿用上游，不将其视为故障恢复已验收。
+
+| 检查 | 结果 |
+| --- | --- |
+| 新增真实backend主机替身测试 | 8/8；无效配置、1-bit引脚屏蔽、4-bit传递、挂载失败、成功但无handle、重复初始化、显式format及正常卸载 |
+| 普通CTest全量 | 318/318，7.20秒 |
+| ASan/UBSan全量 | 318/318，34.13秒，无sanitizer报告 |
+| 格式整理后受影响测试 | 普通与ASan/UBSan各8/8；其余源码未变 |
+| 构建/控制台Python检查 | 20/20，1.857秒，无串口访问 |
+| 固定IDF原板编译 | `waveshare_photopainter_73 --step firmware`成功；SD backend与原板初始化实际编译，最终增量16步骤成功 |
+| 固定IDF Read Pico只读编译 | `read_pico --step firmware`成功；1197步骤完成 |
+| 固定IDF Read Pico显示诊断编译 | factory/display两个显式开关，13步骤成功；未烧写 |
+| 诊断隔离 | 只读和显示配置均未启用SDIO/SPI；只读ELF仅命中app_main，未定义sdcard_init/format、SDMMC mount、NVS init/erase或Wi-Fi init |
+| 空白与来源检查 | `git diff --check`通过，固定厂家子模块clean；组件版本/component_hash未升级 |
+
+首次编译因未指定隔离Python环境，IDF检测到与构建缓存路径不符并在源码编译前退出；尝试把IDF_TOOLS_PATH指向隔离目录时又因缺少约束缓存而未激活。最终沿用DEVELOPMENT中的 `IDF_PYTHON_ENV_PATH` 指向既有隔离环境，默认工具/约束缓存路径不变，双板和显示配置通过；未运行fullclean或重装SDK。另一次编译后连接ELF检索的整体命令exit 1来自rg没有命中禁止入口，构建自身明确成功，不能误记为编译失败。仍有固定SDK的Kconfig/include通知、上游字体及厂家代码历史告警，SD修改源无新增编译告警。
+
+原板与Read Pico配置会生成不同的直接依赖manifest元数据。最终保留本轮Read Pico解析得到的锁状态（直接idf、manifest_hash `5be05836…`）；所有版本/component_hash保持既有锁定，未自动升级依赖。
+
+| 本地产物 | 字节 | SHA256 |
+| --- | --- | --- |
+| 原板 build/esp32-photoframe.bin | 2,058,368 | `f2e3e896bc329e53b7156c2540b6299832fb15b0c0d8ad5c6723dd91e5686a2b` |
+| Read Pico只读 build-read-pico/esp32-photoframe.bin | 276,448 | `2b8c946edb7708bca65d37d8cee611a05168831e8202c307ee7274e87a8dbde4` |
+| Read Pico显示诊断 build-read-pico-display/esp32-photoframe.bin | 305,104 | `6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255` |
+
+编译记录位于忽略的 `build/log/idf_py_stdout_output_29051`（原板最终）、`build-read-pico/log/idf_py_stdout_output_21828`（只读）及 `build-read-pico-display/log/idf_py_stdout_output_30619`（显示），另有对应stderr；测试结果来自本轮工具输出。生成物和日志不提交。
+
+烧写回读：本轮未执行。真机SD挂载、读写/回读、无卡、卡供电/退出与照片读取：均未验收。现有Read Pico诊断不选择SD driver、不调用厂家总BSP或/storage挂载；本轮没有打开串口、复位、清白、GC16、格式化或校准写，设备部署与上轮STOPPED状态没有被本轮操作改变。下一项是独立产品入口的唯一/storage接线和故障处理，再进入实体卡验收；P2重复性与照片显示仍按原计划保留。
+
+## 2026-10-04 · P3 单一SD适配与手动隔离入口（无设备操作）
+
+用户继续开发，本轮实现SD检测、所有权和退出适配，并编译独立手动入口；没有恢复灰阶验证或操作实体卡。固定厂家 `read_pico_sd.c` 确认1-bit/40MHz/内部上拉，`read_pico_board.c` 的 `read_pico_sd_present` 确认P0.6低有效；映射中没有独立SD供电控制，不借用显示电源位、不调用厂家总BSP/默认挂载。语义搜索仍缺配置，使用限定目录源码核对，无凭据提取。
+
+`read_pico_board_sd_present` 在共享递归锁内只读方向/输入，拒绝输出模式并区分IO错误和无卡；`read_pico_sd` 独占PhotoFrame `/storage`，挂载前/后核对CD、取得HAL存储租约、只调用一次backend。backend上拉为显式opt-in，Read Pico开启，原板保持false/4-bit。挂载期间拔卡清理后不发布可用状态；挂载后观察到拔卡/CD错误使media_valid锁存，不隐式卸载或重挂，未来消费者须先关文件。
+
+实际读取固定IDF v6.1 `components/fatfs/vfs/vfs_fat_sdmmc.c`：`esp_vfs_fat_sdcard_unmount` 先释放context，`unmount_card_core` 可先free(card)再返回VFS unregister错误。因此不能简单保留指针重试。本轮backend清指针并锁存卸载错误，后续deinit返回原错且不再次调用SDK，init/format拒绝；Read Pico外层保留HAL租约和exit_failed，防止失败后正常HAL退出。这是保守软件策略，不计真机拔卡/故障恢复通过；其他板既有睡眠业务未改写。
+
+`--read-pico-storage-validation` 必须与factory诊断同用，与display互斥；独立build/sdkconfig目录，CLI拒绝flash/monitor/erase/fullclean。开机仅HAL身份/VCOM GET/CD，不挂载；精确status/mount/stop命令有界解析，超长/二进制/控制字符整行拒绝。mount只一次，stop先卸载再HAL退出，成功STOPPED/失败FAILED均终止命令处理。不开屏/NVS/网络、不写文件、不格式化。仍使用同步SDK，未新增可取消硬超时；PMU无HOST_READY的诊断启动超时仍为实板限制。完整PhotoFrame入口与NVS安全迁移尚未接入。
+
+| 检查 | 结果 |
+| --- | --- |
+| 新增主机测试 | 17项：backend上拉/卸载锁存2、真实HAL检测/租约3、SD适配及有界命令12；底层IO为替身 |
+| 普通CTest全量 | 335/335，9.12秒 |
+| ASan/UBSan全量 | 335/335，48.46秒，无sanitizer报告 |
+| Python构建/控制台保护 | 23/23；新增storage隔离/非法参数/安全入口3项，无串口访问 |
+| 固定IDF编译 | 原WaveShare、Read Pico只读、factory只读、display、storage五配置均成功 |
+| 链接隔离 | 只读/factory/display均无SD init/mount；storage链接唯一sdcard_init/SDMMC mount和外层mount/unmount，无sdcard_format、NVS init/erase、Wi-Fi init、epd_init或厂家read_pico_init |
+| 配置隔离 | 仅storage启用SDIO，四Read Pico配置均禁内部Flash storage；显示与SD各自专用 |
+| CI | 增加第五个编译profile；远端未运行，不计Actions通过 |
+| 来源/空白 | 固定厂家子模块clean，git diff --check通过，组件版本/hash未升级 |
+
+| 本地产物（未烧写） | 字节 | SHA256 |
+| --- | --- | --- |
+| build-read-pico-storage/esp32-photoframe.bin | 320,624 | `3168a7cc4da8d8afc3d11097fe80c813959e559f0b4b16c959df7ecf251cd13d` |
+| build/esp32-photoframe.bin | 2,058,400 | `34aef1db9540003e429f13bbdc55b3625dd705d39ed3b14dd7671c84b0c8b59a` |
+| build-read-pico/esp32-photoframe.bin | 276,464 | `b510dd8ee43da3f24c2c23760f043e42c1302b6b7fd043cec90c67e72eb1cbdb` |
+| build-read-pico-factory/esp32-photoframe.bin | 275,344 | `af5b36f2efb1e1c5acfa54ce529205a0a6d6ca94efb65e8ec02abf090f58b334` |
+| build-read-pico-display/esp32-photoframe.bin | 305,120 | `76ae17a3c653b6456a75da84ef22e233e0e1bbd5ae92adaa5886fdcb5ad820d8` |
+
+本轮最终编译日志为忽略目录 `.cache/p3-{storage,original,readonly,factory,display}-build.log`；SDK仍有既有Kconfig/include/上游字体告警，本轮SD/HAL源无新增编译错误。新显示构建受公共HAL变化影响身份已不同，不能替代设备已验收镜像。设备仍为上轮305,104字节/`6f2a4ea…`；没有串口、复位、烧写、回读、实体卡IO、清白、GC16、校准或PMU电源写，本轮也未提交/推送。锁文件最终保持Read Pico解析元数据，所有版本/component_hash不变。
+
+烧写回读：未执行。真机验收：未执行。完整产品入口、实际卡供电与断电、有卡/无卡、明确测试文件读写回读、读图及照片显示均待后续；当前只完成软件准备，不标记P3 MVP通过。使用契约见 [SD说明](READ-PICO-STORAGE.md)。
+
+## 2026-10-04 · P3 完整业务集成编译及数据保护（人工介入前的软件检查）
+
+用户要求继续开发直到需要人工介入。本轮沿用真实PhotoFrame架构，完成其Read Pico业务编译链接与存储/NVS/路径安全适配，没有运行设备或扩大既有烧写授权。fast-context服务缺少配置，代码定位使用限定目录rg，源码接口均实际读取后使用；研究/归档不作为新执行许可。
+
+新增独立 `--read-pico-photoframe-integration`，必须Read Pico/factory/firmware-only，与显示/SD profile互斥。真实main重命名为photoframe_app_main并以volatile引用保留整个业务链路；新app_main只报告INTEGRATION_ONLY，不调用真实产品、不初始化板卡、SD、NVS、显示或网络。使用既有精确684行外层覆盖、PERF/cache，厂家子模块/波形/VCOM/gamma/PCLK及80MHz存储设置不变。旧共享splash/Web资源仅作编译输入，不计新板画面运行通过，也不计OTA分区可用。
+
+真实 `storage.c` 在Read Pico只调用唯一SD适配，一次初始化失败返回原错，不fallback到Flash/MemFS；持久存储查询检查新鲜CD/挂载/介质有效/退出状态。检查式卸载用所有权而非可用状态决定清理，失效/拔卡仍能退出，失败保持占用并拒绝新挂载。Read Pico格式化禁用；wifi.txt无有效卡时不读文件/写设备名。尚无文件引用计数/业务停止协调，不计并发或热拔卡恢复完成。
+
+NVS启动在新板板卡/存储业务之前初始化，错误直接返回；新板bootstrap构建排除整个自动擦除分支，即使误传legacy opt-in也不可启用。完整栈链接审计还发现上游Web factory-reset整分区擦除，Read Pico改为501/NOT_SUPPORTED、不擦除/重启；原板行为保留。真实NVS初始化成功不意味着旧Demo/产品配置已迁移，产品仍会写配置，所以运行门禁未开放。
+
+current_image/last_image统一512字节含NUL；文件及流式display_name/save_path/fallback_name在刷新前校验，超长返回INVALID_SIZE并释放流锁，不刷新/发布/NVS提交。511字符解码、链接、当前状态和NVS记录不截断，快照失败后的同容量fallback保持完整；没有自动修复旧截断数据，也不宣称所有HTTP/相册API具有相同上限。
+
+首轮完整栈O2编译暴露NC按键负值位移和配网/缩略图strncpy告警：GPIO mask便携化，负值和>=64拒绝位移；同容量HTTP名字完整拷贝、STA有终止字符串、AP按显式SSID长度允许满32字节。Read Pico睡眠入口在任何关网络/卸载/ESP deep sleep动作前返回，等待PMU/wake策略验收；这不是低功耗实现。JPEG分配失败日志size_t格式修正，无图像算法改动。
+
+| 检查层 | 本轮结果 |
+| --- | --- |
+| 新增主机用例 | 21：通用NVS5、新板硬禁擦除2、真实storage7、实际隔离启动1、GPIO mask3、显示长路径/拒绝/回退3；新板NVS测试不提供erase mock，链接不能依赖擦除 |
+| 普通CTest | 356/356，7.61秒 |
+| ASan/UBSan | 356/356，40.29秒，无sanitizer报告；实体IO均替身 |
+| Python构建/控制台 | 26/26，最终复跑1.882秒；18构建保护+8控制台，无串口访问 |
+| Web回归 | Node22下60/60，2测试文件；未操作设备浏览器 |
+| 固定IDF编译 | 原WaveShare、Read Pico只读、factory只读、display、storage、integration共六配置成功；原板及integration在最终业务修改后复跑 |
+| 完整栈链接 | app_main与photoframe_app_main、storage_init/read_pico_sd_mount、image_processor_init/http_server_init均保留；无nvs_flash_erase、sdcard_format或厂家read_pico_init；bootstrap对象仅未定义引用nvs_flash_init |
+| 原隔离入口 | 四种诊断入口保持原用途；只读/factory/display无SD挂载，storage无显示/NVS/Wi-Fi/文件操作启动 |
+| CI | 加入第六个编译配置；远端未运行，不计Actions通过 |
+| 来源/数据 | 固定厂家28cde682…子模块clean，组件version/hash未升级；不提交构建资源/凭据/私人照片，保留原有工作树修改 |
+| 烧写/回读 | 未执行 |
+| 真机/SD/照片/睡醒验收 | 未执行，不标记P3/P4/P5通过 |
+
+| 本地产物（未烧写） | 字节 | SHA256 |
+| --- | --- | --- |
+| build-read-pico-integration/esp32-photoframe.bin | 1,972,096 | `5893eb3cacb6a7073f8b3ec27ce5c1a721cf54b205928b6e7e04b419505e7ced` |
+| build/esp32-photoframe.bin | 2,058,592 | `031c74cc988611395d247ffc0f5f98c0fec31b236345e42a7cee954ada75b7bd` |
+
+本轮四个原诊断profile的字节/SHA与上节相同，integration不是可烧写产品入口。日志在忽略目录 `.cache/p3-product-{host,asan,python,web-tests}.log`（Web为web-tests）、`.cache/p3-product-{original,readonly,factory,display,storage,integration}-build.log`。完整栈初次失败已修复后复编成功，不隐藏为首次即通过；固定上游既有字体/Kconfig告警不等于本轮错误。原板/完整栈与诊断解析可能生成不同manifest/direct_dependencies元数据，但组件版本/hash不变；最后重编SD诊断保持原Read Pico解析形态。
+
+下一步真实依赖：用户提供已备份、无重要数据的FAT32测试卡，确认设备/供电及本轮仅factory应用更新的SD诊断许可，分会话进行无卡/有卡检测、单次挂载和正常卸载/HAL退出。挂载不是硬件只读模式，不拿原片卡实验，不自动格式化/写文件。其后再验证限定测试文件、真实照片与产品迁移/显示/PMU策略。设备最后已知仍为305,104字节/6f2a4ea…、显示/HAL STOPPED；本轮无串口、复位、烧写、回读、清白、GC16、SD介质或PMU写，也未提交/推送。详见 [集成说明](READ-PICO-INTEGRATION.md)。
+
+## 2026-10-04 · P3 SD隔离诊断 app-only部署与有卡一次挂载（无卡待人工取卡）
+
+用户对上轮“准备已备份且无重要数据的FAT32测试卡，仅factory SD诊断更新，执行无卡/有卡、一次挂载及卸载；不格式化/主动写文件、不改NVS/PMU校准，挂载不是硬件只读模式”的关口回复“确认”。本轮仅在该范围执行，不扩展到照片文件读写、产品运行/迁移、显示或PMU配置。
+
+### 产物与写前核对
+
+既有SD诊断320,624字节/`3168a7cc4da8d8afc3d11097fe80c813959e559f0b4b16c959df7ecf251cd13d`，ESP32-S3/DIO/16MB/80MHz/MMU64KB、secure version0、校验和/hash有效，镜像描述符ELF SHA为`ce105b4d1c655694eb0961daff297cd0e7b2b650e33307483c1038d43364005a`。配置明确storage=y、显示/integration未启用，使用本设备固定factory表；完整业务集成镜像没有烧写。
+
+端口枚举只有一个USB JTAG/serial debug unit。固定SDK Python/esptool5.4.0以115200/ROM/no-stub核对同一设备标识（不公开MAC），S3 v0.2、8MB AP_3v3 PSRAM、16MB Flash/5e4018、Secure Boot和Flash Encryption关闭、crypt count0。写前完整读取4096字节分区扇区：NVS0x9000/0x5000、PHY0xe000/0x1000、factory0x10000/0x400000、内部storage0x410000/0x500000；生成3072字节表与其前缀逐字节一致，其余1024字节全FF。
+
+写前按上轮已核实长度305,104字节读取当前app，SHA与`6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255`逐字节/摘要匹配。它仅是上轮显示诊断应用的本地副本，不是完整Flash/移植前旧app备份；没有读取NVS/PHY/内部FAT内容或PMU密钥/校准备份。
+
+### 烧写与回读
+
+镜像复制到忽略目录固定本轮输入。ROM状态下只写`0x10000`一个应用目标，keep flash参数、no-compress，无flash_args/erase-all/bootloader/分区/数据区写入；工具报告写入320,624字节、4.1秒并Hash verified。应用写入范围`[0x10000,0x5e470)`、扇区擦除`[0x10000,0x5f000)`，完全位于factory。
+
+| 核对 | 实际结果 |
+| --- | --- |
+| app全长独立回读 | 320,624字节，cmp与固定输入一致，SHA均3168a7cc4da8d8afc3d11097fe80c813959e559f0b4b16c959df7ecf251cd13d |
+| 分区写前/后 | 两份4096字节cmp一致，SHA均f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20 |
+| 保护范围 | 写入/擦除未触及bootloader、分区表、NVS、PHY、内部FAT；没有对这些数据区做全部内容前后校验 |
+
+### 实板有卡会话与退出
+
+在已打开串口上显式ESP USB reset捕获新启动，不复位PMU/发HOST_READY。保留bootloader加载新app，ELF前缀ce105b4d1…匹配；8MB PSRAM/80MHz、SPI SRAM memory test OK。SD入口报告无自动挂载/格式化/文件写/显示/NVS/网络；启动完成后 `SD observation=ESP_OK present=1 mounted=0 media_valid=0 exit_failed=0`，READY后才手动发送命令。
+
+执行顺序：
+
+1. 明确一次`mount`：真实SDMMC width=1、CLK38/CMD42/D0=44、D1–D3=-1；SDK成功挂载`/storage`，返回`Mount=ESP_OK (one attempt)`。卡报告SDHC、40.00MHz limit40MHz、59638MB；没有主动创建/打开/写入业务文件或格式化。这不证明文件系统格式、所有卡容量/型号支持或读写吞吐，FAT挂载也不是硬件只读。
+2. 明确`status`：新鲜CD读取，`ESP_OK present=1 mounted=1 media_valid=1 exit_failed=0`；未观察到掉卡/读错误。
+3. 明确`stop`：真实backend卸载、存储租约释放与HAL退出；完整日志`Unmount=ESP_OK`、`HAL cleanup=ESP_OK`、`STOPPED; command processing ended`，随后app_main返回。没有补发挂载/重试或再次初始化。
+4. 日志确认终态后控制台EOF退出，exit0/串口关闭；不把等待人工期间的存储资源保持挂载。
+
+真机通过范围仅本卡此次有卡CD、一次挂载、正常卸载/HAL退出。无卡检测尚未执行，需要用户此时取出测试卡并回复，再重新启动隔离会话；不在挂载时拔卡。读写/回读、坏卡/满卡/热拔、照片显示、产品迁移及长期稳定仍未验收，不标记P3 MVP完成。新SD固件不刷新屏幕，旧画面不能作为新固件运行证据，没有活动白参考。
+
+### 本轮控制台保护与留档
+
+为现有手动控制台新增显式`--profile storage`，仅status/mount/stop；默认display白名单保留。两种profile互相拒绝对方操作，格式化/未知/前缀/控制字节拒绝；EOF不发送指令或复位，部分写入不重试、断连不重连。新增3项替身测试，Python构建/控制台总29/29（1.913秒），没有测试调用真实串口。未修改C驱动/固件，沿用上轮356普通/356 sanitizer和六配置编译证据；不能将本轮Python回归当成重跑所有C测试。
+
+私有设备/烧写/回读/控制台日志与镜像存于忽略目录 `.cache/p3-sd-hardware-EdGEy4/`，设备标识/卡信息不提交。固定厂家子模块不改；主机脚本及文档之外无源码修改、无提交/推送。当前应用已是320,624字节/3168a7cc… SD诊断且完整STOPPED；后续显示需重新指定镜像/许可并建立白参考。待人工取卡后继续无卡验证，见 [SD说明](READ-PICO-STORAGE.md)。
+
+## 2026-10-04 · P3 SD隔离诊断无卡检测与单次挂载拒绝
+
+用户在此前已成功卸载/HAL退出并关闭串口后回复“已取出”。本轮仅继续已获准的无卡分会话验证，不烧写、不读写测试文件/照片、不格式化、不刷新屏幕、不运行产品入口或网络/NVS业务；没有PMU配置/校准写或HOST_READY。
+
+使用现有storage白名单控制台、同一USB端口，显式ESP USB reset开启新会话。boot报告ELF前缀`ce105b4d1…`匹配已部署SD镜像，PSRAM memory test OK；不将本次启动日志当成新的镜像全长回读或分区校验。
+
+| 阶段 | 本轮实板证据 |
+| --- | --- |
+| 启动 | 593ms：SD observation=ESP_OK，present=0、mounted=0、media_valid=0、exit_failed=0；594ms READY，无自动挂载 |
+| 明确status | 11852ms：新鲜CD读取ESP_OK，四个状态仍为0 |
+| 明确mount一次 | 21397ms：Mount=ESP_ERR_NOT_FOUND (one attempt)；随后状态仍为0；整份日志没有sdcard_sdio挂载/SDMMC初始化记录，与挂载前CD拒绝路径相符 |
+| 明确stop | 29008ms Unmount=ESP_OK（无挂载清理），29009ms HAL cleanup=ESP_OK，29010ms STOPPED，29011ms app_main返回 |
+| 主机退出 | 确认STOPPED后EOF，控制台exit0/串口关闭；不发送额外挂载、重试或显示指令 |
+
+通过范围：取卡后的新启动无卡CD、单次挂载拒绝以及无挂载状态的HAL安全退出。结合上轮有卡记录完成本轮有卡/无卡挂载门禁及正常退出闭环；这是卸载后取卡，不是挂载中热拔，不能据此宣称掉卡/坏卡/满卡/错误恢复、文件读写/回读、照片链路或P3 MVP通过。
+
+本轮只修改状态文档，无代码或配置更改，未重跑主机测试/固件编译；沿用此前分层证据，不把实板无卡验证计为软件回归。日志在忽略目录 `.cache/p3-sd-hardware-EdGEy4/no-card-console-private.log`，不提交原始设备日志。设备仍是3168a7cc… SD隔离诊断，最终STOPPED、卡已取出、串口关闭，无活动白参考。下一步需明确限定测试文件及读写范围，现有入口只有status/mount/stop，不自动扩大操作。无提交/推送。
+
+## 2026-10-04 · P3 限定文件写入/回读软件候选（未烧写）
+
+用户对“在已备份测试卡上新建专用测试文件，不覆盖现有文件、操作原片或格式化”回复“允许”。本轮实现其必要的独立诊断代码并验证，没有将许可扩大为已有文件覆盖/删除、完整分区迁移、显示或NVS/PMU配置写。当前卡已取出，需要下一次人工操作；本轮未打开串口、复位、烧写或访问实卡。
+
+### 实现与边界
+
+新增便携`main/sd_file_probe.c/.h`，以有界同步IO回调驱动；POSIX/VFS与新鲜介质检查留在独立SD入口。新增精确file-test命令，设备解析器16字节和主机storage白名单均不接受路径参数/前缀/控制字节，默认display白名单保持原样。Kconfig说明更新，完整PhotoFrame集成不编入文件测试核心或执行此入口。
+
+固定8.3文件`/storage/RC3T0001.BIN`：O_WRONLY|O_CREAT|O_EXCL独占新建4096字节，256字节分块内容由绝对offset确定。已读取锁定IDF v6.1的fat_mode_conv映射O_CREAT|O_EXCL→FA_CREATE_NEW；fsync→f_sync，close→f_close/file_cleanup，未猜测SDK接口。不存在truncate、append、unlink、format或目录枚举/用户路径选项，不扫描私人文件。冲突报告CREATE_FAILED/EEXIST，不读取或更改原内容。
+
+每启动最多一次文件尝试，含无卡、无挂载、冲突或错误；不自动挂载/重试。每个操作前检查CD/mounted/media_valid/exit_failed；写完fsync并关闭，随后只读重开，完整逐字节核对及EOF，再关闭/最终状态检查。正常短传输处理有界，零/负/越界返回、缺字节、损坏或多尾字节均拒绝；所有已打开句柄在返回前close一次。主错误与额外关闭失败分开报告；close错误另锁存、阻止stop正常卸载/HAL拆除，FAILED终止命令，租约保留直到另行受控重启，不重试句柄或伪报STOPPED。
+
+新建文件无论成功/失败均保留（部分写入也保留），不清理或更换名字绕过冲突。只验证本次fsync/关闭/重新打开路径，不声称卸载重挂、重启/断电持久性、满卡/热拔、所有容量、照片链路或并发消费者通过。同步卡驱动没有新增硬取消/超时契约，不承诺stop能打断未返回的IO。设备开机仍不自动挂载或文件IO，不启屏/NVS/网络，不写PMU校准或HOST_READY。
+
+### 分层证据
+
+| 检查层 | 本轮结果 |
+| --- | --- |
+| 新增主机用例 | 19项：完整字节/EOF、正常短传输、无卡/冲突、一次性门禁、坏写/读、sync/close/reopen失败、损坏/短文件/额外尾字节、37个介质失效点、非法回调，以及实际主机POSIX独占创建/冲突保留；不访问实体SD |
+| 普通CTest | 375/375，7.78秒 |
+| ASan/UBSan | 375/375，37.83秒，无sanitizer报告 |
+| Python构建/控制台 | 30/30，1.874秒；新增1项file-test参数/前缀/控制字符拒绝，现有storage/默认display用例同步扩展；使用替身，无串口访问 |
+| 固定SDK编译 | SD诊断、完整业务隔离集成、原WaveShare成功；本轮未复跑其余三个Read Pico profile或Web测试 |
+| 厂家来源 | 子模块clean，仍28cde682a4468a581c278761922724f57d976418；驱动、波形、频率、VCOM不改 |
+| 镜像离线检查 | ESP32-S3/DIO/16MB/80MHz/MMU64KB、secure version0、checksum/hash有效；这不是实机烧写回读 |
+| 烧写/分区回读 | 未执行，本轮设备当前应用仍为320,624字节/3168a7cc… |
+| 实板文件IO | 未执行；此前有卡/无卡挂载证据不转移为file-test验收 |
+
+新SD候选322,848字节，SHA256 `6b85769bc32b65a4fb6051651062c43498dd3c463b85dfcb95c004034d2a9b77`，ELF SHA `b970e4596eb3eb36a2982a246a84f10502be4bd6721052245f4dea08047589f7`，sdkconfig SHA `bbc74531c50d30d1eef3a94b7ebc3681c54b90cd012f9bf87288c369e18984b1`。本次原板与integration产物SHA分别仍为031c74cc…与5893eb3c…，integration从未烧写、不开放产品启动。
+
+初次SD编译因新系统头文件误置于源码末尾失败，移至文件顶部后重新编译成功，再做复核构建；不将修复前失败隐藏为首次即通过。日志保留于忽略目录`.cache/p3-file-probe-*`，包括host/asan配置构建和测试、python、firmware-build初次与final/reviewed、storage-final-build、integration/original-build和image-info；不提交构建产物或私有日志。未修改Git index、无提交/推送。
+
+下一步人工关口：重新插入已备份、没有重要数据的测试卡，明确本轮仅factory诊断应用更新与全长回读/分区保持；再新会话status→单次mount→单次file-test→status→stop，观察所有句柄关闭、卸载/HAL退出，终态后关闭串口。若发现同名文件即拒绝，不自行删除/覆盖或改名重试。详见 [SD说明](READ-PICO-STORAGE.md)。
+
+## 2026-10-04 · P3 限定文件诊断部署与4KiB实板回读通过
+
+用户回复“已插入，确认允许更新”，承接此前已允许的新建专用测试文件及仅factory诊断应用更新/回读范围。本轮仅更新该应用，并在新启动执行一次挂载/file-test/退出；不扩展到已有文件覆盖/删除、格式化、照片、显示、完整产品/分区迁移或NVS/PMU配置写。
+
+### 写前核对与应用更新
+
+复制上一轮已编译/测试的322,848字节候选到本轮忽略目录作为固定输入，SHA256仍为`6b85769bc32b65a4fb6051651062c43498dd3c463b85dfcb95c004034d2a9b77`。image-info确认ESP32-S3、DIO/16MB/80MHz、MMU64KB、secure version0、checksum/hash有效，ELF SHA为`b970e4596eb3eb36a2982a246a84f10502be4bd6721052245f4dea08047589f7`。配置storage=y、factory表、80MHz PSRAM，显示/integration未启用。本轮没有重编译或修改固件源。
+
+确认单一USB设备端口、串口无占用；固定SDK Python/esptool5.4.0在ROM/no-stub核对身份，私有MAC与上轮一致（两份记录各一条，不公布标识）。S3 v0.2/QFN56、8MB AP_3v3 PSRAM、Flash16MB/5e4018、Secure Boot和Flash Encryption Disabled、crypt count0。生成分区表3072字节与实机回读4096字节的前3072字节经明确复制后cmp/SHA一致；整扇区与上轮partition-after完全一致，SDK解析仍为NVS0x9000/0x5000、PHY0xe000/0x1000、factory0x10000/0x400000、内部FAT0x410000/0x500000。
+
+按已知旧应用长度320,624字节整长读取，cmp及SHA与3168a7cc…旧SD诊断一致，保留本地恢复副本；不是完整Flash或移植前原应用备份，不承诺完整产品回滚。
+
+仅write-flash目标0x10000，keep flash参数/no-compress，无全片擦除、flash_args、bootloader或分区/数据区写入。工具报告322,848字节/4.0秒、Hash verified；应用写入范围`[0x10000,0x5ed20)`、扇区擦除`[0x10000,0x5f000)`。
+
+| 核对层 | 实际证据 |
+| --- | --- |
+| 独立应用整长回读 | 322,848字节，cmp与固定输入完全一致；两份SHA均6b85769bc32b65a4fb6051651062c43498dd3c463b85dfcb95c004034d2a9b77 |
+| 分区表前/后 | 4096字节cmp一致；SHA均f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20 |
+| 保护范围 | 写入/擦除仅factory应用，未触及bootloader/分区/NVS/PHY/内部FAT；没有对所有这些数据区做完整内容前后备份校验 |
+
+### 新启动与单次文件验证
+
+显式ESP USB reset（不是PMU reset）后，保留bootloader加载新app，ELF前缀b970e4596…匹配，PSRAM memory test OK。隔离入口声明不开机挂载/文件IO/格式化、无显示/NVS/网络；594ms启动CD观察ESP_OK、present=1/mounted=0/media_valid=0/exit_failed=0，596ms READY，之后才明确发送命令。
+
+| 明确操作 | 实板结果（时间均自本次ESP启动，不是操作耗时） |
+| --- | --- |
+| status | 9149ms新鲜CD仍present=1，尚未挂载 |
+| mount一次 | 10391ms初始化既有SDMMC，width1、CLK38/CMD42/D0=44、D1–D3=-1；10448ms挂载/storage成功，10450ms Mount=ESP_OK，10452ms状态present/mounted/media_valid=1、exit_failed=0 |
+| file-test一次 | 19013ms File test=OK、created=1、written=4096、verified=4096、close_failed=0、errno=0、close_errno=0；19015ms报告保留/storage/RC3T0001.BIN；19017ms介质状态仍有效 |
+| status | 29177ms新鲜CD/挂载/介质有效，exit_failed=0 |
+| stop | 30422ms真实backend卸载，30424ms Unmount=ESP_OK，30425ms HAL cleanup=ESP_OK及STOPPED，30426ms app_main返回 |
+| 控制台退出 | 确认终态后EOF退出，exit0，串口关闭；无补发/重试/重新挂载，端口占用检查为空 |
+
+结合已读取的同一固件实现及成功结果，此次单张专用文件完成独占创建、4096字节写、fsync、关闭、只读重开、逐字节比对与EOF长度检查、再次关闭和最终介质检查。没有目录枚举、私人文件内容读取、已有文件覆盖/删除、自动改名或格式化。测试文件留在卡上，卡仍插入但已卸载；不自动清理，即使后续请求遇到同名也应拒绝。
+
+通过范围只限本卡此次4KiB关闭/重开完整性与正常退出。不能代替卸载重挂/重启/断电持久性、满卡/坏卡/热拔恢复、不同卡型号/容量、真实照片/并发消费者或P3 MVP验收。旧3168a7cc…无卡证据仍属旧镜像，不移作当前文件镜像的无卡验收。当前SD固件不刷新屏幕、没有活动白参考，旧保留画面不证明显示运行；完整PhotoFrame集成镜像未烧写。
+
+### 留档与后续
+
+本轮只有状态文档更新，不重跑软件测试/编译；此前软件轮次375普通/375 ASan/UBSan、30 Python、SD/集成/原板编译证据保留，不将此次实板结果冒充软件重跑。厂家固定子模块不改，无提交/推送，保留原有工作树修改。
+
+固定输入、旧应用副本、整长回读、分区前/后与前缀、image-info、设备安全/身份及控制台私有日志存于忽略目录`.cache/p3-file-hardware-7lH0bJ/`，不提交原始设备标识或卡信息。当前应用为6b85769b…/322,848字节，最终STOPPED/串口关闭。下一步先设计只读重挂/重启核对已保留专用文件的入口；现有file-test不能用于读回已有文件，不能通过删除/覆盖同名文件绕过门禁。之后另明确照片测试样本和路径，未在本轮执行。
+
+## 2026-10-04 · P3 file-check只读持久性核对候选（未部署，需人工确认）
+
+继续“开发直到需要人工介入”的目标。上一轮属于明确进展：已获准部署6b85769b…并完成实卡4KiB文件写/关闭/重开及安全退出；本轮重新读取TODO、当前源码、前轮整长回读摘要和完整STOPPED日志，确认下一依赖是保留文件在新启动/重新挂载后的核对，不把原有关闭/重开冒充持久性通过。没有依据归档报告或旧许可自动操作新候选。
+
+### 只读能力与保护
+
+新增`sd_file_probe_check`，独立`sd_file_probe_read_io_t`仅提供media_ready/open_read/read/close，根本不传递创建、写入或sync回调。实际隔离入口固定O_RDONLY打开/storage/RC3T0001.BIN，不接受任意路径、不扫描其他文件；新增精确file-check命令及storage主机白名单，默认display白名单不变。16字节解析器继续拒绝超长/前缀/控制字节/参数。
+
+与原file-test共享逐字节/EOF核对核心，保留已有内容公式及4096字节格式，未新增不同格式或事后修复。验证结果只在内容完整、EOF正常、关闭成功且最终介质有效时OK；文件缺失READ_OPEN_FAILED/errno、短文件/坏读READ_FAILED、损坏MISMATCH、尾字节EXTRA_DATA均失败，不创建或重建。即使verified已达4096，EOF读取错误也失败。
+
+attempted与check_attempted分别限制每种命令每启动一次，包含失败；无自动挂载/重试。关闭失败共用close_failed锁存，阻止后续两类文件操作和stop正常卸载/HAL拆除，主错与关闭错不相互覆盖。实际文件消费者仍同步且句柄在返回前close一次；没有新增后台热插拔或安全硬取消，不承诺可中断卡驱动挂起。新入口不开机挂载/文件IO、不启屏/NVS/网络、不写PMU/VCOM校准、不开放完整产品。
+
+### 软件与构建证据
+
+| 层次 | 本轮实际结果 |
+| --- | --- |
+| 新增主机用例 | 13项只读核心用例：完整内容/EOF且无写、缺文件不创建、无卡、重复命令、损坏不修复、短/多尾文件、短/零/负/越界读、全部19个介质失效点、EOF错误、close失败、主读/close双错、写close错误阻止读、非法回调；既有实际POSIX测试扩展新会话只读核对已有文件 |
+| 原写测试 | 原19项继续覆盖同一共享核心，独占创建/37个介质失效点/关闭回读行为通过，不因重构删除原保护 |
+| 普通CTest最终 | 388/388，7.85秒；补EOF错误用例前387/387也通过 |
+| ASan/UBSan最终 | 388/388，39.19秒，无sanitizer报告；补用例前387/387、38.18秒通过 |
+| Python构建/控制台 | 31/31，1.898秒；新增1项file-check参数/前缀/控制字节拒绝，既有两profile互斥及无自动指令用例同步扩展；均替身，不打开串口 |
+| 固定IDF v6.1编译 | SD诊断和完整业务隔离集成成功，SD最终再编译通过；本轮未复跑原板/其余Read Pico profile、Web或远端CI |
+| 固定上游 | 厂家28cde682a4468a581c278761922724f57d976418工作树clean，驱动/波形/扫描/VCOM/频率不改；依赖锁无新增版本/hash修改 |
+| 离线镜像检查 | 323,424字节，ESP32-S3/DIO/16MB/80MHz/MMU64KB、secure version0，checksum/hash有效；不是实板回读 |
+| 实板动作 | 无串口连接/复位/烧写/挂载/文件IO或显示；前轮实卡结论不转移为当前候选 |
+
+新只读候选SHA256 `d62fd8d2fddc564eb3a5b9201e5d9d0385c22e9f49c56d8176393957a605fea0`，ELF SHA `69f3f64fd29575ec174ab8d3e11582c0cdb48dda7dee969de978e873bf1c9233`，sdkconfig仍`bbc74531c50d30d1eef3a94b7ebc3681c54b90cd012f9bf87288c369e18984b1`。集成镜像SHA仍5893eb3c…，未烧写且运行门禁保持关闭；实际设备最后核验仍6b85769b…/322,848字节，前轮回读副本摘要重新核对一致，日志终态为STOPPED，无活动白参考。
+
+软件/构建/image-info日志在忽略目录`.cache/p3-file-check-*`，最终388项日志为host-tests-final/asan-tests-final；首次及补用例前结果亦保留。不提交构建生成物/私有日志，无提交/推送，保留原有工作树修改。
+
+### 人工关口与自主开发完成边界
+
+已完成本阶段全部可自主执行的实现、便携失败/状态测试、固件编译、镜像身份与状态文档核对，没有仍在运行或等待观察的工具句柄。下一关键验证需要把新d62fd8d2…应用写入真实设备、ESP复位和FAT重挂；此前用户确认仅针对旧6b85769b…单次更新/文件测试，不推导为长期任意诊断更新许可。因此已到“继续开发直到需要人工介入”的边界，需本轮明确仅factory更新/整长回读/分区保持及一次只读核对会话确认；不是R-Core-3、P3或持久性已完成。
+
+获准后拟status→mount一次→file-check一次→status→stop，验证前轮保留文件在ESP重启/重挂后完整，不发送file-test，不写/删除/修复测试文件或读取私人照片。ESP USB reset不等于SD卡冷断电；断电持久性须在完整卸载后另行人工操作。若只读核对失败，保留原文件和错误证据，不自动重建掩盖失败。照片样本、显示门禁、完整产品/NVS/OTA迁移和PMU策略仍按原TODO分阶段验收，不跨越本轮许可。
+
+## 2026-10-04 · P3 file-check部署及ESP重启/重挂只读核对通过
+
+用户本轮“允许”明确对应“仅更新factory诊断应用，再执行一次重启后的只读核对；不重写测试文件或刷新屏幕”。重新读取TODO、适用协作规则、实际控制台及固定O_RDONLY接口，唯一USB端口空闲后执行。此许可不推导为完整产品迁移、冷断电、照片或追加刷新授权。
+
+### 软件/编译与镜像身份
+
+本轮没有固件源或配置更改，不重跑主机测试/固件编译；沿用上一节实际388/388普通、388/388 ASan/UBSan、31/31 Python以及SD/隔离集成编译证据，与本节部署/真机证据分开记录。复制已编译候选作为不可变输入，323,424字节，SHA256 `d62fd8d2fddc564eb3a5b9201e5d9d0385c22e9f49c56d8176393957a605fea0`，ELF SHA `69f3f64fd29575ec174ab8d3e11582c0cdb48dda7dee969de978e873bf1c9233`，sdkconfig SHA仍`bbc74531c50d30d1eef3a94b7ebc3681c54b90cd012f9bf87288c369e18984b1`。
+
+本轮image-info确认ESP32-S3、DIO/16MB/80MHz、MMU64KB、secure version0、checksum/hash有效；storage启用、display/integration未启用，完整集成应用未烧写。未修改固定厂家驱动/波形/校准。
+
+### 烧写与独立回读
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 设备身份 | 与前轮私有记录同机匹配；ESP32-S3 QFN56 rev0.2、8MB AP_3v3 PSRAM、16MB Flash，manufacturer5e/device4018，不公开MAC或卡标识 |
+| 安全状态 | Secure Boot/Flash Encryption disabled，cryptcnt=0 |
+| 写前旧应用 | 0x10000整长读取322,848字节，与6b85769bc32b65a4fb6051651062c43498dd3c463b85dfcb95c004034d2a9b77固定输入cmp一致；保留该诊断app副本，不是完整Flash备份 |
+| 分区兼容 | 写前4096字节表与前轮一致，前3072字节与本次构建表一致；factory仍0x10000/0x400000，其余nvs/phy/storage布局不变 |
+| 写入 | 仅应用`[0x10000,0x5ef60)`，工具实际擦除`[0x10000,0x5f000)`；323,424字节、Hash verified、exit0；keep模式/频率/容量，无stub，无全量flash |
+| 独立应用回读 | 再读取323,424字节，cmp与固定输入完全一致，两份SHA均d62fd8d2fddc564eb3a5b9201e5d9d0385c22e9f49c56d8176393957a605fea0 |
+| 分区保持 | 写后4096字节与写前cmp一致，SHA均f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20 |
+
+未写bootloader/分区表/NVS/PHY/内部FAT或PMU校准，不宣称逐字节核验了全部未写分区。端口相关操作串行进行；烧写/读取完成后才开启控制台，不因等待而重复烧写。
+
+### 真机新启动单次只读核对
+
+使用storage profile显式ESP USB reset；启动ELF前缀69f3f64fd…匹配，PSRAM识别8MB，595ms READY且present=1/mounted=0/media_valid=0/exit_failed=0，没有自动挂载或文件操作。显式命令仅status→mount→file-check→status→stop：
+
+| 本启动日志时间 | 动作与结果 |
+| --- | --- |
+| 20120ms | status：ESP_OK、present=1/mounted=0/media_valid=0/exit_failed=0 |
+| 21397–21457ms | 唯一1-bit挂载，CLK38/CMD42/D044，Mount=ESP_OK；present=1/mounted=1/media_valid=1/exit_failed=0 |
+| 29986–29991ms | 唯一file-check：OK、created=0/written=0/verified=4096、close_failed=0/errno=0/close_errno=0，逐字节/EOF核对及关闭成功；最终介质有效 |
+| 38763ms | status：ESP_OK、present=1/mounted=1/media_valid=1/exit_failed=0 |
+| 40048–40052ms | backend卸载、Unmount=ESP_OK、HAL cleanup=ESP_OK、STOPPED，app_main返回 |
+
+终态后主机EOF关闭，控制台exit0、端口无占用。测试卡仍插入且已卸载，RC3T0001.BIN保留。没有file-test、文件创建/写入/修复/删除、扫描私人目录、SD格式化、NVS/网络/显示/PMU配置写。应用核对只以O_RDONLY打开固定文件，但FAT挂载不是硬件写保护，不宣称元数据绝无变化。
+
+本轮证明前轮创建的专用文件在**ESP重启及FAT重新挂载**后仍完整；ESP USB reset没有切断SD卡供电，不计SD冷断电持久性、热拔/坏卡恢复、照片闭环、全部卡容量或P3 MVP完成。冷断电须完整卸载后另安排人工；未来照片样本/测试路径与产品迁移仍按TODO独立门禁，不自动继续。
+
+固定输入、旧应用副本、应用回读、分区前/后/前缀、image-info及身份/安全/控制台私有日志保留在忽略目录`.cache/p3-file-check-hardware-wNdZWm/`，不提交原始设备标识、卡信息或构建产物。本轮仅同步状态文档，保留其他工作树修改，无提交/推送。当前应用d62fd8d2…/323,424字节，STOPPED/串口关闭，无活动白参考。
+
+### “开发直到需要人工介入”目标完成审计
+
+后续目标检查将上一轮归为进展：实际更新了设备应用并取得新启动读取证据，不是仅重复状态。重新核对TODO/需求基线/集成门禁、固定输入与实板整长回读cmp/SHA、分区前后cmp，以及私有日志中4096字节核对、卸载/HAL成功、STOPPED和app_main返回；端口无占用，当前没有烧写或控制台进程可继续等待。既有388普通/388 sanitizer、31 Python及两个固件编译成功日志仍可查，此次未重跑，未把它们当冷断电或产品验收。
+
+当前阶段已实现、测试、编译并部署所需只读入口，继续验证冷断电必须人工让SD卡真正断电；ESP复位不能替代该操作。照片链路尚需用户明确可使用的样本/路径，完整产品入口仍需数据迁移、显示参考和PMU策略关口。不自选私人文件、不擅自操作供电或启用产品来绕过依赖。因此已达到原目标的“需要人工介入”终点，仅完成本次自主开发目标，不宣称P3、第一阶段或整个项目完成；本次审计没有新增设备动作。
+
+## 2026-10-04 · P3 单次人工取卡断电/重插后保留文件只读核对通过
+
+用户同意继续冷断电验证后，先重新核对上次Unmount/HAL均ESP_OK、STOPPED、app_main返回及端口无占用，再要求将测试卡完全取出、重新插入以脱离供电，不修改RC3T0001.BIN。用户回复“已重新插入”后，本轮仅执行已说明的新启动/单次挂载/只读核对/安全退出，不把该回复扩大为烧写、照片、显示或完整产品许可。
+
+断电动作由人工按上述要求操作并确认，固件没有测量SD供电电压或断电持续时间；不把单独ESP复位当卡断电。只能据此记录本测试卡单次取卡断电后数据保持，不宣称整机冷启动、写入中异常断电、任意卡容量、热拔恢复、长期保持或P3 MVP通过。
+
+### 镜像、软件与烧写边界
+
+实际使用此前已部署并全长回读的d62fd8d2…/323,424字节只读诊断，不更改固件源/配置、不编译、不烧写或再次ROM回读；本启动ELF日志前缀69f3f64fd…匹配已部署镜像，8MB PSRAM识别正常。本轮只有状态文档更新，不重跑此前388普通/388 sanitizer、31 Python及SD/隔离集成编译，也不将此前回归或回读称为本轮重做。保留完整产品/显示/NVS/网络/PMU配置写门禁。
+
+### 真机顺序与结果
+
+已核验USB端口空闲，storage profile显式ESP USB reset，只手动发送status→mount→file-check→status→stop。开机595ms READY，present=1/mounted=0/media_valid=0/exit_failed=0，无自动挂载或文件操作。
+
+| 本启动日志时间 | 实际结果 |
+| --- | --- |
+| 16051ms | status：ESP_OK、present=1/mounted=0/media_valid=0/exit_failed=0 |
+| 17306–17366ms | 唯一1-bit挂载，CLK38/CMD42/D044，Mount=ESP_OK；present=1/mounted=1/media_valid=1/exit_failed=0 |
+| 24525–24530ms | 唯一file-check：OK、created=0/written=0/verified=4096、close_failed=0/errno=0/close_errno=0；逐字节/EOF核对及关闭成功，最终介质有效 |
+| 33749ms | status：ESP_OK、present=1/mounted=1/media_valid=1/exit_failed=0 |
+| 34989–34993ms | backend卸载、Unmount=ESP_OK、HAL cleanup=ESP_OK、STOPPED，app_main返回 |
+
+STOPPED后主机EOF退出，控制台exit0，端口无占用。专用文件保留，测试卡仍插入且已卸载。没有file-test、文件创建/写入/修复/删除、扫描私人目录、格式化、NVS/网络/显示或PMU配置写。核对只以O_RDONLY打开固定文件；FAT挂载不是硬件写保护，不宣称元数据绝无变化。没有自动重试或第二次核对。
+
+私有日志保存在忽略目录`.cache/p3-card-power-cycle-PkxJjQ/console-private.log`，不提交设备或卡标识。TODO及当前状态同步更新，保留用户其他修改，无提交/推送。下一人工关口为明确获准照片样本、测试路径及照片链路验证范围；本轮不自选私人照片或开放完整集成应用，不进行整机/异常断电试验。
+
+## 2026-10-04 · P3 获准相机原片只读解码候选（未部署）
+
+用户明确指定本机样图目录，并随后说明这些照片均为相机导出原片。本轮只在该授权目录读取5张JPEG，不改写/删除、重压缩、嵌入或提交原片，不推断相机型号/固件，不开启相机协议。读取TODO/需求/架构、实际JPEG处理与锁定解码器、SD入口和命令/测试源码后实施；fast-context按要求优先尝试，但无Windsurf API key而失败，改为限定rg及逐段实际源码核对，不抽取凭据或将搜索结果当作接口已验事实。
+
+### 样本审查与直接原片内存边界
+
+5张均为baseline RGB JPEG，字节数为9,464,714/16,702,316/10,483,728/14,582,954/11,867,635；尺寸分别6192×4128/5935×3957/6192×4128/6192×4128/6192×4128。精确EXIF方向为6/1/6/6/6：值6需要90°方向处理，不是早期file工具概述带来的镜像判断。Pillow实际load全部5张通过；它不是设备解码器，不将此计为板端通过。
+
+当前PhotoFrame文件处理先整体分配压缩文件，再分配缩放RGB；全部样本压缩文件本身即超过8MiB PSRAM。因此不能直接承诺旧产品路径支持这些原片，不凭缩放RGB尺寸忽略压缩副本内存。当前main/image_processor.c没有EXIF解析，正式方向/裁切/灰阶/照片呈现未验收。本轮建立只读分块解码探针，不通过主机重压缩或降尺寸替代原片支持，也不宣称已解决整个产品大图路径。
+
+本机按文件名排序编号S1–S5，仅私有清单保存源路径/文件名。原片5份SHA256在实际检查前后cmp一致；S1是最小文件，准备到忽略目录`.cache/p3-photo-sample-G0r1fc/RC3P0001.JPG`，与原片全长cmp一致，保留其原始编码/EXIF，未放入SD或固件。
+
+### 实现及可验证范围
+
+新增jpeg_stream_probe.c/.h，read/media_ready回调无创建/写入能力；分块输入和跳过段均实际读，最大256字节，短读可继续、负/超界/介质错误锁存。固定3100字节工作池及有界栈对象，不分配整压缩文件或RGB/framebuffer。输出只计矩形范围、块/像素数及block-order RGB CRC，像素随即丢弃，不是row-major图像指纹或视觉验证。
+
+新增jpeg_file_probe.c/.h：open_read/file_size/read/close固定来源接口、每启动一次（无卡/缺文件/工作池失败也消耗机会）；非空≤32MiB、源边≤16384且≤64M像素，固定1/4缩放。解码后继续读完源文件剩余字节并检查EOF，再close一次、最终介质核对。tail/EOF/关闭错误不能成功，关闭失败单独锁存并保留主错。上述边界是拒绝保护，不是已支持的所有图片大小/格式上限。
+
+storage隔离入口新增精确photo-check，只以O_RDONLY打开/storage/RC3P0001.JPG，不接受任意路径、不扫描其他文件；工作池内部堆分配、每128次读回调让出调度。与4KiB探针共享关闭失败保护，失败时stop拒绝正常卸载/HAL退出，不自动修复/重试。默认display主机白名单不变，storage白名单新增photo-check并拒绝参数/前缀/控制字节。photo-check只验证读取及解码，不执行EXIF/Cover/灰阶/dither/显示/NVS/网络，不进入完整PhotoFrame业务。
+
+板端使用固定IDF v6.1 ESP32-S3 ROM TJPGD；nm确认jd_prepare=0x40000858、jd_decomp=0x40000864。主机使用已解析esp_jpeg 1.3.1外部TJPGD，来自固定组件repository commit746e83ddbea0db9c3d24993a87c4c737a60337ae；没有修改依赖源。可选主机目标默认OFF，显式开启后检查版本及三个源码/头文件SHA：tjpgd.c=1286f5e32e7a4750ee36fd57d2c442c99a74ffed0e81cb5d2fbf92fccf64a84d、tjpgd.h=53d1156fd9fcc97d346e5ee8c16ae39c34d71c691dcad3c524424bb91519cd24、tjpgdcnf.h=6a2134a4aae53bc361a7c4f1bfc8ef0107452191d6c4ae26bd1030ca441459ae，漂移即拒绝，不自动下载JPEG/照片。保留ChaN许可/来源，未复制或编辑第三方源码。
+
+### 主机真实解码、回归与编译（与真机分开）
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 主机外部TJPGD读取/解码5原片 | 全部file=OK/decode=OK/decoder=0，完整bytes_read=file_size、EOF及关闭成功；S1/S3/S4/S5输出1548×1032/pixels1597536，S2输出1483×989/pixels1466687；仅首幅缩放像素，不验证尾部/多帧结构 |
+| S2完整源与codec分离 | codec_read=7,406,080而file_size/bytes_read=16,702,316；补读尾部及EOF，不能把剩余字节说成已解码，不猜测尾部内容 |
+| 新增21便携/实际外部解码用例 | 4种缩放、奇数尺寸、短读指纹一致、无效参数/无卡/负数及超界/中途掉卡/截断/零读；生命周期成功/一次门禁/缺文件/工作池与尺寸失败、正常及失败close锁存、主读错误不被close错覆盖、来源尺寸限界、尾部/EOF失败；自动测试只用已有非私人fixture，不读私人目录 |
+| 普通CTest | 409/409、9.90秒；显式READ_PICO_JPEG_STREAM_TESTS=ON，包含原有388和新增21 |
+| ASan/UBSan CTest | 409/409、48.84秒，同样开启真实外部解码目标，非硬件替代证明 |
+| 获准5原片ASan/UBSan实际CLI | 各自file/decode=OK、完整源读取/EOF/关闭成功；无AddressSanitizer或runtime error诊断，日志另存samples-asan-private.log；私人样本不加入自动测试/CI |
+| Python构建/控制台 | 32/32、1.945秒；新增photo-check精确白名单拒绝用例，均fake serial，无设备操作 |
+| SD诊断编译 | 固定ESP-IDF v6.1成功，storage=y/display关闭、CONFIG_JD_USE_ROM=y，probe实链；本轮仅编译，不执行打印的全量flash命令 |
+| 完整集成编译 | 成功、镜像SHA仍5893eb3cacb6a7073f8b3ec27ce5c1a721cf54b205928b6e7e04b419505e7ced；未烧写、产品入口仍关闭 |
+
+本轮没有重跑原板/其余Read Pico配置、Web或远端CI。最终存储构建保留SDK自动解析的dependencies.lock：只增加direct_dependencies中的idf并将manifest_hash更新为d87481ea…，组件版本和component_hash均无变化，不手工伪造锁记录。主机外部TJPGD与板端ROM不同，不把主机通过/CRC当ROM行为、内存峰值、SD读取或实屏成功；解码器不是严格JPEG/EOI/多帧结构验证器，SDK同步阻塞也没有安全硬取消保证。
+
+### 未部署镜像与下一人工关口
+
+新候选325,904字节，SHA256 `d760371b5e6da1e07df2a285bca31945213e937a58f243dfee7c3dca660f65d5`，ELF SHA `93c03a6c595731cc2cab9236c0d4b4cb85da09d7080bfc44fc8957fb50657c03`，sdkconfig SHA仍bbc74531c50d30d1eef3a94b7ebc3681c54b90cd012f9bf87288c369e18984b1。image-info确认S3/DIO/16MB/80MHz/MMU64KB、secure version0/checksum/hash有效。拟写应用[0x10000,0x5f910)、擦除[0x10000,0x60000)，尚未执行。设备仍是前轮已回读d62fd8d2…/323,424字节、STOPPED/串口关闭，端口无占用。
+
+下一步需人工将S1字节一致副本复制到已安全卸载的测试卡根目录RC3P0001.JPG（同名先报告、不覆盖/删除），安全弹出并插回，再明确允许本轮新factory应用更新/独立全长回读/分区保持及一次只读解码。拟status→mount一次→photo-check一次→status→stop，不发送file-test、不清白/刷新/改校准或产品启动；错误保留，不重建文件或自动重试。不复用旧镜像的单次更新许可。
+
+全部样本路径/哈希/副本、像素指纹及清单在忽略目录；软件日志为.cache/p3-jpeg-{host,asan}-build/tests-final.log、python-final.log、firmware-build-final.log、storage-last-build.log、integration-build.log、image-info.log及samples-final-private.log。README/TODO/资料索引及当前状态同步；本轮无串口、复位、烧写/回读、真实SD操作、显示、NVS或PMU配置写，无提交/推送，保留用户其他修改。详见 [照片检查](READ-PICO-PHOTO.md)。
+
+## 2026-10-04 · P3 S1原片只读解码诊断部署与ROM单次真机验收
+
+用户确认“已复制，允许更新诊断固件”，承接上一轮S1副本复制/插卡及明确单次factory更新、独立回读、一次只读photo-check范围。本轮没有源码/配置变更，不重跑或将此前409/409普通与ASan、32/32 Python及两配置编译改记为本轮结果。主机外部TJPGD与本次S3 ROM实机证据分开；完整产品仍禁止启动。
+
+### 写前核对、仅应用写入与独立回读
+
+端口首次检查无占用；新ROM读取的唯一设备身份与此前私有flash-id日志精确匹配（各一条身份记录，不公开标识），ESP32-S3 QFN56 rev0.2/8MB AP_3v3 PSRAM、16MB Flash manufacturer5e/device4018一致。Secure Boot/Flash Encryption均Disabled，SPI_BOOT_CRYPT_CNT=0。
+
+从当前构建复制到本轮独立忽略目录的固定输入为325,904字节，SHA256 `d760371b5e6da1e07df2a285bca31945213e937a58f243dfee7c3dca660f65d5`，ELF SHA `93c03a6c595731cc2cab9236c0d4b4cb85da09d7080bfc44fc8957fb50657c03`；sdkconfig SHA仍bbc74531c50d30d1eef3a94b7ebc3681c54b90cd012f9bf87288c369e18984b1。再次image-info确认S3/DIO16MB/80MHz/MMU64KB、secure version0及checksum/hash有效。
+
+写前完整读取旧323,424字节应用，与此前固定d62fd8d2…输入逐字节一致，保留previous-app.bin供恢复；这只是应用副本，不是整Flash备份。读取0x8000起4096字节分区表，与此前记录一致，前3072字节也与此次生成表一致：factory仍0x10000/0x400000，内部storage仍0x410000/0x500000。
+
+仅write-flash 0x10000该固定应用，保留flash mode/size/freq且不压缩；实际写入325,904字节，工具hash verified。写范围`[0x10000,0x5f910)`，扇区擦除`[0x10000,0x60000)`。随后独立read-flash同地址全长325,904字节，cmp输入一致、SHA同d760371b…。再读完整4096字节分区表，cmp写前一致，前后SHA均`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。不写bootloader/分区/NVS/PHY/内部storage/PMU校准，未使用构建器的全量flash建议。
+
+### 新启动单次SD/照片检查与停止
+
+使用storage控制台显式ESP USB reset，不是PMU或整机断电；控制台没有自动发送指令/重连/重试。实际发送顺序严格为status→mount→photo-check→status→stop，每项一次。新启动ELF前缀93c03a6c5…和8MB PSRAM匹配本次应用，开机不挂载/不读写文件/不启屏/NVS/网络。
+
+| 新启动日志时间 | 实际结果 |
+| --- | --- |
+| 594ms | SD observation=ESP_OK，present=1/mounted=0/media_valid=0/exit_failed=0；READY含photo-check |
+| 17645ms | 首次显式status同上，尚未挂载 |
+| 26808–26880ms | 一次1-bit挂载，CLK38/CMD42/D0=44；Mount=ESP_OK，present/mounted/media_valid=1，exit_failed=0 |
+| 114566–114572ms | 唯一photo-check完成：Photo check=OK/stream=OK/decoder=0；file_size=bytes_read=codec_read=9,464,714，source6192×4128、output1548×1032、pixels1,597,536/blocks199,692；close_failed=errno=close_errno=0，随后自动状态仍有效 |
+| 125908ms | 最后显式status：ESP_OK、present/mounted/media_valid=1，exit_failed=0 |
+| 132777–132781ms | backend卸载，Unmount=ESP_OK、HAL cleanup=ESP_OK、STOPPED，app_main返回 |
+
+结果返回前没有再次发送photo-check或复位；检查为同步等待，未记录独立开始时间，不把挂载到结果的间隔称为精确解码耗时。STOPPED后主机EOF退出，控制台exit0、lsof端口无占用。测试卡仍插入且已卸载，RC3P0001.JPG保留，RC3T0001.BIN本轮未打开或重建。
+
+本轮只有O_RDONLY打开固定照片、分块读/ROM缩放解码、完整文件与EOF读取及close一次，没有文件创建/写入/修复/删除、目录扫描或其他原片访问。用户复制到卡的来源确认与此前本机副本cmp保持为不同证据：此次未计算SD文件完整SHA，不把大小和解码成功当SD副本逐字节一致证明。FAT挂载不是硬件写保护，不宣称元数据绝无变化。
+
+仅计S1在该卡/该设备的一次完整源读取、ROM 1/4解码与正常退出；像素统计后立即丢弃，没有EXIF=6旋转、Cover、灰阶/dither/framebuffer/清白或GC16，没有照片实屏验收。解码器结果不是严格JPEG EOI/多帧结构验证，也不证明全部5原片、所有大小/卡容量、损坏/热拔恢复、长期性能或产品大图链路通过。当前旧PhotoFrame整文件缓冲仍不能承诺支持大于8MiB的样本，后续软件需真实流式接入；完整产品/NVS/OTA迁移、新固件/显示须另行确认。
+
+私有日志、固定输入及旧/新应用与分区回读保存在`.cache/p3-photo-hardware-ronKMZ/`，不提交设备/卡标识或私人照片。TODO/README/部署、存储、照片与相关当前状态同步；保留历史未部署/失败记录及用户其他修改。本轮无提交/推送，不自动追加硬件验证。
+
+## 2026-10-04 · P3 文件JPEG EXIF/Cover/灰阶业务接入（仅软件，未部署）
+
+用户“继续”后，在既有PhotoFrame目录和组件契约内继续照片软件开发。读取TODO/需求/架构、实际image_processor/display_flow、SD生命周期和固定TJPGD源码；fast-context优先尝试但因缺Windsurf API key不可用，改为限定rg及实际源码核对，不提取凭据。未启用相机协议、恢复旧自建相册或修改第三方驱动/波形。
+
+### 软件交付与边界
+
+- 新增便携`jpeg_metadata.c/.h`：只读有界随机读取，baseline SOF0/8-bit灰或三分量，解析APP1 TIFF II/MM IFD0方向，缺省1；非法类型/计数/偏移/重复方向及渐进JPEG拒绝。上限32MiB源、4MiB头、4096标记/IFD项、边16384/源像素64M是拒绝保护，不是支持能力验收。未访问缩略图/GPS/MakerNotes，不是严格EOI/多帧验证。
+- `jpeg_stream_decode_rgb`复用探针的≤256字节压缩输入和3100字节工作池，将紧凑MCU tile拷贝到调用方行优先RGB；缓冲长度在decomp前检查，保留奇数尺寸floor行为。原probe仍只统计/丢弃像素；RGB业务函数不生成block CRC。
+- Read Pico文件JPEG选择全/半/四分之一/八分之一中符合5MiB RGB预算的最小缩放，PSRAM保存该缩放RGB而非整压缩文件。EXIF 1–8由采样坐标映射处理，不增加旋转副本；方向后固定居中Cover，再复用既有重采样、CDR/灰阶/误差扩散与行列显示sink，不调整gamma、VCOM、频率或物理波形。
+- 新文件解码读取完整源/剩余尾部并检查EOF，close一次及最终介质有效后才开始显示；失败不发布像素、不自动重试。显示提交前释放RGB，JPEG文件分支不受release_source=true影响而删除原片。JPG→PNG拒绝相同路径及常规硬/符号链接别名，但不是并发路径变化安全保证，也未验证FAT inode语义/原子输出。
+- 新SD关闭失败钩子原子锁存到重启，阻止正常卸载/重挂，保留SDK挂载与HAL租约；不IO/重试不确定句柄。主机直接调用钩子验证，不宣称真实FAT fclose错误注入通过。完整集成启动门禁保持关闭。
+
+### 主机回归与实际原片（不访问设备）
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 新增24项用例 | 元数据10：全部8方向/双字节序、独立非对称raster映射、坏EXIF/截断/读失败/渐进/头部限界/缩放预算；RGB3：短读像素一致、长度/空缓冲、奇数尺寸边界；业务10：全部8方向×2显示方向、9MiB压缩源无整文件分配、Cover覆盖FIT、坏图/无卡/中途介质失效/分配失败/32MiB限界、别名保护、JPG→PNG；SD1：关闭锁存拒绝卸载/重挂且不释放租约 |
+| 普通CTest | 433/433，19.82秒，READ_PICO_JPEG_STREAM_TESTS=ON |
+| ASan/UBSan CTest | 433/433，73.47秒，同样包含实际外部TJPGD及完整image_processor/display_flow替身测试 |
+| Python构建/控制台 | 32/32，1.840秒，fake serial，不访问串口 |
+| 5张获准原片普通及ASan业务CLI | 全部ESP_OK、替身1216×684输出，portrait/Cover/16灰阶码检查通过；只读输入、不生成私人照片输出文件 |
+| 单次像素分配 | S1/S3/S4/S5：4,792,608字节（1548×1032×3）；S2：4,400,061字节（1483×989×3），不持有整压缩源副本 |
+| 原片保持 | 5份源SHA在处理前/普通后及最终ASan后cmp一致；未重编码、删除、提交或网络上传 |
+
+自动测试只使用既有非私人JPEG fixture，EXIF合成/大文件和坏图在测试临时目录创建，私人样本不加入CI。主机实际调用外部TJPGD，板端仍链接ESP32-S3 ROM；主机替身显示不是屏幕刷新，最大单次分配不是总峰值PSRAM。每128次压缩读回调让出调度，不承诺同步SDK/ROM硬取消或硬超时。
+
+### 固件编译/链接（未烧写）
+
+固定ESP-IDF v6.1 `fff9895c82d744c7237be8847347bdd1b07c6643`，未改厂家子模块/组件版本；dependencies.lock本轮无差异。
+
+| 配置 | 字节数 | 应用SHA256 | 结果 |
+| --- | --- | --- | --- |
+| Read Pico完整集成 | 1,978,080 | `cf0e40bcc43600444c0169151edad096742564898baeac922367530b1200e56a` | 编译成功，保留真实PhotoFrame入口但不调用产品 |
+| Read Pico独立SD诊断 | 326,128 | `e05fc2ed60214350aecadb82ec34182e8329221c5fbc4328eaeec09c37e57537` | 编译成功，不含新照片显示命令 |
+| 原WaveShare PhotoPainter 7.3 | 2,058,624 | `9edef163b3111e163d5805bd55087829e54232ac45d77ff125b43d3500d3c50d` | 原板编译成功 |
+
+集成ELF SHA `d90edf7dc3c00c61f960b4ee763f61cbfd30098d49ed5ffdd926256b95327220`，sdkconfig SHA `884d6fbdb3a0faa365852520c0fd637a7928665c6acfe50819469ae173fa43c5`。image-info checksum/hash有效、S3/v6.1/MMU64KB/secure version0；nm确认新元数据/RGB/文件显示及SD锁存函数与photoframe_app_main实链，jd_prepare=0x40000858、jd_decomp=0x40000864仍为ROM地址。不把链接当运行或ABI真机验证。集成保留已知Read Pico guard下http_server.c:2229未使用restart_task告警，无新增图像处理告警。本轮未重跑其他诊断/板型矩阵、Web或远端CI。
+
+### 硬件状态、剩余门禁与证据
+
+本轮没有串口、复位、挂载/实卡IO、烧写/回读、启屏/清白/GC16、NVS/网络或PMU写。设备仍是上一轮已全长回读的d760371b…/325,904字节，STOPPED、卡插入且卸载、串口关闭；新增326,128字节SD构建未替换设备。前轮S1 ROM只读解码结论不转移为EXIF/Cover/灰阶或照片实屏通过。
+
+当前完成范围仅Read Pico文件JPEG软件分支；旧内存输入JPEG、PNG压缩文件路径与格式探测/PNG输出/其他消费者关闭及并发控制仍待审查。新文件别名检查不能代替路径并发安全、消费者所有权或原子发布；不能称整个产品大图/损坏图/断电恢复已完成。下一步准备受控单张照片显示诊断，再取得新候选factory更新/清白/单张显示许可；不得直接烧写完整集成应用或复用此前单次许可。真机峰值内存、方向、裁切、SD读图性能和实屏结果分别验收，产品/NVS/OTA迁移门禁不开放。
+
+日志位于忽略目录`.cache/p3-photo-pipeline-`前缀：full.log、asan-full.log、python.log、integration-build.log、storage-build.log、original-board-build.log；5原片普通/ASan与SHA日志后缀private，不提交私人路径/照片/哈希。TODO、照片/集成/存储/部署说明、架构/README/CHANGELOG已同步，git diff --check通过；保留原有未提交修改，本轮不提交或推送。
+
+## 2026-10-04 · P3 单张原片显示诊断候选与输出保护（未部署）
+
+用户要求继续开发直到需要人工介入。本轮仅软件实现、获准本机原片只读处理及构建，不将“继续开发”推导为新候选烧写/复位/挂载/显示或完整产品迁移许可。代码探索工具因缺少配置无法使用，已说明并以有限rg和实际源码核对；不尝试提取凭据。保留既有未提交修改，不修改固定厂家子模块，不提交或推送。
+
+### 软件实现范围
+
+- 新增隔离照片profile及构建/控制台保护，显式互斥display/storage/integration。启动仅板级只读观察、无NVS默认调色板与独占console，不挂载/不开屏、不进入完整PhotoFrame/网络/相册。
+- 便携会话明确一次mount→clear-white→本启动人工white-confirm→一次photo-show→人工确认/拒绝→stop；错误锁存、拒绝重试/重入，主错误与退出错误分开。解析32字节有界ASCII白名单，非法/超长整行拒绝；清理只尝试一次，不重用不确定句柄。
+- 诊断sink按完整1216×684行或反向portrait列封装415,872字节标准4bpp，预检16灰阶理论码/完整顺序，拒绝缺行/混合方向/坏调色板及发布。它不调用硬件或发布配置/快照，只在完成后由显式入口刷新一次。
+- 单张入口固定只读`/storage/RC3P0001.JPG`（S1副本），复用真实文件JPEG/EXIF/Cover/Floyd-Steinberg及原PM锁GC16；检查78帧清白、36相、独立退出电源位，并记录SDK局部内存低水位。文件/帧失败不启屏，刷新后释放帧，再等待人工视觉反馈。
+- image_processor默认调色板无NVS初始化；正常初始化传播加载错误。无效抖动参数提前拒绝；新板格式探测检查新鲜介质、读取/关闭错误，PNG输出关闭错误接SD原子锁存。输出以O_EXCL独占新建，既有路径不覆盖、错误清理不删除路径，可能部分输出保留；PNG输入release_source也不删除原片。固定SDK FAT源码实际O_EXCL→FA_CREATE_NEW映射已核对，但不计真实FAT故障/并发验收。
+
+不改厂家源/波形/校准、VCOM/gamma/频率；诊断使用原PhotoFrame默认调色板，Read Pico图像校准效果尚未实屏验收。旧内存JPEG/PNG输入关闭与提交顺序、其他业务消费者/临时文件生命周期和并发、原子发布及产品/NVS/OTA迁移仍未完成。
+
+### 主机与原片软件检查
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 普通CTest | 458/458，21.09秒；较上一轮新增25项（会话/封装14、真实业务诊断桥6、参数/格式/输出与原片保护5） |
+| ASan/UBSan CTest | 458/458，79.24秒；实际锁定外部TJPGD及替身业务，不是S3 ROM/硬件 |
+| Python构建/控制台 | 37/37，2.422秒，fake serial、不访问串口 |
+| 5张获准原片普通/ASan诊断CLI | 各自全部ESP_OK、415,872字节/831,744像素完整帧，仅读源、不输出照片文件/硬件IO |
+| 单次像素分配 | S1/S3/S4/S5：4,792,608字节；S2：4,400,061字节，不计总峰值PSRAM |
+| 原片保持 | 最终5份源SHA与处理前cmp一致，无删除/重编码/提交/上传 |
+
+自动用例使用非私人fixture；5原片日志/哈希只保留忽略目录。SDK照片入口未用主机模拟运行，主机测试覆盖便携门禁/完整帧和真实图像算法，硬件入口只经源码审查与固件编译。局部内存低水位包含系统并发分配，多heap最低值差不是精确单任务峰值；ROM+SD+显示共存余量与性能待真机。同步SDK/ROM及固定EPDiy内部portMAX_DELAY无法硬取消，stop不能中断正在执行的刷新；新硬件许可须明确此风险。
+
+### 固件编译、固定候选及未部署状态
+
+固定ESP-IDF v6.1 `fff9895c82d744c7237be8847347bdd1b07c6643`，六配置编译成功；不是完整板型/Web/远端CI矩阵。
+
+| 配置 | 应用字节数 | 结果 |
+| --- | --- | --- |
+| 隔离单张照片诊断 | 403,168 | 最终e7d5bd8d…候选，只编译 |
+| 完整PhotoFrame集成 | 1,978,208 | `43d8c1c8833e9fc76d136f4392f8252b76d03a39046ac6304000abaa88c34c4b`，运行门禁关闭 |
+| 原显示诊断 | 305,120 | 只编译，没有照片命令 |
+| 原SD诊断 | 326,128 | 只编译，没有照片显示 |
+| factory只读诊断 | 275,344 | 只编译，不挂载/启屏 |
+| 原WaveShare PhotoPainter 7.3 | 2,058,752 | `fe8d9b3f1c028209a8af6e721bdb56092bd640d8d434e38f9685cc7209a73c72`，原板回归编译 |
+
+SDK解析自动将dependencies.lock的direct_dependencies加入idf，manifest_hash由e1f28437…变为`5be05836a36c08b4777d6ca3a942a7ec9f08fed48f6aa52ffe2828295482dd04`；组件版本/源码哈希未变，保留解析结果。新照片初次构建保留既有fontCN三字节UTF-8/NUL告警，最终增量无新增告警；集成保留已知restart_task未使用告警，无新增图像处理告警。
+
+最终app SHA256 `e7d5bd8d1c338e448829fab7c241002f93b5c5fef0c304dd9b1a0d1c20b39ee2`；ELF SHA `432f32e6ce4d649ddc3e371575245d632f76d9b697b9d523728c1a861a69a5a2`；sdkconfig SHA `1055abe1df7e16e9270d1d807529e76514a728dd6420f37e7a993925d31f48ca`。固定副本`.cache/p3-photo-candidate-D1ffHt/`与构建输入cmp一致，含本机候选说明，不提交构建物。image-info确认checksum/hash有效、S3/DIO16MB80MHz/v6.1/MMU64KB、secure version0。ELF链接真实文件JPEG、诊断桥/会话、GC16和局部内存监测，jd_prepare=0x40000858/jd_decomp=0x40000864仍是ROM；保留符号中无产品入口、wifi初始化、NVS初始化/擦除/写值、PNG写入或校准保存函数。不把符号或镜像头当实际运行/硬件ABI验收。
+
+拟更新仅factory应用`[0x10000,0x726e0)`，覆盖擦除块`[0x10000,0x73000)`，尚未执行或取得本候选硬件许可。不写bootloader/分区/NVS/PHY/内部storage/PMU校准、不改照片。更新前须重新核验身份、安全/布局与当前app完整回读，更新后独立全长回读及4096字节分区表保持核对。具体流程见 [单张照片诊断](READ-PICO-PHOTO-VALIDATION.md)。
+
+本轮无串口、复位、挂载/实卡IO、烧写/回读、清白/GC16/NVS/网络或PMU写；设备仍为此前d760371b…/325,904字节，最后STOPPED/卡插入已卸载/串口关闭。新的主机与编译证据不替代旧设备状态，也不转移为照片实屏/P3完成。已到人工确认新候选与单张流程的边界，未自动继续硬件操作。
+
+证据在忽略目录`.cache/p3-photo-diagnostic-`：host-tests-final.log、asan-tests-final.log、python-final.log、candidate.log、integration-final.log、original-board-final.log、display.log、storage.log、factory.log、symbols.log；5原片samples-private.log/samples-asan-private.log和前后SHA只保留本机。README、TODO、架构、照片/集成/SD/部署说明与CHANGELOG同步，11份当前文档的105个本地文件链接检查无缺失（不核验锚点），git diff --check通过；固定厂家目录干净，候选app/ELF/sdkconfig与构建输入再次cmp一致，不承诺远端CI。
+
+## 2026-10-05 · P3 首张照片真机倒置拒绝与方向修复候选
+
+### 首次候选部署与真机结果
+
+用户此前明确允许e7d5bd8d…照片候选app-only更新及受控单张流程。更新前同设备ESP32-S3 rev0.2、16MiB Flash/8MiB PSRAM、安全启动/Flash加密关闭；写前factory应用325,904字节全长回读匹配d760371b…，4096字节分区表SHA256 `f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`，布局仍nvs/phy/factory/storage。仅写403,168字节应用`[0x10000,0x726e0)`，擦除块止于`0x73000`；写后全长回读匹配`e7d5bd8d1c338e448829fab7c241002f93b5c5fef0c304dd9b1a0d1c20b39ee2`，分区表写前后逐字节相同。未写bootloader、NVS、PHY、内部storage或PMU校准。
+
+新应用启动识别固定IDF v6.1、PMU 1.0.9、VCOM 1580mV、卡存在；一次1-bit/40MHz挂载成功。clear-white记录78/78帧、退出电源位`input0=0x81/out0=0x81`，用户确认“整屏白色无异常”。white-confirm后仅一次photo-show：S1文件6192×4128/EXIF6，ROM 1/4输出1548×1032，方向后1032×1548，Cover为684×1216、偏移(63,0)；源完整读取/EOF/关闭无错，处理约115,082ms，RGB分配4,792,608字节。GC16主动温度32°C、36/36相、单相约11.057–11.086ms、扫描合计398.136ms、入口返回约1,140ms；内部堆起始差4,044字节、PSRAM低水位差5,294,936字节为系统包含值，不是精确任务峰值。
+
+实拍画面完整但上下颠倒；用户反馈“方向错误，上下颠倒，其他暂无问题”。因此不发送photo-confirm，显式photo-reject锁存后stop；Display cleanup、Unmount、HAL cleanup均ESP_OK，最终STOPPED、卡卸载、串口关闭。屏幕保留倒置静态画面不是应用仍在运行。该轮只证明白屏、文件链路、处理和刷新返回，照片视觉验收失败；“其他暂无问题”只记录本张目视范围，不把裁切、灰阶或长期稳定独立标记通过。私有硬件证据在`.cache/p3-photo-display-hardware-ll28WM/`，不提交照片或设备标识。
+
+### 根因边界与软件修正
+
+图像处理portrait输出的逻辑到native映射为`(x,y) → (1215-y,x)`；固定厂家`components/read_pico/read_pico_init.c`为机壳正向设置`EPD_ROT_INVERTED_PORTRAIT`，等价于`(x,y) → (y,683-x)`。二者恰差native 180°，与实拍上下颠倒一致。Read Pico板级默认方向因此改为180°，使完整产品经Paint转换时选择厂家物理正向；隔离照片诊断绕过Paint，故在标准4bpp封装时仅对native坐标应用同一180°。新增四角非对称合成测试逐点验证诊断输出等于厂家inverted portrait映射，并以源码检查锁住板默认、诊断桥与厂家初始化。EXIF6、Cover、灰阶/CDR/抖动、gamma、VCOM、频率、波形、PM锁和固定厂家子模块均未改。
+
+完整产品配置允许NVS中的`disp_rot_deg`覆盖板级默认；若旧NVS已有0值，本轮没有读取、迁移或写回。因此修正候选只保证默认路径与隔离诊断一致，不宣称完整产品历史配置自动迁移完成。
+
+### 软件复核、固件与新候选
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| 普通CTest | 459/459，21.50秒；含新增四角厂家映射回归 |
+| ASan/UBSan CTest | 459/459，80.47秒，无sanitizer错误 |
+| Python构建/控制台 | 38/38，2.346秒；新增源码一致性保护，fake serial、不访问设备 |
+| 5张获准原片普通/ASan诊断CLI | 全部ESP_OK、415,872字节/831,744像素；前后源SHA逐字节清单一致，不生成/修改照片 |
+| 固定SDK六配置 | 照片403,184、集成1,978,208、原板2,058,752、显示305,120、SD326,128、factory275,344字节，全部编译成功 |
+| 符号保护 | 新照片ELF仍由ROM地址`jd_prepare=0x40000858`/`jd_decomp=0x40000864`，无产品入口、Wi-Fi初始化、NVS初始化/擦除/写值、PNG写入或校准保存符号 |
+
+首次固定SDK调用未带已配置的Python环境，IDF在构建前拒绝并未修改配置/源码或执行硬件动作；显式使用固定`idf6.1_py3.14_env`后六配置全部成功。image-info确认新照片应用为ESP32-S3、DIO/16MB/80MHz、IDF v6.1、MMU64KB、secure version0且checksum/hash有效。普通/ASan日志分别为`.cache/p3-photo-orientation-host-tests.log`、`.cache/p3-photo-orientation-asan-tests.log`，Python为`.cache/p3-photo-orientation-python.log`，六配置和image-info/符号日志同前缀保留在忽略目录；5原片日志后缀private。
+
+新候选应用403,184字节、SHA256 `62cac21b8cc7502fd6c79611f6b57d3f1c174d2549b2be41ee539f7827c0a554`；ELF `9b2d13c6c998d36676160525395f6ab0438063907821058e05f36d6c60a4fb38`；sdkconfig `1055abe1df7e16e9270d1d807529e76514a728dd6420f37e7a993925d31f48ca`。固定副本`.cache/p3-photo-orientation-candidate-0VzAUF/`与构建输入cmp一致。拟写范围`[0x10000,0x726f0)`、擦除块`[0x10000,0x73000)`；**本候选尚未部署，未访问设备**。下一步须取得新的app-only更新、清白/人工白参考及同一S1一次显示许可，并再次做身份/安全/分区/旧应用全长回读与写后独立回读。同步JPEG/显示调用仍无硬取消保证，不能复用e7d5bd8d…许可。
+
+## 2026-10-05 · P3 方向修复版部署、白参考及单张照片软件完成（视觉待验收）
+
+用户明确“允许”后，仅factory更新既有方向修复候选。写前ESP32-S3 rev0.2、8MB PSRAM/16MB Flash 5e4018、安全启动/Flash加密关闭，与此前设备一致；403,168字节旧应用全长回读匹配e7d5bd8d…，完整4096字节分区表与前轮逐字节一致，前3072字节匹配编译布局，尾1024字节均FF。旧应用读取以ROM/no-stub约139.5秒完成；中间主机调用返回但原读取进程仍在运行，另一次打开端口因独占锁而拒绝，原读取随后完整结束。该端口打开拒绝没有向设备发送指令或重复读取。最终以独立cmp/SHA为核验结果。
+
+仅写403,184字节应用`[0x10000,0x726f0)`，实际擦除`[0x10000,0x73000)`，工具hash verified。随后使用esptool RAM flasher stub独立全长读取，新应用逐字节/SHA匹配`62cac21b8cc7502fd6c79611f6b57d3f1c174d2549b2be41ee539f7827c0a554`；写后4096字节分区表与写前一致，SHA均`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。bootloader/分区/NVS/PHY/内部storage和PMU校准未写，本轮不修改源码或重跑既有459/459/38及六配置软件检查。
+
+隔离photo控制台新启动ELF前缀9b2d13c6c…、IDF v6.1和8MB PSRAM匹配；PMU 1.0.9、VCOM1580mV、卡存在。启动与显示初始化各出现一次STATUS CRC拒绝，均在既有有界只读重读内恢复有效，不重发PMU GET/写校准/清故障。status后唯一mount为1-bit/40MHz成功，唯一clear-white记录78/78、退出电源位`input0=out0=0x81`，状态WAIT_WHITE。用户随后确认“整屏白色无异常”，本启动white-confirm被接受为READY，才发送唯一photo-show。
+
+| 本启动日志时间 | 结果 |
+| --- | --- |
+| 117417ms | white-confirm接受，READY、operation=0/cleanup=0 |
+| 122387ms | 唯一photo-show开始，内部free226231、PSRAM free6678644字节 |
+| 221975ms | S1完整源/EOF确认，6192×4128/EXIF6/1/4、RGB4792608字节 |
+| 221986ms | 方向后1032×1548→684×1216 portrait Cover，偏移(63,0)，与上一轮处理参数一致 |
+| 236640ms | PHOTO_PROCESS=ESP_OK、114252ms、无错误原因 |
+| 236820ms | 主动温度32°C、ON=1/PGOOD=1，CPU/APB240/80MHz锁内 |
+| 237782–237783ms | 36/36相、min11057/max11081/total398114us；GC16 completed=1、stage/frame/operation/cleanup均0，入口1140ms |
+| 237786ms | 独立电源退出检查ESP_OK，input0=out0=0x81 |
+| 237787–237791ms | 局部低水位internal222187/PSRAM1383708、系统包含差4044/5294936字节；帧释放后PSRAM6678668、WAIT_VISUAL、operation=cleanup=0 |
+
+照片处理和刷新软件完成，方向修正的视觉结论尚未登记；未发送photo-confirm/reject或stop。当前SD仍挂载、串口会话保持，等待用户核对方向、裁切及画面效果，再登记反馈和正常清理。不自动重复显示、换照片或清白。日志、旧/新应用及分区回读保存在忽略目录`.cache/p3-photo-orientation-hardware-GxPcPw/`；私人照片/设备标识不入库，无提交/推送。
+
+## 2026-10-05 · P3 方向修复版S1人工通过与正常退出
+
+用户附实拍并明确“正向显示正常没有问题”。附件可见机壳按键位于底部，建筑/地面为正常朝向，与上一轮机壳上下颠倒的展示状态不同；实拍作为本次视觉证据，不复制照片到仓库。根据本启动唯一S1反馈发送photo-confirm，509942ms记录VERIFIED、operation=0/cleanup=0，验收登记不触发刷新。仅计本设备/本卡/本张原片/本配置的一次白参考、读取/EXIF/Cover/灰阶/GC16和正向显示闭环通过，不将未标定照片推为光学灰阶计量或长期连续稳定。
+
+随后显式stop一次：518345ms LCD deinitialized；518848ms Display cleanup=ESP_OK、SD开始卸载；518849ms Unmount=ESP_OK；518850ms HAL cleanup=ESP_OK；518851ms最终STOPPED、operation=cleanup=0，随后app_main返回。主机EOF结束控制台、exit0，端口占用检查为空；卡仍插入且已卸载，照片保留。当前应用仍为403,184字节/62cac21b…，屏幕保留已验收画面；本轮无再次刷新、烧写、换文件或源码/配置变更，不重跑既有软件测试。
+
+方向问题已由同一S1的失败→坐标修正→部署/回读→新白参考→正向实拍确认闭环。剩余工作包括约114秒原片处理性能、其他样本/重复性、旧内存JPEG/PNG及全消费者生命周期、产品NVS方向覆盖迁移和完整PhotoFrame入口；S1单张通过不等于P3 MVP或第一阶段完成。TODO/README及照片、部署、架构/集成当前状态同步，私有证据继续存于`.cache/p3-photo-orientation-hardware-GxPcPw/`。
+
+## 2026-10-05 · P3 有界JPEG读缓存、分阶段计时与PNG提交保护（仅软件）
+
+用户要求继续开发至需要人工介入。本轮没有串口打开、复位、挂载、烧写或刷新；设备仍为方向通过版403,184字节/62cac21b…、STOPPED/SD卸载/串口关闭。探索性fast-context因缺少Windsurf凭据失败，随后用限定本地源码检索继续，没有提取或设置凭据。
+
+实际源码确认`jpeg_stream_probe`将输入调用限制为256字节，文件业务每次读经`read_pico_sd_get_status`触发Board HAL读取IOE方向/输入寄存器。新`jpeg_buffered_source`为便携无分配适配，业务额外提供4096字节内部堆，物理读取前后检查live介质，缓存命中不重复查询。已知源长约束、短读继续及提前EOF/非法读/介质错误锁存保留；缓存移除检测最多延后一个块，必须完整源/物理EOF/关闭/最终介质成功才允许显示。JPEG调度由128调用改为约32KiB实际输入，与旧最大256字节调用的量级保持，不因4096字节读放大等待间隔。固定TJPGD、方向、EXIF/Cover、灰阶/gamma、波形、VCOM及频率不改。
+
+增加设备`JPEG read/decode/close`和`JPEG geometry/gray/dither/paint`耗时及物理读次数/字节；主机时间为零，不作为速度证据。原114,252ms的约99.6秒读解码/14.7秒处理仅为原日志粗分，尚未证明新缓存改善多少或占比。
+
+PNG输入检查非空普通文件≤32MiB、有界分块读、EOF、关闭及最终介质；fallback仍保留整份压缩PNG，32MiB不是内存支持保证。处理后PNG在验证IEND、补读文件附尾、关闭和介质成功前不刷新/发布；关闭失败原子锁存SD退出。流式PNG补验Cover裁切外IDAT行/IEND，行sink错误不忽略。主机关闭注入先真实释放句柄再报告失败，不冒充真实FAT故障；未验收全部消费者/并发、原子发布或产品运行。
+
+| 检查 | 本轮结果 |
+| --- | --- |
+| 普通CTest | 474/474，24.24秒；新增15项，原459项保留 |
+| ASan/UBSan CTest | 474/474，97.10秒；无报告，日志`.cache/p3-buffered-asan-tests.log` |
+| Python构建/控制台保护 | 38/38，2.407秒，均为无设备替身 |
+| Node22方向测试 | 6/6，4.822秒 |
+| 解码一致性 | 固定外部TJPGD各缩放CRC、像素数、消耗字节保持；既有EXIF1–8及横/竖Cover逐帧比较通过 |
+| 5获准原片 | 普通/ASan各5张均ESP_OK，415,872字节/831,744像素及16桶直方图与前轮一致；源SHA保持。直方图不证明逐像素/光学一致，不计ROM/实屏 |
+| 固定IDF v6.1编译 | 照片、完整集成、显示、SD、factory、原板六配置成功，无本轮编译告警 |
+| 设备更新/回读 | 未执行，不转移旧候选回读证据 |
+| 优化版真机性能/视觉 | 未执行，需新候选部署许可和人工白参考/照片反馈 |
+
+构建产物分别为照片404,336字节、完整集成1,980,592、显示305,120、SD326,128、factory275,344、原板2,058,976。照片应用SHA256 `9f6d6f6fc329344647f601b976d1869d70bd758b141f4db4f580f389fa2540a5`，ELF SHA256 `73b5d85440e41f547f5309629baf8344128a7b020e8ed7b0ba2038ac371969bd`；sdkconfig SHA256 `1055abe1df7e16e9270d1d807529e76514a728dd6420f37e7a993925d31f48ca`与方向通过版一致。集成SHA256 `e7567542ceba7c103055077855f2cc05ab009e3f957459699600d6ec71f2a0d6`、原板SHA256 `cbc8654af77e1cbab6f4f4b46f5e9fac8b23c20ed3daa466f4aeb2929231a4b9`。固定候选副本`.cache/p3-buffered-photo-candidate-kKXZq6/`，本地image-info检查IDF6.1/S3、DIO/16MB/80MHz/MMU64KB、checksum/hash有效、secure version0。
+
+下一关键步骤为允许仅该factory候选及同一S1一次复测：重新核实身份/安全/旧应用与分区，写应用`[0x10000,0x72b70)`、擦除上界0x73000，独立全长回读且分区保持；新启动挂载/清白等待人工确认，再一次photo-show测量阶段耗时/内存/GC16及画面，确认或拒绝后stop。不可重用上一启动白参考/照片确认，不更新原片、不写bootloader/分区/NVS/PHY/内部storage/PMU校准，不开放完整业务。完整消费者审查仍是独立未完成事项，不能由本轮软件保护宣告P3 MVP。
+
+日志统一`.cache/p3-buffered-*.log`，样本文件名/源hash只保留private日志；固定厂家子模块状态保持干净，用户原有修改保留。TODO、README、CHANGELOG及照片/集成/架构说明已同步；本轮无提交/推送。
+
+## 2026-10-05 · P3 读取优化版部署与直接S1显示（视觉待验收）
+
+用户明确“允许更新，刷白后直接执行S1 显示”。本次仅该固定候选factory app-only更新，以及新启动单次挂载/清白成功后直接显示同一S1；用户本次明确跳过白屏等待，white-confirm只作为协议推进指令，不伪造本次白屏目视确认。此特例不改变后续默认人工门禁，不跨启动使用旧白参考；仍等待照片视觉反馈，不自动photo-confirm或刷新第二次。
+
+写前检查同一ESP32-S3 rev0.2、16MB Flash、Secure Boot/Flash Encryption均Disabled；前轮403,184字节62cac21b…应用独立全长读取匹配并保留，4096字节分区表与此前逐字节相同、前3072字节匹配本配置。只写404,336字节`[0x10000,0x72b70)`，实际擦除`[0x10000,0x73000)`；工具hash verified，随后独立全长读取逐字节/SHA256匹配`9f6d6f6fc329344647f601b976d1869d70bd758b141f4db4f580f389fa2540a5`，写后4096字节分区表与写前一致，SHA256 `f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。bootloader/分区/NVS/PHY/内部storage及PMU校准未写；并未核对这些数据区的全量内容或进行完整Flash备份。
+
+隔离photo控制台显式ESP reset一次，启动ELF前缀73b5d8544…、固定IDF v6.1、8MB/80MHz PSRAM内存自检和factory布局匹配，PMU1.0.9/VCOM1580mV只读有效，启动faults=0x1原样记录，不写清故障。初始present=1/mounted=0。唯一mount为1-bit/40MHz正常，卡介质有效；没有file-test/file-check/photo-check/换片/创建/覆盖/删除/NVS/网络或相机操作。
+
+| 本启动日志时间 | 实际结果 |
+| --- | --- |
+| 30448–30451ms | mount=ESP_OK，present/mounted/media_valid=1、exit_failed=0，WAIT_CLEAR |
+| 39968–41596ms | 唯一clear-white；78/78、complete=1、ESP_OK，退出input0/out0=0x81，WAIT_WHITE；没有目视白屏验收 |
+| 68594ms | 按本次用户许可white-confirm接受为READY、operation/cleanup=0 |
+| 70038ms | 唯一photo-show，internal free226231/largest180224，PSRAM free6678644/largest6553600字节 |
+| 111532–111534ms | 完整JPEG源/EOF、EXIF6、6192×4128、1/4、RGB4792608；读/解码/关闭41491ms、物理2311次/9464714字节、4096缓存、ESP_OK |
+| 111544–126200ms | 方向后1032×1548→684×1216 portrait Cover，偏移(63,0)，原灰阶/CDR与Floyd-Steinberg；绘制阶段14656ms、ESP_OK |
+| 126202ms | PHOTO_PROCESS=ESP_OK、elapsed56161ms、错误原因为空 |
+| 126291–126381ms | CPU/APB240/80MHz锁内；主动温度31°C，ON=1/PGOOD=1 |
+| 126840–127344ms | HL draw419ms；36/36相完整，min11057/max11086/total398130us；GC16 completed=1，stage/frame/operation/cleanup均0，入口1140ms |
+| 127347–127351ms | 独立电源退出ESP_OK/input0=out0=0x81；帧释放后internal free226143/largest180224、PSRAM free6678668/largest6553600，WAIT_VISUAL |
+| 184644–184646ms | 显式status确认SD仍present/mounted/media_valid=1、exit_failed=0，WAIT_VISUAL、operation/cleanup=0 |
+
+本次同一S1处理相比方向通过版114252ms减少58091ms（约50.8%，约2.03倍），而图像处理约14.7秒和GC16约398毫秒保持前轮量级。前轮读解码约99.6秒是日志差的粗略值，本次41491ms为新阶段计时；只计同一设备/卡/原片/配置的一次改善，不推广为所有照片或长期性能保证。源读取/EXIF/Cover/灰阶软件和GC16返回通过，不等同本候选视觉通过。本次控制台没有接收到PHOTO_MEMORY局部低水位条目，不能登记精确峰值或补用上一候选峰值；仅记录上述实际收到的free/largest。
+
+当前没有发送photo-confirm/reject或stop；照片尚待用户核对方向、铺满/裁切和画面细节。串口会话保持、SD挂载，显示高压退出正常且照片帧已释放。后续收到视觉反馈后登记确认或拒绝，再stop/显示与SD/HAL清理、EOF关闭串口；不重复显示/清白或自动换片。私有证据`.cache/p3-buffered-photo-hardware-PAms8H/`，固定输入`.cache/p3-buffered-photo-candidate-kKXZq6/`。本次无源码/配置变更或重新主机测试/编译，复用既有474/474/38/6及六配置软件证据；更新TODO/README/CHANGELOG及相关当前状态，无提交/推送。
+
+## 2026-10-05 · P3 读取优化版S1人工通过与正常退出
+
+用户附本次实拍并明确“画面正常没有问题”，仅登记本启动唯一S1的视觉通过。430701ms发送photo-confirm后返回VERIFIED、operation=cleanup=0，登记不触发刷新；照片不复制到仓库。本次按用户许可跳过白屏人工等待，仍不补记白参考目视通过，不把本张照片作为16阶光学计量、其他样本或长期稳定性验收。
+
+随后显式stop一次：432954ms LCD deinitialized；433457ms Display cleanup=ESP_OK且SD开始卸载；433458ms Unmount=ESP_OK；433459ms HAL cleanup=ESP_OK；433460ms最终STOPPED、operation=cleanup=0；433461ms命令处理结束，433462ms app_main返回。主机EOF结束控制台、exit0，端口占用检查为空。卡仍插入且已卸载，屏幕保留已验收S1，原片保留；未再次清白、显示、重置、烧写、换片或运行完整产品。
+
+当前应用仍为404,336字节/9f6d6f6f…，同一S1单次处理56,161ms较前轮114,252ms缩短约50.8%，软件、部署/回读、单张视觉和正常退出证据分别保留。精确局部内存峰值仍未取得，不补造数据；其他样本、重复性、全文件消费者/并发与NVS/OTA迁移保持未验收。TODO、README、CHANGELOG及照片/部署/架构/集成当前状态已同步。本反馈轮仅验收登记与正常退出，无源码/配置变更、重新测试/编译、提交或推送；私有证据仍为`.cache/p3-buffered-photo-hardware-PAms8H/`。

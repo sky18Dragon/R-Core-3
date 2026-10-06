@@ -1,6 +1,6 @@
 # 开发与构建
 
-P0 已完成源码引入及原版基线验证。当前根目录是 PhotoFrame 主工程；目前新增 `read_pico` 只读诊断板型，完整相框尚未接入；见 [P1 说明](READ-PICO-BRINGUP.md)。当前 `waveshare_photopainter_73` 产物不可烧入小纸 Pico。
+P0 已完成源码引入及原版基线验证。当前根目录是 PhotoFrame 主工程；Read Pico只读/显示/SD诊断隔离，完整业务已有编译链接profile但禁止运行，见 [集成说明](READ-PICO-INTEGRATION.md) 和 [P1说明](READ-PICO-BRINGUP.md)。当前 `waveshare_photopainter_73` 产物不可烧入小纸 Pico。
 
 ## 固定版本与目录
 
@@ -45,7 +45,7 @@ cd '/Users/zhanghuilong/Documents/ChatGPT/R-Core-3 2'
 bash scripts/test_baseline.sh
 ```
 
-脚本执行 `make test`、补跑当前299项CTest（含板级、显示核心/原生后端、业务、会话、标准图案、扫描、真实厂家CPU绘图、局部图边缘断言及供数故障注入）、6项方向、10项构建防误操作、8项无硬件控制台测试、60项Web测试和Web生产构建。本轮边缘探针后单独串行跑了299/299普通CTest及299/299 ASan/UBSan，并通过固定IDF 6.1显示固件编译；未复跑方向/Web，硬件历史不转移为新源码真机结果。原始入口可单独执行：
+脚本执行 `make test`、补跑当前318项CTest（含SDMMC、板级、显示核心/原生后端、业务、会话、标准图案、扫描、真实厂家CPU绘图、局部图边缘断言及供数故障注入）、6项方向、12项构建防误操作、8项无硬件控制台测试、60项Web测试和Web生产构建。最新SDMMC软件准备单独运行了318/318普通CTest、318/318 ASan/UBSan和20/20 Python检查；未复跑方向/Web，硬件历史不转移为本轮真机结果。原始入口可单独执行：
 
 ```sh
 make test
@@ -78,33 +78,36 @@ python -u scripts/read_pico_display_console.py --port /dev/cu.usbmodem2101 \
   > .cache/read-pico-display-console-private.log 2>&1
 ```
 
-仅需显式复位时才加 `--reset`；它会丢失白参考。最新源码及已部署版白名单为 clear-white/white-confirm/stop/status、九种 gc16-* 及 pattern-confirm/reject，含`gc16-gray16-page`。控制图必须是人工白参考后的首次绘制；每张需人工确认，错误/拒绝锁存，无批量轮播。历史GC16欠载0x400和性能候选新黑带保留为失败记录；单张四角通过，旧gray16与编号图白偏失败，最新局部图36相软件完整但左边缘布局失败。设备最后已知WAIT_PATTERN_CONFIRM，未发送确认/拒绝/stop；重新操作前先核实会话状态。官方示例对照及下一实验边界见 [显示说明](READ-PICO-DISPLAY.md)。
+仅需显式复位时才加 `--reset`；它会丢失白参考。最新源码及已部署版白名单为 clear-white/white-confirm/stop/status、九种 gc16-* 及 pattern-confirm/reject，含`gc16-gray16-page`。控制图必须是人工白参考后的首次绘制；每张需人工确认，错误/拒绝锁存，无批量轮播。历史GC16欠载0x400、新黑带、旧gray16/编号图白偏和18MHz边缘异常均保留。PM锁候选的官方局部页已确认，设备最后正常`STOPPED`；重新操作前先核实会话状态。官方示例对照及下一实验边界见 [显示说明](READ-PICO-DISPLAY.md)。
 
 显示 overlay 要求 `CONFIG_COMPILER_OPTIMIZATION_PERF=y`、64 KB 数据缓存/64 B 行；只读 profile 不变。已有 `.cache/sdkconfig.read_pico-display` 不会因 defaults 自动切换：在固定 v6.1 环境以相同 `-B`/`-DSDKCONFIG`/`-DSDKCONFIG_DEFAULTS` 参数进入 menuconfig，明确选择三项后重编译，核对 SIZE=0x10000/LINE_SIZE=64。未迁移被入口 `#error` 拒绝，不删除配置/fullclean/擦设备或改频绕过。本机已显式迁移、编译并获准上板核验；不将实机配置日志计为 GC16 成功。
 
 `read_pico_display` 是便携转换/刷新事务核心，`epaper_driver_read_pico` 是 IDF 外层后端。诊断链接后端及厂家依赖，仅调用 false guard，不启动屏幕。Read Pico 分支同时编译 display_manager/utils 的检查式调用，但不启动完整业务。新增后端测试使用模拟 HAL/LCD/RTOS，实际 GUI_Paint 打包与 display_manager 状态提交另有真实源码测试；API/硬件条件见 [显示适配说明](READ-PICO-DISPLAY.md)。
 
-显示 profile 使用 GNU link-wrap 扫描观察器：显式 clear-white 记录末行/填充；`gc16-gray16-page`记录36相计时与12条关键renderer脉冲行指纹。普通入口不链接观察器；daf0b7bf…已真机采集指纹，5069a6d0…离线修正696计数与双核启动预填分类但未部署。观察有开销，不等于DMA、电气完成、物理gate落点或长期恢复。契约与观测限制见 [显示适配](READ-PICO-DISPLAY.md)。
+显示profile使用GNU link-wrap扫描观察器：显式clear-white记录末行/填充；`gc16-gray16-page`记录36相计时与12条关键renderer脉冲行指纹。普通入口不链接观察器；旧66425c9c…验证18MHz下软件观察完整但实屏几何仍失败，81ac6974…验证精确684行后几何恢复，当前6f2a4ea…进一步以PM锁恢复11.090–11.112ms/相与16阶。观察有开销，不等于长期稳定或全部物理测量完成。契约与观测限制见 [显示适配](READ-PICO-DISPLAY.md)。
 
-历史单张gray16白偏未通过，旧产物格式/图案22/22与纯波形审计保留。当前部署为299,952字节/daf0b7bf…，app-only回读一致；人工白屏后唯一局部图的关键行关系通过，但新实拍仍复现左侧宽连续区，本轮不通过并已STOPPED。离线修正候选为300,080字节/5069a6d0…，普通与ASan/UBSan全量各300/300及固定IDF 6.1显示编译通过但未部署。实际厂家CPU绘图/HL测试使用IO/renderer/差分汇编替身，指纹只到软件供数回调，不证明DMA或硬件逐行落点。不改频率/波形/校准。详见VALIDATION。
+历史gray16白偏、精确684行几何和C阶段连续HV结果均保留。当前部署为305,104字节/`6f2a4ea…` PM锁候选：显示事务持有CPU/APB max锁，固定子模块、18MHz、waveform、factory VCOM及电源流程不改；app-only全长回读一致、分区不变。人工白屏后唯一官方局部页36相399.327ms、照片16阶严格单调，确认后STOPPED。普通CTest 310/310、Python门禁20/20及固定IDF v6.1显示编译通过。该结果关闭持续白偏根因，不替代长期稳定、其他图案和照片链路验收；指纹仍只到软件供数回调。详见VALIDATION。
 
-本机原来按以下正则验证sanitizer子集；本轮还在同一ASan/UBSan构建目录串行跑完全量300/300：
+SDMMC backend 的 `sdcard_config_t.bus_width` 必须显式填写 `SDCARD_SDMMC_BUS_WIDTH_1` 或 `_4`。1-bit 只连接 CLK/CMD/D0，backend 强制 D1–D3 为 `GPIO_NUM_NC`；Read Pico 静态定义为38/42/44。原WaveShare显式填写4-bit。无效配置、缺少必要引脚、空挂载点或路径超过31字节会在调用IDF挂载前拒绝；成功后才记录路径。挂载失败不自动格式化，`sdcard_format()`仍是单独的显式破坏性接口。Read Pico只读/显示诊断不选择SD driver、不调用挂载；完整产品入口与实体卡验收待P3完成。
+
+SD新增独立手动profile，构建命令与所有权/退出见 [SD说明](READ-PICO-STORAGE.md)。storage开关必须与factory同用、与display互斥，构建不烧写。SDMMC另增显式internal_pullups，Read Pico开启、原板false；卸载错误因SDK可能已释放句柄而锁存，不再次调用SDK。
+
+完整业务编译：`python3 build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-photoframe-integration`，独立目录与配置，禁止烧写/自动运行；需已有嵌入资源作为编译输入，不构成新板splash验收，详见集成说明。
+
+最新全量ASan/UBSan为356/356通过；可按以下命令复跑（SD API由主机替身实现，不接触实体卡）：
 
 ```sh
 cmake -S host_tests -B host_tests/build-asan \
   -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
   -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
   -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
-cmake --build host_tests/build-asan --target read_pico_board_test read_pico_display_test \
-  read_pico_sy_power_test read_pico_display_commit_test read_pico_native_test read_pico_validation_test \
-  read_pico_pattern_test read_pico_scan_probe_test read_pico_vendor_test
-ctest --test-dir host_tests/build-asan \
-  -R 'ReadPicoBoard|ReadPicoFrame|ReadPicoRefresh|SyPower|DisplayCommit|ReadPicoNative|ReadPicoValidation|ReadPicoPattern|ReadPicoScan|ReadPicoVendor' --output-on-failure
+cmake --build host_tests/build-asan -j4
+ctest --test-dir host_tests/build-asan --output-on-failure
 ```
 
 ## CI 与尚未覆盖项
 
-新增 `.github/workflows/port-baseline.yml`：Node 22 完整主机/Web 测试，正式 v6.1 SDK commit 检查、原板及三个 Read Pico 入口编译；仅 `contents: read`，没有发布/烧写/实屏步骤。远端未运行，本机成功不等于 GitHub Actions 成功。
+新增 `.github/workflows/port-baseline.yml`：Node 22 完整主机/Web 测试，正式 v6.1 SDK commit 检查、原板及五个Read Pico隔离入口编译；仅 `contents: read`，没有发布/烧写/实屏步骤。远端未运行，本机成功不等于 GitHub Actions 成功。
 
 原有上游 `.github/workflows/ci.yml` 仅补主机测试 checkout 的递归子模块（新增测试需协议头）；其 Node 18/格式流程与 `build.yml` 的 release-v6.0/Node 20、上游发布逻辑保留。未执行这些远端流程，也未复跑 v6.0 或 8 板矩阵。后续变更公共 HAL/显示契约时保留原板回归；Read Pico 诊断已加入新 CI；远端未运行。
 

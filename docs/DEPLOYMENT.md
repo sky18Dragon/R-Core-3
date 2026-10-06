@@ -1,8 +1,28 @@
 # 固件烧写与维护
 
-最新部署记录：边缘供数探针候选daf0b7bf…/299,952字节已仅写factory，完整应用回读一致，烧写前后分区表逐字节不变。仅擦除`[0x10000,0x5a000)`，未写bootloader、NVS、PHY、storage或PMU校准。唯一静态清白78/78帧完整且用户确认整屏正常；同启动仅一张局部图完成，36/36相、每相696次、12条目标行齐全，成对/边界关系通过。新实拍仍复现左侧宽连续区，本轮不通过；显式stop后显示/HAL正常释放，当前STOPPED，屏上保留测试图。离线修正候选300,080字节/5069a6d0…未部署；不做GC16铺白或调gamma/VCOM/频率。详见VALIDATION与 [后续方案](GRAY16-VALIDATION-PLAN.md)。
+2026-10-05最新部署：用户允许更新并明确“刷白后直接执行S1显示”。404,336字节/`9f6d6f6fc329344647f601b976d1869d70bd758b141f4db4f580f389fa2540a5`仅factory写`[0x10000,0x72b70)`、擦除`[0x10000,0x73000)`；旧62cac21b…完整应用已读回保留，新应用独立全长回读一致，4096字节分区表前后保持`f078383d…`。新启动一次挂载、清白78/78软件成功，按本次许可推进white-confirm而不记人工白屏验收；同一S1一次处理56,161ms、GC16 36/36相398.130ms、刷新/电源退出成功。用户实拍确认“画面正常没有问题”，photo-confirm接受后一次stop、显示/SD/HAL清理ESP_OK、STOPPED/operation=cleanup=0，控制台exit0/串口无占用、SD卸载、原片保留。不重刷、不写数据分区/校准，不启动产品；旧状态以下按历史保留。私有证据`.cache/p3-buffered-photo-hardware-PAms8H/`。
 
-原板 `build/`、双 OTA 诊断 `build-read-pico/`、factory 只读 `build-read-pico-factory/` 和受控显示 `build-read-pico-display/` 是四个隔离配置，不是同一个发布镜像。**不能将原板产物烧入 Pico，也不能照用编译器打印的全套烧写命令。** 用户放弃完整备份；当前局部图候选仅app更新、回读一致且分区未变。历史编号图白偏失败保留；当前局部图又暴露左边缘布局异常，P2仍未完成，完整迁移未批准。见 [验证记录](VALIDATION.md)。
+2026-10-05最新部署与验收：403,184字节/`62cac21b8cc7502fd6c79611f6b57d3f1c174d2549b2be41ee539f7827c0a554`已仅factory写入`[0x10000,0x726f0)`，擦除`[0x10000,0x73000)`。写前旧e7d5bd8d…完整回读保留，写后新应用全长一致，4096字节分区表保持`f078383d…`。清白及S1正向实屏获用户确认；photo-confirm接受后正常stop，显示/SD/HAL退出均ESP_OK、最终STOPPED，SD已卸载、串口关闭。私有证据目录`.cache/p3-photo-orientation-hardware-GxPcPw/`。下文e7d5bd8d…为历史部署，当前以本段及VALIDATION最新条目为准。
+
+固定部署镜像位于`.cache/p3-photo-orientation-candidate-0VzAUF/photo-app.bin`，与本轮独立回读一致。仅应用更新许可已按上段执行；后续任何新流程仍遵循具体范围及每启动一次的诊断门禁。见 [单张照片诊断](READ-PICO-PHOTO-VALIDATION.md)。
+
+当前部署（2026-10-05首张照片轮次）：403,168字节/`e7d5bd8d1c338e448829fab7c241002f93b5c5fef0c304dd9b1a0d1c20b39ee2`仅factory写`[0x10000,0x726e0)`、擦除`[0x10000,0x73000)`。独立全长回读逐字节一致，写前后4096字节分区表均`f078383d…`；写前旧d760371b…完整应用匹配并保留。新启动一次mount/clear-white，人工白屏通过；一次photo-show完整读取S1/EOF并完成EXIF6、Cover、灰阶和36相GC16，软件返回成功，但实拍上下颠倒，已photo-reject并stop。显示释放、SD卸载及HAL退出均成功，当前STOPPED、串口关闭、卡仍插入且卸载、文件保留；屏幕静态保留倒置照片不是程序仍在运行。未写bootloader/分区/NVS/PHY/内部storage/PMU校准，完整PhotoFrame集成固件未烧写。
+
+本轮写前整长读取322,848字节旧文件诊断，与6b85769b…固定输入一致，保留该诊断app副本；此前3168a7cc…副本亦保留。这不是完整Flash/产品迁移备份。此前有卡/无卡及写/sync/关闭/重开属于各自历史会话，本轮只追加ESP重启/重挂读取证据，不重跑file-test或覆盖/删除同名文件。不照用构建器的全量flash建议。
+
+后续单次取卡断电轮次没有烧写：用户按要求完整取卡/重插并确认后，同一d62fd8d2…新启动status/mount/file-check/status/stop再次核对4096字节/EOF成功，created=0/written=0、关闭错误与errno均0，正常卸载/HAL退出、STOPPED/串口关闭。本卡单次取卡断电后数据保持通过，但不等于整机/写入中异常断电；不自动追加验证或推导为长期任意更新许可。挂载不是硬件写保护，不宣称FAT元数据绝无变化。
+
+photo-check的主机测试/编译与本轮部署/ROM真机结果分别记录，本轮没有源码/配置变更或重跑软件测试/编译。仅发送status/mount/photo-check/status/stop各指定次数，不连带file-test/file-check或显示/产品启动。后续更新须核对新产物和新许可，不照用构建器全量flash建议。详见 [照片检查](READ-PICO-PHOTO.md)。
+
+以下PM锁候选是此前显示验收记录，已被SD应用替换。首次SD部署前整长读取305,104字节与6f2a4ea…一致，可作为这一显示诊断应用的本地恢复副本；这不提供移植前旧应用或完整Flash恢复保证，恢复动作需另行确认。
+
+此前显示部署记录：PM锁候选`6f2a4ea…`/305,104字节已仅写factory范围`[0x10000,0x5a7d0)`，扇区擦除止于`0x5b000`；完整应用回读逐字节一致，烧写前后4096字节分区表SHA均为`f078383d…`。未写bootloader、NVS、PHY、storage或PMU校准。镜像ELF为`44ec27ed6eb7d2783415a5629f296dfe6be2da9a30892731b415c9bcf4983545`，sdkconfig仍`e16d333e…`。
+
+该候选保持两个6行bounce buffer/精确684行、18MHz、leading-skip关闭、factory VCOM、DEFAULT 36相、80MHz存储、图案及电源流程不变，仅在显示事务持有CPU/APB max锁。静态清白78/78帧并人工通过；同启动唯一局部页36/36相合计399.327ms，实拍16阶严格单调并已确认。显式stop后显示/HAL正常释放，当前STOPPED。不得因已部署而照用构建器输出的完整flash命令；后续硬件轮次仍需单独人工关口。详见VALIDATION与 [后续方案](GRAY16-VALIDATION-PLAN.md)。
+
+历史C阶段连续HV候选曾完成2帧/72相但仍白偏，说明供电连续性不是共同根因。当前PM锁A/B已同时恢复时序和16阶；固定上游内部`portMAX_DELAY`未在本轮触发，但仍不具备安全硬中止语义。单张灰阶通过不等于长期稳定通过。
+
+原板 `build/`、双 OTA 诊断 `build-read-pico/`、factory 只读 `build-read-pico-factory/` 和受控显示 `build-read-pico-display/` 是四个隔离配置，不是同一个发布镜像。**不能将原板产物烧入 Pico，也不能照用编译器打印的全套烧写命令。** 用户放弃完整备份；当前候选仅app更新、回读一致且分区未变。历史白偏与边缘异常保留为失败记录；当前16灰阶根因已关闭，但P2其余验证和完整迁移仍未完成。见 [验证记录](VALIDATION.md)。
 
 ## 首次上板前的人工关口
 
@@ -99,7 +119,9 @@ python build.py --board read_pico --step firmware --read-pico-factory-diagnostic
 4. 核对目标镜像和每项写入范围，以及恢复能力或用户明确接受的不可回滚风险；不自动擦 NVS 或格式化内部/外部存储。本次放弃备份只覆盖已批准的 factory 诊断操作，不预先批准迁移。
 5. 先只读诊断，核对启动/PMU/VCOM后，才在屏电源运行权限获准的专用流程验证 EPD。首次清白须人工确认本次启动参考，再显示灰阶/奇偶像素/四角/照片。当前诊断不会自动进入显示测试。
 
-完整 PhotoFrame 主入口原有 NVS 初始化失败后擦除分支尚未用于新板；P3 接入时必须改为新板失败退出/显式迁移，不能取消诊断隔离后原样执行。当前 SD/Web/睡眠/OTA 尚未集成验收。
+完整PhotoFrame已有编译链接隔离入口，新板NVS自动擦除和Web整分区reset已禁止，运行仍未开放；初始化成功不代表旧数据/分区完成迁移。独立SD已有有限挂载/专用4KiB读写/取卡断电读取及S1 ROM解码验收，Web/照片实屏/睡眠/OTA尚未集成验收。
+
+2026-10-04文件JPEG业务软件轮次未操作设备：当前仍为STOPPED的d760371b…/325,904字节。新集成cf0e40bc…/1,978,080字节只验证编译/链接，入口不执行产品；新SD构建e05fc2ed…/326,128字节亦未烧写。主机方向/Cover/灰阶通过不构成照片显示授权，须另准备受控单张诊断并确认具体候选/写入/显示范围，不直接烧写集成应用。
 
 编译成功、烧写校验成功、屏幕仍有旧画面均不能单独证明本版应用正常工作。
 

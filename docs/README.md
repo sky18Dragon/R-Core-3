@@ -15,6 +15,10 @@
 | [DEVELOPMENT](DEVELOPMENT.md) | 固定版本、已验证命令与环境 |
 | [READ-PICO-BRINGUP](READ-PICO-BRINGUP.md) | P1 诊断入口、只读边界与上板条件 |
 | [READ-PICO-DISPLAY](READ-PICO-DISPLAY.md) | P2a/P2b 像素格式、真实后端、结果传播与未验收的硬件边界 |
+| [READ-PICO-STORAGE](READ-PICO-STORAGE.md) | P3 SD单一挂载、卡检测、退出租约、限定文件写入与重启只读核对 |
+| [READ-PICO-PHOTO](READ-PICO-PHOTO.md) | P3 原片边界、S1 ROM真机结果、文件JPEG方向/Cover/灰阶软件链路与显示门禁 |
+| [READ-PICO-PHOTO-VALIDATION](READ-PICO-PHOTO-VALIDATION.md) | 单张原片显示候选、固定路径、人工白参考/照片确认、内存记录与更新权限 |
+| [READ-PICO-INTEGRATION](READ-PICO-INTEGRATION.md) | 完整PhotoFrame编译链接、NVS/存储/路径保护和运行门禁 |
 | [GRAY16-VALIDATION-PLAN](GRAY16-VALIDATION-PLAN.md) | 官方16灰示例复核、分变量验证顺序与光学验收方法 |
 | [COMPONENT-GUIDELINES](COMPONENT-GUIDELINES.md) | 拟修改组件与职责 |
 | [DEPLOYMENT](DEPLOYMENT.md) | 新方案的烧写/恢复准备要求 |
