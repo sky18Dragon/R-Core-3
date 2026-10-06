@@ -54,8 +54,13 @@ static UWORD display_white_color(void)
 }
 
 static SemaphoreHandle_t display_mutex = NULL;
-static char current_image[64] = {0};
-static char last_displayed_image[256] = {0};  // Internal state: last displayed image path
+static char current_image[DISPLAY_IMAGE_PATH_CAPACITY] = {0};
+static char last_displayed_image[DISPLAY_IMAGE_PATH_CAPACITY] = {0};
+
+static bool image_path_fits(const char *path)
+{
+    return path == NULL || strnlen(path, DISPLAY_IMAGE_PATH_CAPACITY) < DISPLAY_IMAGE_PATH_CAPACITY;
+}
 
 static uint8_t *epd_image_buffer = NULL;
 static uint32_t image_buffer_size;
@@ -96,12 +101,11 @@ static void load_last_displayed_image(void)
 // Save last displayed image to NVS
 static void save_last_displayed_image(const char *filename)
 {
-    if (filename == NULL) {
+    if (filename == NULL || !image_path_fits(filename)) {
         return;
     }
 
-    strncpy(last_displayed_image, filename, sizeof(last_displayed_image) - 1);
-    last_displayed_image[sizeof(last_displayed_image) - 1] = '\0';
+    memcpy(last_displayed_image, filename, strlen(filename) + 1);
 
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
@@ -161,9 +165,11 @@ void display_manager_initialize_paint(void)
 
 esp_err_t display_manager_show_image(const char *filename)
 {
-    if (!filename || strlen(filename) == 0) {
+    if (!filename || filename[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!image_path_fits(filename))
+        return ESP_ERR_INVALID_SIZE;
 
     if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to acquire display mutex");
@@ -227,7 +233,7 @@ esp_err_t display_manager_show_image(const char *filename)
     ESP_LOGI(TAG, "E-paper display update complete");
     ESP_LOGI(TAG, "Free heap after display: %lu bytes", esp_get_free_heap_size());
 
-    strncpy(current_image, filename, sizeof(current_image) - 1);
+    memcpy(current_image, filename, strlen(filename) + 1);
 
     create_image_link(filename);
     ESP_LOGD(TAG, "Created link to: %s", filename);
@@ -442,6 +448,14 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
 {
     esp_err_t result = ESP_OK;
 
+    // Check every possible publication path BEFORE refreshing or creating a snapshot.
+    // Even a fallback must fit: its use cannot be predicted until after the refresh.
+    if (show && pub && (!image_path_fits(pub->display_name) || !image_path_fits(pub->save_path) ||
+                       !image_path_fits(pub->fallback_name))) {
+        xSemaphoreGive(display_mutex);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     if (show) {
         ESP_LOGI(TAG, "Starting e-paper display update (this takes ~30 seconds)");
         esp_err_t refresh = refresh_panel();
@@ -465,7 +479,7 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
         if (record) {
             // Recorded while the mutex is still held so the reported state
             // cannot race a queued display
-            strncpy(current_image, record, sizeof(current_image) - 1);
+            memcpy(current_image, record, strlen(record) + 1);
             create_image_link(record);
         } else {
             // Displayed from an anonymous buffer (or no usable fallback):

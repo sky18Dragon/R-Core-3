@@ -29,9 +29,11 @@ esp_err_t display_flow_read_file(const char *path, uint8_t **out_buf, size_t *ou
  * @brief Stream a PNG/JPG source file to the display
  *
  * PNG uses the fused validate-or-process single-decode path straight from
- * the file; JPG is read into PSRAM and processed from there. With
+ * the file. Read Pico JPG streams compressed input with a budgeted scaled RGB
+ * raster and EXIF/Cover; legacy boards read JPG into PSRAM. With
  * release_source set (MemFS-backed sources), the file is unlinked as soon
- * as an in-RAM copy exists. The source file is not otherwise disposed of --
+ * as an in-RAM copy exists (Read Pico JPG does not unlink here).
+ * The source file is not otherwise disposed of --
  * on success the caller retires it (see display_flow_retire_source).
  *
  * @return ESP_OK, ESP_ERR_NOT_FINISHED (displayed but the pub->save_path

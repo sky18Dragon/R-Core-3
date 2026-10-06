@@ -55,6 +55,13 @@ esp_err_t display_flow_stream_file(const char *path, image_format_t format,
         // File-backed fused path: no RAM copy of the source
         return image_processor_process_or_display_png(path, algorithm, pub, release_source);
     }
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (format == IMAGE_FORMAT_JPG) {
+        // Read Pico has persistent SD; do not materialize or retire the compressed source here.
+        // Existing caller lifecycle handles temporary files after a successful display.
+        return image_processor_process_jpeg_file_to_display(path, algorithm, pub);
+    }
+#endif
 
     uint8_t *buf = NULL;
     size_t size = 0;

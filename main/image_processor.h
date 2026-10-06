@@ -24,15 +24,27 @@ typedef enum {
 } image_format_t;
 
 esp_err_t image_processor_init(void);
+// Use identical upstream palette defaults without reading/writing NVS (isolated diagnostics).
+esp_err_t image_processor_init_defaults(void);
 
 /**
  * @brief Process image from file to file (legacy interface)
  *
  * This function reads from input_path, processes the image, and writes to output_path.
  * For SD-card systems, this is the preferred interface.
+ * Read Pico output must be a new path; existing outputs are not overwritten,
+ * and a failed/partial new output is retained for explicit caller handling.
  */
 esp_err_t image_processor_process(const char *input_path, const char *output_path,
                                   dither_algorithm_t dither_algorithm);
+
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+// File-backed baseline JPEG: bounded scaled raster, EXIF view, existing row pipeline.
+// Does not delete/re-encode the source. Full read/EOF/close before display begin.
+esp_err_t image_processor_process_jpeg_file_to_display(const char *path,
+                                                       dither_algorithm_t algorithm,
+                                                       const display_publish_t *pub);
+#endif
 
 /**
  * @brief Process image from memory buffer and show it on the display
@@ -65,6 +77,7 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
  * image_processor_process_to_display. Preferred entry point for PNG display
  * requests. With release_source set, the file is unlinked as soon as an
  * in-RAM copy exists (for MemFS-backed sources that live in PSRAM).
+ * Read Pico ignores release_source and preserves persistent SD originals.
  */
 esp_err_t image_processor_process_or_display_png(const char *path,
                                                  dither_algorithm_t dither_algorithm,

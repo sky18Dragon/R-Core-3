@@ -7,6 +7,9 @@
 
 #include "esp_err.h"
 
+// Includes the terminating NUL. One capacity for decode/link/current/last NVS names.
+#define DISPLAY_IMAGE_PATH_CAPACITY 512
+
 esp_err_t display_manager_init(void);
 esp_err_t display_manager_show_image(const char *filename);
 
