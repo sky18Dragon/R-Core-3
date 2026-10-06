@@ -63,8 +63,24 @@ endif()
 # CONFIG_* is not available until after IDF's early component requirement expansion.
 if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico" OR
    "${SDKCONFIG}" MATCHES "sdkconfig.read_pico")
+    if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico_display_validation")
+        # 显示诊断只覆盖扫描传输几何；固定子模块保持原样。
+        # Display diagnostics override scan transport geometry only; the pinned submodule stays clean.
+        list(APPEND EXTRA_COMPONENT_DIRS
+            "${CMAKE_SOURCE_DIR}/overlays/read_pico_epdiy/epdiy")
+    elseif("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico_photo_validation")
+        # The single-photo diagnostic uses the same locked 684-line geometry.
+        list(APPEND EXTRA_COMPONENT_DIRS
+            "${CMAKE_SOURCE_DIR}/overlays/read_pico_epdiy/epdiy")
+    elseif("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico_photoframe_integration")
+        # Same verified transport geometry for the full-stack integration build.
+        list(APPEND EXTRA_COMPONENT_DIRS
+            "${CMAKE_SOURCE_DIR}/overlays/read_pico_epdiy/epdiy")
+    else()
+        list(APPEND EXTRA_COMPONENT_DIRS
+            "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/epdiy")
+    endif()
     list(APPEND EXTRA_COMPONENT_DIRS
-        "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/epdiy"
         "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/e0470_epaper_waveform"
         "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/sy7636a")
 endif()

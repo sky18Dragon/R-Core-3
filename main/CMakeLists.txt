@@ -1,4 +1,32 @@
-if(CONFIG_BOARD_DRIVER_READ_PICO)
+if(CONFIG_READ_PICO_PHOTO_VALIDATION AND (CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION OR
+   CONFIG_READ_PICO_DISPLAY_VALIDATION OR CONFIG_READ_PICO_STORAGE_VALIDATION))
+    message(FATAL_ERROR "Read Pico photo diagnostic requires an exclusive profile")
+endif()
+if(CONFIG_BOARD_DRIVER_READ_PICO AND NOT CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION)
+    if(CONFIG_READ_PICO_STORAGE_VALIDATION AND CONFIG_READ_PICO_DISPLAY_VALIDATION)
+        message(FATAL_ERROR "Read Pico SD and display validation must be isolated")
+    endif()
+    if(CONFIG_READ_PICO_PHOTO_VALIDATION)
+        idf_component_register(
+            SRCS "read_pico_photo_validation.c" "read_pico_photo_session.c" "read_pico_photo_frame.c"
+                 "read_pico_photo_bridge.c" "image_processor.c" "jpeg_metadata.c" "jpeg_stream_probe.c"
+                 "jpeg_buffered_source.c"
+                 "color_palette.c"
+            INCLUDE_DIRS "."
+            PRIV_REQUIRES board_hal sdcard esp_driver_usb_serial_jtag vfs espressif__esp_jpeg
+                          espressif__libpng espressif__cjson nvs_flash esp_timer esp_partition
+                          esp_app_format esp_psram read_pico_display epaper_driver_read_pico
+        )
+        return()
+    endif()
+    if(CONFIG_READ_PICO_STORAGE_VALIDATION)
+        idf_component_register(
+            SRCS "read_pico_storage_validation.c" "sd_file_probe.c" "jpeg_stream_probe.c" "jpeg_file_probe.c"
+            INCLUDE_DIRS "."
+            PRIV_REQUIRES board_hal sdcard esp_driver_usb_serial_jtag vfs espressif__esp_jpeg
+        )
+        return()
+    endif()
     set(READ_PICO_ENTRY "read_pico_bringup.c")
     if(CONFIG_READ_PICO_DISPLAY_VALIDATION)
         set(READ_PICO_ENTRY "read_pico_display_validation.c")
@@ -33,6 +61,7 @@ set(SOURCES
     "main.c"
     "mdns_service.c"
     "network_backoff.c"
+    "nvs_bootstrap.c"
     "ota_manager.c"
     "periodic_tasks.c"
     "png_decoder.c"
@@ -47,7 +76,20 @@ set(SOURCES
     "wifi_provisioning.c"
 )
 
+if(CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION)
+    if(CONFIG_READ_PICO_DISPLAY_VALIDATION OR CONFIG_READ_PICO_STORAGE_VALIDATION)
+        message(FATAL_ERROR "Read Pico full-stack integration must use an isolated profile")
+    endif()
+    # Retain and link the actual app; only its automatic boot entry is replaced.
+    set_source_files_properties("main.c" PROPERTIES COMPILE_DEFINITIONS "app_main=photoframe_app_main")
+    list(APPEND SOURCES "read_pico_integration_entry.c")
+endif()
+
 set(INCLUDE_DIRS ".")
+
+if(CONFIG_BOARD_DRIVER_READ_PICO)
+    list(APPEND SOURCES "jpeg_metadata.c" "jpeg_stream_probe.c" "jpeg_buffered_source.c")
+endif()
 
 set(PRIV_REQUIRES
     app_update

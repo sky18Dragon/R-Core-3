@@ -80,7 +80,8 @@ direct_dependencies:
 - espressif/libpng
 - espressif/mdns
 - espressif/qrcode
+- idf
 - joltwallet/littlefs
-manifest_hash: e1f28437d3b53203e9e036b1e0857bdbbee921e387ee659317f0b0650134751c
+manifest_hash: 5be05836a36c08b4777d6ca3a942a7ec9f08fed48f6aa52ffe2828295482dd04
 target: esp32s3
 version: 3.0.0

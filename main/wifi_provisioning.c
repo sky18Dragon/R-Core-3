@@ -413,8 +413,8 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
 
     // Configure STA with provided credentials
     wifi_config_t sta_config = {0};
-    strncpy((char *) sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
-    strncpy((char *) sta_config.sta.password, password, sizeof(sta_config.sta.password) - 1);
+    snprintf((char *) sta_config.sta.ssid, sizeof(sta_config.sta.ssid), "%s", ssid);
+    snprintf((char *) sta_config.sta.password, sizeof(sta_config.sta.password), "%s", password);
     sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     sta_config.sta.pmf_cfg.capable = true;
     sta_config.sta.pmf_cfg.required = false;
@@ -496,6 +496,11 @@ esp_err_t wifi_provisioning_init(void)
 
 esp_err_t wifi_provisioning_start_ap(void)
 {
+    const char *ap_ssid = get_setup_ap_ssid();
+    size_t ap_ssid_len = strnlen(ap_ssid, sizeof(((wifi_config_t *) 0)->ap.ssid) + 1);
+    if (ap_ssid_len == 0 || ap_ssid_len > sizeof(((wifi_config_t *) 0)->ap.ssid)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
     ESP_LOGI(TAG, "Starting WiFi AP for provisioning");
 
     // Stop WiFi first
@@ -505,13 +510,12 @@ esp_err_t wifi_provisioning_start_ap(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
     // Configure WiFi AP with unique SSID
-    const char *ap_ssid = get_setup_ap_ssid();
-
     wifi_config_t wifi_config = {
         .ap = {.channel = 1, .password = "", .max_connection = 4, .authmode = WIFI_AUTH_OPEN},
     };
-    strncpy((char *) wifi_config.ap.ssid, ap_ssid, sizeof(wifi_config.ap.ssid));
-    wifi_config.ap.ssid_len = strlen(ap_ssid);
+    // ESP-IDF accepts a full 32-byte SSID without a NUL when ssid_len is set.
+    memcpy(wifi_config.ap.ssid, ap_ssid, ap_ssid_len);
+    wifi_config.ap.ssid_len = ap_ssid_len;
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());

@@ -35,6 +35,7 @@
 #include "image_processor.h"
 #include "mdns_service.h"
 #include "memfs.h"
+#include "nvs_bootstrap.h"
 #include "nvs_flash.h"
 #include "ota_manager.h"
 #include "periodic_tasks.h"
@@ -489,6 +490,15 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
 
 void app_main(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Before board/storage/file startup: never auto-erase existing Demo/calibration NVS.
+    esp_err_t nvs_start = photoframe_nvs_init(false);
+    if (nvs_start != ESP_OK) {
+        ESP_LOGE(TAG, "NVS startup refused (%s); migration required, no erase or business startup",
+                 esp_err_to_name(nvs_start));
+        return;
+    }
+#endif
     // Check reset reason to detect crashes
     esp_reset_reason_t reset_reason = esp_reset_reason();
     const char *reset_reason_str;
@@ -539,12 +549,10 @@ void app_main(void)
     // the external-RTC / I2C init below — so the persistent log covers the RTC
     // path and the wake decision, where a crash-then-reset is suspected (#105).
     // None of these depend on the RTC or the AXP2101 power-rail delay.
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
+#if !CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t ret = photoframe_nvs_init(true);  // Preserve legacy board recovery only.
     ESP_ERROR_CHECK(ret);
+#endif
 
     ESP_ERROR_CHECK(config_manager_init());
 

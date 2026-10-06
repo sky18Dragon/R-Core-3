@@ -24,6 +24,7 @@
 #include "ha_integration.h"
 #include "network_backoff.h"
 #include "periodic_tasks.h"
+#include "power_gpio_mask.h"
 #include "storage.h"
 #include "utils.h"
 #include "wifi_manager.h"
@@ -80,15 +81,13 @@ static uint64_t ext1_button_mask(void)
 {
     uint64_t mask = 0;
     if (!WAKEUP_KEY_ON_EXT0 && BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC) {
-        mask |= (1ULL << BOARD_HAL_WAKEUP_KEY);
+        mask |= power_gpio_mask(BOARD_HAL_WAKEUP_KEY);
     }
     if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC) {
-        mask |= (1ULL << BOARD_HAL_ROTATE_KEY);
+        mask |= power_gpio_mask(BOARD_HAL_ROTATE_KEY);
     }
     if (CLEAR_KEY_CAN_WAKE && BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC) {
-        // The ternary keeps the shift well-defined when the board defines no
-        // clear key (GPIO_NUM_NC is -1); the runtime guard above skips it.
-        mask |= (1ULL << (BOARD_HAL_CLEAR_KEY < 0 ? 0 : BOARD_HAL_CLEAR_KEY));
+        mask |= power_gpio_mask(BOARD_HAL_CLEAR_KEY);
     }
     return mask;
 }
@@ -316,15 +315,15 @@ esp_err_t power_manager_init(void)
         ext1_wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
 
         if (BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC &&
-            (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_WAKEUP_KEY))) {
+            (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_WAKEUP_KEY))) {
             wakeup_source = WAKEUP_SOURCE_BOOT_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by BOOT button (GPIO %d)", BOARD_HAL_WAKEUP_KEY);
         } else if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC &&
-                   (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_ROTATE_KEY))) {
+                   (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_ROTATE_KEY))) {
             wakeup_source = WAKEUP_SOURCE_ROTATE_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by ROTATE button (GPIO %d)", BOARD_HAL_ROTATE_KEY);
         } else if (BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC &&
-                   (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_CLEAR_KEY))) {
+                   (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_CLEAR_KEY))) {
             wakeup_source = WAKEUP_SOURCE_CLEAR_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by CLEAR button (GPIO %d)", BOARD_HAL_CLEAR_KEY);
         } else {
@@ -351,13 +350,13 @@ esp_err_t power_manager_init(void)
     // Configure button GPIOs as input with pull-ups
     uint64_t pin_mask = 0;
     if (BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << BOARD_HAL_WAKEUP_KEY);
+        pin_mask |= power_gpio_mask(BOARD_HAL_WAKEUP_KEY);
     }
     if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << BOARD_HAL_ROTATE_KEY);
+        pin_mask |= power_gpio_mask(BOARD_HAL_ROTATE_KEY);
     }
     if (BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << (BOARD_HAL_CLEAR_KEY < 0 ? 0 : BOARD_HAL_CLEAR_KEY));
+        pin_mask |= power_gpio_mask(BOARD_HAL_CLEAR_KEY);
     }
 
     if (pin_mask != 0) {
@@ -417,6 +416,12 @@ esp_err_t power_manager_init(void)
 
 void power_manager_enter_sleep(void)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    // PMU power-off/wake policy has not been accepted. Native ESP sleep is not
+    // a substitute for this board's power contract; do not stop WiFi or SD first.
+    ESP_LOGE(TAG, "Read Pico sleep is unavailable pending PMU/wake validation");
+    return;
+#endif
     power_manager_disable_auto_light_sleep();
 
     // Report how close this wake came to exhausting its stack. Every sleep

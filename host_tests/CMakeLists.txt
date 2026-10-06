@@ -18,6 +18,119 @@ FetchContent_MakeAvailable(googletest)
 
 # Enable testing
 enable_testing()
+include(GoogleTest)
+
+add_executable(jpeg_buffered_source_test test_jpeg_buffered_source.cpp
+  ../main/jpeg_buffered_source.c)
+target_include_directories(jpeg_buffered_source_test PRIVATE ../main)
+target_link_libraries(jpeg_buffered_source_test GTest::gtest_main)
+gtest_discover_tests(jpeg_buffered_source_test)
+
+add_executable(read_pico_photo_test test_read_pico_photo.cpp
+  ../main/read_pico_photo_session.c ../main/read_pico_photo_frame.c)
+target_include_directories(read_pico_photo_test PRIVATE ../main ../components/read_pico_display/include)
+target_link_libraries(read_pico_photo_test GTest::gtest_main)
+gtest_discover_tests(read_pico_photo_test)
+
+add_executable(jpeg_metadata_test test_jpeg_metadata.cpp ../main/jpeg_metadata.c)
+target_include_directories(jpeg_metadata_test PRIVATE ../main)
+target_link_libraries(jpeg_metadata_test GTest::gtest_main)
+gtest_discover_tests(jpeg_metadata_test)
+
+# Explicit opt-in: real locked external decoder, never download photos or dependencies.
+option(READ_PICO_JPEG_STREAM_TESTS "Build locked esp_jpeg streaming probe" OFF)
+if(READ_PICO_JPEG_STREAM_TESTS)
+  set(JPEG_COMPONENT "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_jpeg")
+  file(READ "${JPEG_COMPONENT}/idf_component.yml" JPEG_MANIFEST)
+  if(NOT JPEG_MANIFEST MATCHES "version: 1\\.3\\.1(\n|$)")
+    message(FATAL_ERROR "JPEG streaming tests require locked esp_jpeg 1.3.1")
+  endif()
+  file(SHA256 "${JPEG_COMPONENT}/tjpgd/tjpgd.c" JPEG_SOURCE_SHA)
+  file(SHA256 "${JPEG_COMPONENT}/tjpgd/tjpgd.h" JPEG_HEADER_SHA)
+  file(SHA256 "${JPEG_COMPONENT}/tjpgd/tjpgdcnf.h" JPEG_CONFIG_SHA)
+  if(NOT JPEG_SOURCE_SHA STREQUAL "1286f5e32e7a4750ee36fd57d2c442c99a74ffed0e81cb5d2fbf92fccf64a84d" OR
+     NOT JPEG_HEADER_SHA STREQUAL "53d1156fd9fcc97d346e5ee8c16ae39c34d71c691dcad3c524424bb91519cd24" OR
+     NOT JPEG_CONFIG_SHA STREQUAL "6a2134a4aae53bc361a7c4f1bfc8ef0107452191d6c4ae26bd1030ca441459ae")
+    message(FATAL_ERROR "Locked JPEG decoder source/header/config drift")
+  endif()
+  add_library(jpeg_stream_probe STATIC ../main/jpeg_stream_probe.c ../main/jpeg_file_probe.c
+    ../main/jpeg_buffered_source.c
+    "${JPEG_COMPONENT}/tjpgd/tjpgd.c")
+  target_include_directories(jpeg_stream_probe PUBLIC ../main PRIVATE
+    jpeg_stream_stubs "${JPEG_COMPONENT}/tjpgd")
+  add_executable(jpeg_stream_probe_cli jpeg_stream_probe_cli.c)
+  target_link_libraries(jpeg_stream_probe_cli jpeg_stream_probe)
+  add_executable(jpeg_stream_probe_test test_jpeg_stream_probe.cpp)
+  target_compile_definitions(jpeg_stream_probe_test PRIVATE
+    JPEG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../process-cli/test/test-albums/Default")
+  target_link_libraries(jpeg_stream_probe_test jpeg_stream_probe GTest::gtest_main)
+  gtest_discover_tests(jpeg_stream_probe_test)
+  add_library(read_pico_jpeg_pipeline STATIC
+    ../main/image_processor.c ../main/display_flow.c ../main/jpeg_metadata.c
+    stubs/esp_stubs.c stubs/fake_display_manager.c stubs/fake_config_manager.c
+    stubs/fake_processing_settings.c stubs/fake_storage.c stubs/fake_jpeg_media.c)
+  target_include_directories(read_pico_jpeg_pipeline PUBLIC
+    stubs ../main ../components/board_hal/include)
+  target_compile_definitions(read_pico_jpeg_pipeline PUBLIC
+    CONFIG_BOARD_DRIVER_READ_PICO=1 READ_PICO_JPEG_PIPELINE_TESTS=1)
+  # Interpose only this host library's stdio close, leaving test writers real.
+  target_compile_definitions(read_pico_jpeg_pipeline PRIVATE fclose=read_pico_test_fclose)
+  find_package(PNG REQUIRED)
+  target_link_libraries(read_pico_jpeg_pipeline PUBLIC jpeg_stream_probe PNG::PNG m)
+  add_executable(read_pico_jpeg_pipeline_test test_read_pico_jpeg_pipeline.cpp)
+  target_compile_definitions(read_pico_jpeg_pipeline_test PRIVATE
+    JPEG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../process-cli/test/test-albums/Default")
+  target_link_libraries(read_pico_jpeg_pipeline_test read_pico_jpeg_pipeline GTest::gtest_main)
+  gtest_discover_tests(read_pico_jpeg_pipeline_test)
+  add_executable(read_pico_jpeg_pipeline_cli read_pico_jpeg_pipeline_cli.c)
+  target_link_libraries(read_pico_jpeg_pipeline_cli read_pico_jpeg_pipeline)
+  add_library(read_pico_photo_diagnostic STATIC
+    ../main/read_pico_photo_bridge.c ../main/read_pico_photo_frame.c ../main/image_processor.c
+    ../main/jpeg_metadata.c stubs/esp_stubs.c stubs/fake_storage.c stubs/fake_jpeg_media.c)
+  target_include_directories(read_pico_photo_diagnostic PUBLIC
+    stubs ../main ../components/board_hal/include ../components/read_pico_display/include)
+  target_compile_definitions(read_pico_photo_diagnostic PUBLIC
+    CONFIG_BOARD_DRIVER_READ_PICO=1 CONFIG_READ_PICO_PHOTO_VALIDATION=1 READ_PICO_JPEG_PIPELINE_TESTS=1)
+  target_compile_definitions(read_pico_photo_diagnostic PRIVATE fclose=read_pico_test_fclose)
+  target_link_libraries(read_pico_photo_diagnostic PUBLIC jpeg_stream_probe PNG::PNG m)
+  add_executable(read_pico_photo_bridge_test test_read_pico_photo_bridge.cpp)
+  target_compile_definitions(read_pico_photo_bridge_test PRIVATE
+    JPEG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../process-cli/test/test-albums/Default")
+  target_link_libraries(read_pico_photo_bridge_test read_pico_photo_diagnostic GTest::gtest_main)
+  gtest_discover_tests(read_pico_photo_bridge_test)
+  add_executable(read_pico_photo_diagnostic_cli read_pico_photo_diagnostic_cli.c)
+  target_link_libraries(read_pico_photo_diagnostic_cli read_pico_photo_diagnostic)
+endif()
+
+add_executable(nvs_bootstrap_test test_nvs_bootstrap.cpp ../main/nvs_bootstrap.c)
+target_include_directories(nvs_bootstrap_test PRIVATE nvs_stubs stubs ../main)
+target_link_libraries(nvs_bootstrap_test GTest::gtest_main)
+gtest_discover_tests(nvs_bootstrap_test)
+
+add_executable(read_pico_nvs_bootstrap_test test_read_pico_nvs_bootstrap.cpp ../main/nvs_bootstrap.c)
+target_include_directories(read_pico_nvs_bootstrap_test PRIVATE nvs_stubs stubs ../main)
+target_compile_definitions(read_pico_nvs_bootstrap_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_link_libraries(read_pico_nvs_bootstrap_test GTest::gtest_main)
+gtest_discover_tests(read_pico_nvs_bootstrap_test)
+
+add_executable(read_pico_storage_test test_read_pico_storage.cpp ../main/storage.c)
+target_include_directories(read_pico_storage_test PRIVATE
+  stubs ../main ../components/board_hal/include ../components/memfs/include)
+target_compile_definitions(read_pico_storage_test PRIVATE
+  CONFIG_BOARD_DRIVER_READ_PICO=1 CONFIG_HAS_SDCARD=1)
+target_link_libraries(read_pico_storage_test GTest::gtest_main)
+gtest_discover_tests(read_pico_storage_test)
+
+add_executable(read_pico_integration_entry_test
+  test_read_pico_integration_entry.cpp ../main/read_pico_integration_entry.c)
+target_include_directories(read_pico_integration_entry_test PRIVATE stubs)
+target_link_libraries(read_pico_integration_entry_test GTest::gtest_main)
+gtest_discover_tests(read_pico_integration_entry_test)
+
+add_executable(power_gpio_mask_test test_power_gpio_mask.cpp)
+target_include_directories(power_gpio_mask_test PRIVATE ../main)
+target_link_libraries(power_gpio_mask_test GTest::gtest_main)
+gtest_discover_tests(power_gpio_mask_test)
 
 # Cron engine tests
 add_executable(
@@ -115,12 +228,23 @@ target_include_directories(
 )
 
 # Discover tests
-include(GoogleTest)
 gtest_discover_tests(cron_test)
 gtest_discover_tests(wake_schedule_test)
 gtest_discover_tests(http_auth_test)
 gtest_discover_tests(network_backoff_test)
 gtest_discover_tests(crash_record_test)
+
+# Actual SDMMC backend against host fakes. This verifies board-selected 1/4-bit
+# wiring and the no-auto-format contract without mounting or modifying media.
+add_executable(sdcard_sdio_test
+  test_sdcard_sdio.cpp
+  ../components/sdcard/src/sdcard_sdio.c
+)
+target_include_directories(sdcard_sdio_test PRIVATE
+  sdcard_stubs stubs ../components/sdcard/include
+)
+target_link_libraries(sdcard_sdio_test GTest::gtest_main)
+gtest_discover_tests(sdcard_sdio_test)
 
 # On-device image pipeline characterization tests (host build of
 # main/image_processor.c against ESP-IDF stubs + system libpng)
@@ -214,6 +338,26 @@ target_include_directories(read_pico_board_test PRIVATE
 )
 target_link_libraries(read_pico_board_test GTest::gtest_main)
 gtest_discover_tests(read_pico_board_test)
+
+add_executable(read_pico_sd_test
+  test_read_pico_sd.cpp
+  ../components/board_hal/src/read_pico_sd.c
+  ../components/board_hal/src/read_pico_sd_command.c
+)
+target_include_directories(read_pico_sd_test PRIVATE
+  sdcard_stubs read_pico_stubs stubs
+  ../components/board_hal/include ../components/sdcard/include
+)
+target_link_libraries(read_pico_sd_test GTest::gtest_main)
+gtest_discover_tests(read_pico_sd_test)
+
+add_executable(sd_file_probe_test
+  test_sd_file_probe.cpp
+  ../main/sd_file_probe.c
+)
+target_include_directories(sd_file_probe_test PRIVATE ../main)
+target_link_libraries(sd_file_probe_test GTest::gtest_main)
+gtest_discover_tests(sd_file_probe_test)
 
 add_executable(read_pico_display_test
   test_read_pico_display.cpp

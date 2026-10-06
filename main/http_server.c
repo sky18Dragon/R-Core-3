@@ -978,7 +978,7 @@ static esp_err_t serve_image_handler(httpd_req_t *req)
         if (ext && strcasecmp(ext, ".jpg") == 0) {
             // Try .png fallback first
             char png_filename[256];
-            strncpy(png_filename, decoded_filename, sizeof(png_filename) - 1);
+            memcpy(png_filename, decoded_filename, strlen(decoded_filename) + 1);
             char *png_ext = strrchr(png_filename, '.');
             if (png_ext) {
                 strcpy(png_ext, ".png");
@@ -992,7 +992,7 @@ static esp_err_t serve_image_handler(httpd_req_t *req)
             } else {
                 // Try .bmp fallback
                 char bmp_filename[256];
-                strncpy(bmp_filename, decoded_filename, sizeof(bmp_filename) - 1);
+                memcpy(bmp_filename, decoded_filename, strlen(decoded_filename) + 1);
                 char *bmp_ext = strrchr(bmp_filename, '.');
                 if (bmp_ext) {
                     strcpy(bmp_ext, ".bmp");
@@ -2235,6 +2235,16 @@ static void restart_task(void *arg)
 
 static esp_err_t factory_reset_handler(httpd_req_t *req)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    // Demo/calibration namespaces have not been migrated. Never expose a
+    // whole-partition erase as a product reset on this board.
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, "501 Not Implemented");
+    httpd_resp_sendstr(req,
+                       "{\"status\":\"error\",\"message\":\"Read Pico reset requires a validated "
+                       "data migration policy; NVS preserved\"}");
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     ESP_LOGI(TAG, "Factory reset requested");
 
     // Erase all NVS data first
@@ -2260,6 +2270,7 @@ static esp_err_t factory_reset_handler(httpd_req_t *req)
     xTaskCreate(restart_task, "restart_task", 2048, NULL, 5, NULL);
 
     return ESP_OK;
+#endif
 }
 
 static esp_err_t display_calibration_handler(httpd_req_t *req)
