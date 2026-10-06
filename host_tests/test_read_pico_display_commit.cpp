@@ -336,10 +336,8 @@ TEST_F(DisplayCommit, SequentialWrapKeepsMaximumFittingFirstPathTerminated)
     EXPECT_EQ(calls, 1);
     EXPECT_EQ(last_index, 0);
     EXPECT_EQ(decoded_image, image);
-    // Existing metadata buffers have smaller limits; this test only checks
-    // that the 512-byte wrap path reaches decoding/link publication intact.
-    EXPECT_EQ(nvs_image, image.substr(0, 255));
-    EXPECT_EQ(display_manager_get_current_image(), image.substr(0, 63));
+    EXPECT_EQ(nvs_image, image);
+    EXPECT_EQ(display_manager_get_current_image(), image);
     EXPECT_EQ(link_contents(), image);
 }
 TEST_F(DisplayCommit, RandomFailureDoesNotSaveLastImage)
@@ -350,4 +348,53 @@ TEST_F(DisplayCommit, RandomFailureDoesNotSaveLastImage)
     EXPECT_EQ(display_manager_rotate_from_storage_checked(), ESP_FAIL);
     EXPECT_EQ(nvs_writes, 0);
     EXPECT_EQ(calls, 1);
+}
+
+TEST_F(DisplayCommit, OversizedFilePathIsRejectedBeforeDecodeRefreshOrPublish)
+{
+    publish();
+    int before = calls;
+    std::string path(DISPLAY_IMAGE_PATH_CAPACITY, 'x');
+    EXPECT_EQ(display_manager_show_image(path.c_str()), ESP_ERR_INVALID_SIZE);
+    EXPECT_EQ(calls, before);
+    EXPECT_TRUE(decoded_image.empty());
+    EXPECT_EQ(link_contents(), "previous.png");
+    EXPECT_STREQ(display_manager_get_current_image(), "previous.png");
+}
+
+TEST_F(DisplayCommit, EveryOversizedStreamPublicationPathIsRejectedBeforeRefresh)
+{
+    publish();
+    int before = calls;
+    std::string oversized(DISPLAY_IMAGE_PATH_CAPACITY, 'x');
+    display_publish_t invalid[] = {
+        {oversized.c_str(), nullptr, nullptr},
+        {"next.png", oversized.c_str(), "fallback.png"},
+        {"next.png", "pf_display_checked/new.epdgz", oversized.c_str()},
+    };
+    for (const auto &pub : invalid) {
+        ASSERT_EQ(display_manager_begin_rgb_stream(), ESP_OK);
+        EXPECT_EQ(display_manager_end_rgb_stream(true, &pub), ESP_ERR_INVALID_SIZE);
+        EXPECT_FALSE(display_manager_is_busy());
+        EXPECT_EQ(calls, before);
+        EXPECT_EQ(link_contents(), "previous.png");
+        EXPECT_STREQ(display_manager_get_current_image(), "previous.png");
+        EXPECT_FALSE(std::filesystem::exists("pf_display_checked/new.epdgz"));
+    }
+}
+
+TEST_F(DisplayCommit, MaximumStreamNameAndSnapshotFallbackAreNotTruncated)
+{
+    std::string name(DISPLAY_IMAGE_PATH_CAPACITY - 1, 'n');
+    ASSERT_EQ(display_manager_begin_rgb_stream(), ESP_OK);
+    display_publish_t pub = {name.c_str(), nullptr, nullptr};
+    ASSERT_EQ(display_manager_end_rgb_stream(true, &pub), ESP_OK);
+    EXPECT_EQ(display_manager_get_current_image(), name);
+    EXPECT_EQ(link_contents(), name);
+    std::string fallback(DISPLAY_IMAGE_PATH_CAPACITY - 1, 'f');
+    pub = {"next.png", "missing/snapshot.epdgz", fallback.c_str()};
+    ASSERT_EQ(display_manager_begin_rgb_stream(), ESP_OK);
+    EXPECT_EQ(display_manager_end_rgb_stream(true, &pub), ESP_ERR_NOT_FINISHED);
+    EXPECT_EQ(display_manager_get_current_image(), fallback);
+    EXPECT_EQ(link_contents(), fallback);
 }

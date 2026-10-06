@@ -52,6 +52,8 @@ read_pico_validation_command_t read_pico_validation_feed(read_pico_validation_re
                 {"gc16-gray16-labeled", READ_PICO_VALIDATION_DRAW_GRAY16_LABELED},
                 {"gc16-gray16-vendor", READ_PICO_VALIDATION_DRAW_GRAY16_VENDOR},
                 {"gc16-gray16-page", READ_PICO_VALIDATION_DRAW_GRAY16_PAGE},
+                {"gc16-gray16-labeled-continuous",
+                 READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS},
                 {"pattern-confirm", READ_PICO_VALIDATION_CONFIRM_PATTERN},
                 {"pattern-reject", READ_PICO_VALIDATION_REJECT_PATTERN},
             };
@@ -103,6 +105,16 @@ bool read_pico_validation_apply(read_pico_validation_session_t *session,
                session->state != READ_PICO_VALIDATION_STOPPED) {
         err = session->ops.stop(session->ops.context);
         next = READ_PICO_VALIDATION_STOPPED;
+    } else if (command == READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS &&
+               session->state == READ_PICO_VALIDATION_REFERENCE_KNOWN &&
+               session->ops.draw_white_then_labeled != NULL && session->drawn_mask == 0) {
+        read_pico_pattern_t pattern = READ_PICO_PATTERN_GRAY16_LABELED;
+        err = session->ops.draw_white_then_labeled(session->ops.context);
+        if (err == 0) {
+            session->drawn_mask |= 1u << pattern;
+            session->pending_pattern = pattern;
+        }
+        next = READ_PICO_VALIDATION_WAIT_PATTERN;
     } else if (command >= READ_PICO_VALIDATION_DRAW_WHITE &&
                command <= READ_PICO_VALIDATION_DRAW_GRAY16_PAGE &&
                session->state == READ_PICO_VALIDATION_REFERENCE_KNOWN &&

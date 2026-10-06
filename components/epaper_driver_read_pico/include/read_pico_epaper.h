@@ -19,6 +19,13 @@ read_pico_refresh_result_t read_pico_epaper_display_vendor_gray16(const uint8_t 
                                                                   size_t size);
 // First-boot clear has a void renderer API: it is not proof of a white physical screen.
 read_pico_refresh_result_t read_pico_epaper_display_vendor_page(const uint8_t *frame, size_t size);
+// Display-validation-only official power-condition control: two ordinary GC16 frames under one
+// rail-on interval. Requires a fresh manually confirmed reference and never waits for user input
+// while energized.
+read_pico_refresh_result_t read_pico_epaper_display_continuous_pair(const uint8_t *white_frame,
+                                                                    size_t white_size,
+                                                                    const uint8_t *target_frame,
+                                                                    size_t target_size);
 // Establish a reference only after the white clear is visually verified in this boot session.
 esp_err_t read_pico_epaper_clear_unverified(void);
 esp_err_t read_pico_epaper_confirm_white_reference(void);

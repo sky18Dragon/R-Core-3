@@ -4,9 +4,11 @@
 #include "e0470_epaper_waveform.h"
 #include "epaper.h"
 #include "epdiy.h"
+#include "esp_clk_tree.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_rom_gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -15,6 +17,7 @@
 #include "read_pico_epd_timing.h"
 #include "read_pico_sy_power.h"
 #include "soc/gpio_sig_map.h"
+#include "soc/clk_tree_defs.h"
 #include "sy7636a.h"
 
 #if CONFIG_READ_PICO_DISPLAY_VALIDATION
@@ -26,14 +29,81 @@
 #endif
 
 static const char *TAG = "epaper_read_pico";
+// Match the locked Read Pico operating point. The shared timing solver must
+// re-derive blanking and CKV from this value; do not change only the LCD clock.
+// Leading-skip remains disabled so this candidate changes one scan variable.
+#define READ_PICO_DISPLAY_PCLK_MHZ 18
 static StaticSemaphore_t display_mutex_storage;
 static SemaphoreHandle_t display_mutex;
 static read_pico_sy_handle_t sy;
 static EpdiyHighlevelState hl;
 static bool initialized, renderer_initialized, lease, rails, fault, reference_known, white_pending;
 static bool untouched_white;
+static esp_pm_lock_handle_t cpu_pm_lock, apb_pm_lock;
+static bool pm_locks_held;
 static esp_err_t callback_error;
 static int temperature_c;
+
+static void read_scan_clocks(uint32_t *cpu_hz, uint32_t *apb_hz)
+{
+    *cpu_hz = 0;
+    *apb_hz = 0;
+    (void) esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_CPU,
+                                        ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, cpu_hz);
+    (void) esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_APB,
+                                        ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, apb_hz);
+}
+
+static esp_err_t hold_scan_clocks(void)
+{
+    if (pm_locks_held || cpu_pm_lock == NULL || apb_pm_lock == NULL)
+        return ESP_ERR_INVALID_STATE;
+    uint32_t cpu_before_hz, apb_before_hz;
+    read_scan_clocks(&cpu_before_hz, &apb_before_hz);
+    esp_err_t err = esp_pm_lock_acquire(cpu_pm_lock);
+    if (err != ESP_OK)
+        return err;
+    err = esp_pm_lock_acquire(apb_pm_lock);
+    if (err != ESP_OK) {
+        (void) esp_pm_lock_release(cpu_pm_lock);
+        return err;
+    }
+    pm_locks_held = true;
+    uint32_t cpu_after_hz, apb_after_hz;
+    read_scan_clocks(&cpu_after_hz, &apb_after_hz);
+    ESP_LOGI(TAG, "scan clock lock: CPU %u->%u MHz APB %u->%u MHz",
+             (unsigned) (cpu_before_hz / 1000000), (unsigned) (cpu_after_hz / 1000000),
+             (unsigned) (apb_before_hz / 1000000), (unsigned) (apb_after_hz / 1000000));
+    return ESP_OK;
+}
+
+static esp_err_t release_scan_clocks(void)
+{
+    if (!pm_locks_held)
+        return ESP_OK;
+    esp_err_t err = esp_pm_lock_release(apb_pm_lock);
+    esp_err_t cpu_err = esp_pm_lock_release(cpu_pm_lock);
+    pm_locks_held = false;
+    return err != ESP_OK ? err : cpu_err;
+}
+
+static esp_err_t delete_scan_locks(void)
+{
+    if (pm_locks_held)
+        return ESP_ERR_INVALID_STATE;
+    esp_err_t err = ESP_OK;
+    if (apb_pm_lock != NULL) {
+        err = esp_pm_lock_delete(apb_pm_lock);
+        if (err == ESP_OK)
+            apb_pm_lock = NULL;
+    }
+    if (err == ESP_OK && cpu_pm_lock != NULL) {
+        err = esp_pm_lock_delete(cpu_pm_lock);
+        if (err == ESP_OK)
+            cpu_pm_lock = NULL;
+    }
+    return err;
+}
 
 static void capture(esp_err_t err)
 {
@@ -83,7 +153,7 @@ static void board_init(uint32_t row_width)
         return;
     }
     read_pico_epd_scan_t scan;
-    read_pico_epd_scan(12, READ_PICO_EPD_SCAN_FULL, &scan);
+    read_pico_epd_scan(READ_PICO_DISPLAY_PCLK_MHZ, READ_PICO_EPD_SCAN_FULL, &scan);
     read_pico_epd_init_lcd(&lcd_bus, 16, 1216, 684, &scan);
 }
 static void board_deinit(void)
@@ -183,6 +253,9 @@ static int prepare(void *context, int vcom_mv)
     if (!initialized || fault || !reference_known || sy == NULL ||
         read_pico_sy_get_vcom(sy) != vcom_mv)
         return ESP_ERR_INVALID_STATE;
+    esp_err_t lock_err = hold_scan_clocks();
+    if (lock_err != ESP_OK)
+        return lock_err;
     callback_error = ESP_OK;
     epd_poweron();
     int pg = (callback_error == ESP_OK && rails) ? pgood() : -1;
@@ -271,7 +344,9 @@ static int read_active_temperature(void *context, int *temperature)
 static int stop(void *context)
 {
     (void) context;
-    return stop_rails();
+    esp_err_t err = stop_rails();
+    esp_err_t unlock_err = release_scan_clocks();
+    return err != ESP_OK ? err : unlock_err;
 }
 static const read_pico_refresh_ops_t ops = {
     .try_acquire = acquire,
@@ -352,6 +427,12 @@ esp_err_t read_pico_epaper_init(bool authorized)
     err = read_pico_sy_init(bus, pmu.vcom_mv, set_en, set_vcom_en, pgood, &sy);
     if (err != ESP_OK)
         goto fail;
+    err = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "read_pico_epd_cpu", &cpu_pm_lock);
+    if (err != ESP_OK)
+        goto fail;
+    err = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "read_pico_epd_apb", &apb_pm_lock);
+    if (err != ESP_OK)
+        goto fail;
     err = allocate_buffers();
     if (err != ESP_OK)
         goto fail;
@@ -364,7 +445,7 @@ esp_err_t read_pico_epaper_init(bool authorized)
     e0470_waveform_init();
     epd_init(&board, &E0470_DISPLAY, EPD_LUT_1K);
     renderer_initialized = true;
-    read_pico_epd_set_pclk(12);
+    read_pico_epd_set_pclk(READ_PICO_DISPLAY_PCLK_MHZ);
     epd_set_rotation(EPD_ROT_LANDSCAPE);
     epd_set_leading_skip(false);
     if (callback_error != ESP_OK) {
@@ -382,8 +463,11 @@ fail:
         if (cleanup == ESP_OK) {
             cleanup = read_pico_sy_deinit(&sy);
             if (cleanup == ESP_OK) {
-                free_buffers();
-                (void) release_lease();
+                cleanup = delete_scan_locks();
+                if (cleanup == ESP_OK) {
+                    free_buffers();
+                    (void) release_lease();
+                }
             } else
                 fault = true;
         } else {
@@ -405,15 +489,19 @@ static void keep_lock(void *unused)
     (void) unused;
 }
 
-static read_pico_refresh_result_t display_frame(const uint8_t *frame, size_t size,
-                                                unsigned vendor_gray16)
+static read_pico_refresh_result_t display_frames(const uint8_t *frame, size_t size,
+                                                 const uint8_t *second_frame, size_t second_size,
+                                                 unsigned vendor_gray16)
 {
     read_pico_refresh_result_t failed = {.error = READ_PICO_REFRESH_GATE_CLOSED};
-    if (frame == NULL || size != READ_PICO_FRAME_BYTES) {
+    if (frame == NULL || size != READ_PICO_FRAME_BYTES ||
+        (second_frame != NULL && second_size != READ_PICO_FRAME_BYTES)) {
         failed.error = READ_PICO_REFRESH_BAD_FRAME;
-        failed.frame_error = frame == NULL                  ? READ_PICO_FRAME_INVALID_ARGUMENT
-                             : size < READ_PICO_FRAME_BYTES ? READ_PICO_FRAME_BUFFER_TOO_SMALL
-                                                            : READ_PICO_FRAME_INVALID_ARGUMENT;
+        size_t bad_size = size != READ_PICO_FRAME_BYTES ? size : second_size;
+        failed.frame_error = frame == NULL || (second_frame == NULL && second_size != 0)
+                                 ? READ_PICO_FRAME_INVALID_ARGUMENT
+                             : bad_size < READ_PICO_FRAME_BYTES ? READ_PICO_FRAME_BUFFER_TOO_SMALL
+                                                                : READ_PICO_FRAME_INVALID_ARGUMENT;
         return failed;
     }
     if (!acquire(NULL)) {
@@ -466,7 +554,11 @@ static read_pico_refresh_result_t display_frame(const uint8_t *frame, size_t siz
         locked_ops.draw_gc16 = vendor_gray16 == 2 ? draw_vendor_page : draw_vendor_gc16;
 #endif
     read_pico_refresh_result_t result =
-        read_pico_refresh_gc16(&locked_ops, gate, frame, size, hl.front_fb, READ_PICO_FRAME_BYTES);
+        second_frame == NULL
+            ? read_pico_refresh_gc16(&locked_ops, gate, frame, size, hl.front_fb,
+                                     READ_PICO_FRAME_BYTES)
+            : read_pico_refresh_gc16_pair(&locked_ops, gate, frame, size, second_frame, second_size,
+                                          hl.front_fb, READ_PICO_FRAME_BYTES);
     if (result.error == READ_PICO_REFRESH_TEMPERATURE_FAILED || result.operation_error ||
         result.cleanup_error) {
         fault = true;
@@ -478,16 +570,28 @@ static read_pico_refresh_result_t display_frame(const uint8_t *frame, size_t siz
 }
 read_pico_refresh_result_t read_pico_epaper_display(const uint8_t *frame, size_t size)
 {
-    return display_frame(frame, size, false);
+    return display_frames(frame, size, NULL, 0, false);
 }
 #if CONFIG_READ_PICO_DISPLAY_VALIDATION
 read_pico_refresh_result_t read_pico_epaper_display_vendor_gray16(const uint8_t *frame, size_t size)
 {
-    return display_frame(frame, size, true);
+    return display_frames(frame, size, NULL, 0, true);
 }
 read_pico_refresh_result_t read_pico_epaper_display_vendor_page(const uint8_t *frame, size_t size)
 {
-    return display_frame(frame, size, 2);
+    return display_frames(frame, size, NULL, 0, 2);
+}
+read_pico_refresh_result_t read_pico_epaper_display_continuous_pair(const uint8_t *white_frame,
+                                                                    size_t white_size,
+                                                                    const uint8_t *target_frame,
+                                                                    size_t target_size)
+{
+    if (target_frame == NULL) {
+        read_pico_refresh_result_t failed = {.error = READ_PICO_REFRESH_BAD_FRAME,
+                                             .frame_error = READ_PICO_FRAME_INVALID_ARGUMENT};
+        return failed;
+    }
+    return display_frames(white_frame, white_size, target_frame, target_size, false);
 }
 #endif
 
@@ -497,6 +601,9 @@ esp_err_t read_pico_epaper_clear_unverified(void)
         return ESP_ERR_TIMEOUT;
     esp_err_t err = ESP_ERR_INVALID_STATE;
     if (initialized && !fault) {
+        err = hold_scan_clocks();
+        if (err != ESP_OK)
+            goto clear_done;
         callback_error = ESP_OK;
         reference_known = false;
         white_pending = false;
@@ -518,10 +625,14 @@ esp_err_t read_pico_epaper_clear_unverified(void)
         esp_err_t cleanup = stop_rails();
         if (err == ESP_OK)
             err = cleanup;
+        cleanup = release_scan_clocks();
+        if (err == ESP_OK)
+            err = cleanup;
         white_pending = err == ESP_OK;
         if (err != ESP_OK)
             fault = true;
     }
+clear_done:
     release(NULL);
     return err;
 }
@@ -550,6 +661,9 @@ esp_err_t read_pico_epaper_deinit(void)
     if (lease) {
         callback_error = ESP_OK;
         err = stop_rails();
+        esp_err_t unlock_err = release_scan_clocks();
+        if (err == ESP_OK)
+            err = unlock_err;
         if (err == ESP_OK && renderer_initialized) {
             epd_deinit();
             renderer_initialized = false;
@@ -557,6 +671,8 @@ esp_err_t read_pico_epaper_deinit(void)
         }
         if (err == ESP_OK) {
             err = read_pico_sy_deinit(&sy);
+            if (err == ESP_OK)
+                err = delete_scan_locks();
             if (err == ESP_OK) {
                 free_buffers();
                 err = release_lease();

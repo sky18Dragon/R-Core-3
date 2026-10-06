@@ -48,6 +48,9 @@ typedef struct {
     read_pico_frame_error_t frame_error;
     int operation_error;
     int cleanup_error;
+    // Number of GC16 frames whose draw callback returned success before cleanup.
+    // One for read_pico_refresh_gc16; zero to two for the continuous pair API.
+    unsigned frames_completed;
     // True only if GC16 AND cleanup succeeded. Never substitute this for real-screen QA.
     bool completed;
 } read_pico_refresh_result_t;
@@ -59,6 +62,14 @@ read_pico_refresh_result_t read_pico_refresh_gc16(const read_pico_refresh_ops_t 
                                                   read_pico_refresh_gate_t gate,
                                                   const uint8_t *source, size_t source_size,
                                                   uint8_t *scratch, size_t scratch_size);
+
+// Synchronous two-frame transaction under one lock, one prepare/active-temperature sample,
+// and one stop. Both inputs are fully validated before prepare. The second draw starts only
+// after the first succeeds; any failure still invokes stop before releasing ownership.
+read_pico_refresh_result_t read_pico_refresh_gc16_pair(
+    const read_pico_refresh_ops_t *ops, read_pico_refresh_gate_t gate, const uint8_t *first_source,
+    size_t first_size, const uint8_t *second_source, size_t second_size, uint8_t *scratch,
+    size_t scratch_size);
 
 #ifdef __cplusplus
 }

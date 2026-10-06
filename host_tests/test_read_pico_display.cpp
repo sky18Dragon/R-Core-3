@@ -244,9 +244,10 @@ struct Transport {
                                     EXPECT_EQ(size, READ_PICO_FRAME_BYTES);
                                     EXPECT_EQ(temperature, t.expected_temperature);
                                     t.calls.push_back(3);
+                                    int error = t.draw_error;
                                     if (t.on_draw)
                                         t.on_draw();
-                                    return t.draw_error;
+                                    return error;
                                 },
                                 [](void *p) {
                                     auto &t = *static_cast<Transport *>(p);
@@ -292,8 +293,48 @@ TEST_F(ReadPicoRefresh, SuccessRequiresDrawAndCleanupUnderOneLock)
     auto result = Run();
     EXPECT_EQ(result.error, READ_PICO_REFRESH_OK);
     EXPECT_TRUE(result.completed);
+    EXPECT_EQ(result.frames_completed, 1u);
     EXPECT_EQ(transport.calls, (std::vector<int>{1, 2, 3, 4, 5}));
     EXPECT_EQ(source, original);
+}
+
+TEST_F(ReadPicoRefresh, ContinuousPairUsesOnePrepareTemperatureAndStop)
+{
+    transport.active_sensor();
+    auto result =
+        read_pico_refresh_gc16_pair(&transport.ops, gate, source.data(), source.size(),
+                                    source.data(), source.size(), scratch.data(), scratch.size());
+    EXPECT_EQ(result.error, READ_PICO_REFRESH_OK);
+    EXPECT_TRUE(result.completed);
+    EXPECT_EQ(result.frames_completed, 2u);
+    EXPECT_EQ(transport.calls, (std::vector<int>{1, 2, 6, 3, 3, 4, 5}));
+}
+
+TEST_F(ReadPicoRefresh, InvalidSecondFrameNeverPreparesOrDraws)
+{
+    auto result = read_pico_refresh_gc16_pair(&transport.ops, gate, source.data(), source.size(),
+                                              source.data(), source.size() - 1, scratch.data(),
+                                              scratch.size());
+    EXPECT_EQ(result.error, READ_PICO_REFRESH_BAD_FRAME);
+    EXPECT_EQ(result.frames_completed, 0u);
+    EXPECT_EQ(transport.calls, (std::vector<int>{1, 5}));
+}
+
+TEST_F(ReadPicoRefresh, SecondDrawFailureStillStopsAndReportsOneCompletedFrame)
+{
+    int draws = 0;
+    transport.on_draw = [this, &draws]() {
+        if (++draws == 1)
+            transport.draw_error = 23;
+    };
+    auto result =
+        read_pico_refresh_gc16_pair(&transport.ops, gate, source.data(), source.size(),
+                                    source.data(), source.size(), scratch.data(), scratch.size());
+    EXPECT_EQ(result.error, READ_PICO_REFRESH_DRAW_FAILED);
+    EXPECT_EQ(result.operation_error, 23);
+    EXPECT_EQ(result.frames_completed, 1u);
+    EXPECT_FALSE(result.completed);
+    EXPECT_EQ(transport.calls, (std::vector<int>{1, 2, 3, 3, 4, 5}));
 }
 
 TEST_F(ReadPicoRefresh, BusyDoesNotTouchBuffersOrHardware)

@@ -51,11 +51,13 @@ class FakePort:
 
 
 class ConsoleTest(unittest.TestCase):
-    def run_console(self, text="", reset=False, port=None):
+    def run_console(self, text="", reset=False, port=None, profile=None):
         port = port or FakePort()
         reset_action = Mock()
         constructor = Mock(return_value=port)
         argv = ["console", "--port", "fake-port"] + (["--reset"] if reset else [])
+        if profile is not None:
+            argv += ["--profile", profile]
         reset_module = types.SimpleNamespace(HardReset=reset_action)
         with patch.object(console.serial, "Serial", constructor), \
                 patch.object(sys, "argv", argv), \
@@ -73,7 +75,8 @@ class ConsoleTest(unittest.TestCase):
         self.assertEqual(console.COMMANDS, {
             "clear-white", "white-confirm", "stop", "status", "gc16-white", "gc16-black",
             "gc16-midgray", "gc16-gray16", "gc16-parity", "gc16-corners",
-            "gc16-gray16-labeled", "gc16-gray16-vendor", "gc16-gray16-page", "pattern-confirm", "pattern-reject"})
+            "gc16-gray16-labeled", "gc16-gray16-vendor", "gc16-gray16-page",
+            "gc16-gray16-labeled-continuous", "pattern-confirm", "pattern-reject"})
 
     def test_eof_never_sends_or_resets(self):
         result, port, reset = self.run_console()
@@ -128,6 +131,77 @@ class ConsoleTest(unittest.TestCase):
         reset.assert_called_once_with(port, uses_usb=True)
         reset.return_value.reset.assert_called_once_with()
         self.assertEqual(port.writes, [])
+
+    def test_storage_profile_has_only_explicit_commands_and_no_auto_command(self):
+        self.assertEqual(console.STORAGE_COMMANDS, {"status", "mount", "file-test", "file-check", "photo-check", "stop"})
+        result, port, reset = self.run_console(profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [])
+        reset.assert_not_called()
+        result, port, _ = self.run_console("status\nmount\nfile-test\nfile-check\nphoto-check\nstop\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"status\n", b"mount\n", b"file-test\n", b"file-check\n", b"photo-check\n", b"stop\n"])
+
+    def test_storage_profile_rejects_display_format_prefix_and_control(self):
+        result, port, _ = self.run_console(
+            "clear-white\nwhite-confirm\ngc16-gray16\nformat\n mount\nmount x\n"
+            "mount\x00\nmount\t\nstatus\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"status\n"])
+        result, port, _ = self.run_console("mount\nfile-test\nfile-check\nphoto-check\n", profile="display")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [])
+
+    def test_file_test_path_prefix_controls_and_auto_retry_are_rejected(self):
+        result, port, _ = self.run_console(
+            "file-test /storage/a\nfile-test;stop\nFILE-TEST\nfile-test\x00\n"
+            "file-test\t\n file-test\nfile-test\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"file-test\n"])
+
+    def test_storage_partial_write_is_not_retried(self):
+        port = FakePort()
+        port.partial = True
+        result, port, _ = self.run_console("mount\nstop\n", port=port, profile="storage")
+        self.assertEqual(result, 1)
+        self.assertEqual(port.writes, [b"mount\n"])
+        self.assertTrue(port.closed)
+
+    def test_file_check_only_exact_command_no_paths_or_control_characters(self):
+        result, port, reset = self.run_console(
+            "file-check /storage/a\nfile-check;stop\nFILE-CHECK\nfile-check\x00\n"
+            "file-check\t\n file-check\nfile-check\r\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"file-check\n"])
+        reset.assert_not_called()
+
+
+    def test_photo_check_only_exact_command_no_paths_or_control_characters(self):
+        result, port, reset = self.run_console(
+            "photo-check /storage/a\nphoto-check;stop\nPHOTO-CHECK\nphoto-check\x00\n"
+            "photo-check\t\n photo-check\nphoto-check\r\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"photo-check\n"])
+        reset.assert_not_called()
+
+
+    def test_photo_profile_is_exact_and_eof_sends_nothing(self):
+        expected = {"status", "mount", "clear-white", "white-confirm", "photo-show", "photo-confirm", "photo-reject", "stop"}
+        self.assertEqual(console.PHOTO_COMMANDS, expected)
+        result, port, reset = self.run_console(profile="photo")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [])
+        reset.assert_not_called()
+        result, port, reset = self.run_console("\n".join(sorted(expected)) + "\n", profile="photo")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [(x + "\n").encode() for x in sorted(expected)])
+        reset.assert_not_called()
+
+    def test_photo_profile_rejects_other_profiles_paths_and_control(self):
+        result, port, _ = self.run_console("file-test\nphoto-check\ngc16-gray16\nphoto-show x\n"
+                            "photo-show\t\nphoto-show\x00\n/photo.jpg\n photo-show\nPHOTO-SHOW\nstatus\n", profile="photo")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"status\n"])
 
 
 if __name__ == "__main__":
