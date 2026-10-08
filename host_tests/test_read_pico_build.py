@@ -14,6 +14,132 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ReadPicoBuildTests(unittest.TestCase):
+    def test_request_config_snapshot_and_header_confirmation_precede_http_perform(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        download = source[source.index('static esp_err_t fetch_perform_download('):source.index('static esp_err_t fetch_perform_download(') + 21000]
+        self.assertLess(download.index('request_config_capture(&request_config)'), download.index('for (int retry'))
+        self.assertLess(download.index('request_config_capture(&request_config)'), download.index('read_pico_upload_begin('))
+        checked = download[download.index('request_header_ops_t header_ops'):download.index('err = esp_http_client_perform(client)')]
+        self.assertIn('request_config_set_headers(&request_config, &header_ops)', checked)
+        self.assertIn('esp_http_client_cleanup(client)', checked)
+        self.assertIn('upload_file_abort(owner)', checked)
+        self.assertIn('break;', checked)
+        self.assertLess(download.index('request_config_set_headers('), download.index('esp_http_client_perform('))
+        self.assertEqual(download.count('request_config_capture('), 1)
+        self.assertEqual(download.count('request_config_release(&request_config)'), 3)
+        core = (ROOT / 'main/request_config.c').read_text()
+        self.assertIn('config_apply_run(capture, out)', core)
+        self.assertNotIn('_get_defaults(', core)
+        self.assertLess(core.index('color_palette_load(&palette)'), core.index('processing_settings_to_json('))
+        self.assertIn('strcmp(readback, value)', core)
+        self.assertIn('ops->remove(ops->context, key)', core)
+        cmake = (ROOT / 'host_tests/CMakeLists.txt').read_text()
+        self.assertIn('Header tests require reviewed fixed SDK source/headers', cmake)
+
+    def test_all_initial_download_and_thumbnail_headers_stop_on_error(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        download = source[source.index('static esp_err_t fetch_perform_download('):source.index('// Fetch the server-provided thumbnail')]
+        for key in ('Authorization', 'X-Display-Width', 'X-Display-Height', 'X-Display-Orientation', 'X-Firmware-Version', 'If-None-Match', 'X-Battery-Percentage'):
+            self.assertIn(f'FETCH_HEADER("{key}"', download)
+        self.assertIn('FETCH_HEADER(header_key, header_value)', download)
+        self.assertIn('if (header_error == ESP_OK)', download)
+        check = download[download.index('if (header_error != ESP_OK)'):download.index('err = esp_http_client_perform(client)')]
+        self.assertIn('upload_file_abort(owner)', check)
+        self.assertIn('break;', check)
+        thumbnail = source[source.index('static bool fetch_download_thumbnail('):source.index('static bool fetch_download_thumbnail(') + 7500]
+        self.assertIn('fetch_put_header(thumb_client, "Authorization", thumb_auth)', thumbnail)
+        self.assertIn('fetch_put_header(thumb_client, thumb_hk, thumb_hv)', thumbnail)
+        guard = thumbnail[thumbnail.index('if (header_error != ESP_OK)'):thumbnail.index('esp_err_t thumb_err = esp_http_client_perform')]
+        self.assertIn('upload_file_abort(owner)', guard)
+        self.assertIn('return false;', guard)
+
+    def test_image_options_checked_reads_precede_publication_and_streams(self):
+        settings = (ROOT / 'main/processing_settings.c').read_text()
+        checked = settings[settings.index('static esp_err_t copy_options('):settings.index('dither_algorithm_t processing_settings_get_dithering_algorithm')]
+        self.assertIn('config_apply_run(copy_options, out)', checked)
+        self.assertIn('if (err != ESP_OK) return err;', checked)
+        self.assertNotIn('processing_settings_get_defaults(', checked)
+        self.assertLess(checked.index('processing_settings_load(&settings)'), checked.index('*(processing_options_t *)context = candidate'))
+        http = (ROOT / 'main/http_server.c').read_text()
+        display = http[http.index('static esp_err_t display_received_image('):http.index('static esp_err_t display_received_image(') + 1900]
+        self.assertLess(display.index('processing_settings_copy_options(&options)'), display.index('display_flow_present_asset('))
+        self.assertIn('return response == ESP_OK ? err : response;', display)
+        utils = (ROOT / 'main/utils.c').read_text()
+        owned = utils[utils.index('static esp_err_t fetch_present_owned('):utils.index('esp_err_t fetch_and_display_image_from_url(')]
+        self.assertLess(owned.index('processing_settings_copy_options(&options)'), owned.index('display_flow_publish_asset('))
+        self.assertNotIn('processing_settings_get_dithering_algorithm()', owned)
+        image = (ROOT / 'main/image_processor.c').read_text()
+        memory = image[image.index('esp_err_t image_processor_process_to_display('):image.index('esp_err_t image_processor_process_jpeg_file_to_display(')]
+        self.assertLess(memory.index('processing_settings_copy_options(&options)'), memory.index('display_manager_begin_rgb_stream()'))
+        file = image[image.index('esp_err_t image_processor_process(const char *'):image.index('esp_err_t image_processor_process(const char *') + 8000]
+        self.assertLess(file.index('processing_settings_copy_options(&options)'), file.index('png_writer_open('))
+        bridge = (ROOT / 'main/read_pico_photo_bridge.c').read_text()
+        self.assertIn('esp_err_t processing_settings_copy_options(', bridge)
+        self.assertNotIn('processing_settings_load(', bridge)
+        self.assertNotIn('config_apply_run(', bridge)
+
+    def test_checked_name_and_network_json_stop_before_unconfirmed_side_effects(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        name = source[source.index('item = cJSON_GetObjectItem(root, "device_name")'):source.index('// Only the shape')]
+        self.assertIn('config_manager_apply_device_name_checked(new_name, &operations, &result)', name)
+        self.assertIn('result.name_accepted ?', name)
+        self.assertIn('return name_error;', name)
+        self.assertIn('return mdns_service_update_hostname_named(name)', source)
+        self.assertIn('return wifi_manager_update_hostname_named(name)', source)
+        start = source.index('wifi_network_t network_patch;')
+        network = source[start:source.index('#else', start)]
+        self.assertIn('wifi_network_json_patch(root,', network)
+        self.assertIn('config_manager_patch_network_checked(network_fields, &network_patch)', network)
+        self.assertIn('return network_error;', network)
+        self.assertNotIn('config_manager_set_static_', network)
+
+    def test_name_and_network_consumers_copy_before_json_or_sdk_work(self):
+        source = (ROOT / 'main/http_server.c').read_text()
+        start = source.index('static esp_err_t config_handler(httpd_req_t *req)')
+        block = source[start:source.index('cJSON *root = cJSON_CreateObject();', start)]
+        self.assertIn('config_manager_copy_device_name(', block)
+        self.assertIn('config_manager_copy_network(', block)
+        mdns = (ROOT / 'main/mdns_service.c').read_text()
+        start = mdns.index('esp_err_t mdns_service_update_hostname(void)')
+        block = mdns[start:]
+        self.assertLess(block.index('config_manager_copy_device_name('), block.index('mdns_free();'))
+        self.assertIn('mdns_register_services(name)', block)
+        for path in ('main.c', 'ha_integration.c'):
+            self.assertIn('config_manager_copy_device_name(', (ROOT / 'main' / path).read_text())
+
+    def test_general_config_adapter_serializes_all_returns_and_busy_does_not_consume_errors(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        start = source.index('esp_err_t apply_config_from_json(cJSON *root, bool from_remote)')
+        block = source[start:source.index('typedef struct {', start)]
+        self.assertIn('if (!cJSON_IsObject(root)) return ESP_ERR_INVALID_ARG', block)
+        self.assertIn('return config_apply_run(apply_general_request, &request)', block)
+        self.assertIn('return apply_config_values(root, from_remote)', block)
+        http = (ROOT / 'main/http_server.c').read_text()
+        start = http.index('if (apply_result == ESP_ERR_INVALID_STATE && !outcome.state.entered)')
+        busy = http[start:http.index('#endif', start)]
+        self.assertIn('HTTPD_503', busy)
+        self.assertNotIn('utils_consume_', busy)
+
+    def test_all_configuration_mutations_hold_control_through_revision_and_own_local_errors(self):
+        utils = (ROOT / 'main/utils.c').read_text()
+        local = utils[utils.index('static esp_err_t apply_local_values'):utils.index('// Context for HTTP event handler')]
+        self.assertIn('memcpy(request->result->config_error, last_config_error', local)
+        self.assertIn('memcpy(request->result->cert_error, last_cert_pin_error', local)
+        self.assertIn('config_apply_transaction(apply_local_values, finish_local_config', local)
+        self.assertIn('return config_manager_touch_config_checked()', local)
+        remote = utils[utils.index('static esp_err_t apply_remote_group'):utils.index('#else\nstatic void fetch_apply_remote_config')]
+        self.assertIn('config_apply_run(apply_remote_request, &request)', remote)
+        self.assertNotIn('apply_config_from_json(', remote)
+        http = (ROOT / 'main/http_server.c').read_text()
+        self.assertIn('apply_local_config_checked(root, &outcome)', http)
+        self.assertIn('const char *message = outcome.config_error[0]', http)
+        self.assertIn('return sent == ESP_OK ? apply_result : sent', http)
+        self.assertIn('if (!json_str) return ESP_ERR_NO_MEM', http)
+        self.assertIn('if (outcome.state.applied && !outcome.state.finished)', http)
+        self.assertIn('if (request.entered) return error;', http)
+        for name in ('processing_settings', 'color_palette'):
+            self.assertIn(f'return run_http_config_guarded(req, {name}_handler_values)', http)
+
     def test_board_geometry_and_target(self):
         boards = json.loads((ROOT / "boards/boards.json").read_text())
         board = next(item for item in boards if item["id"] == "read_pico")
@@ -117,6 +243,48 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertIn('CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION=n',
                       (ROOT / "boards/sdkconfig.defaults.read_pico").read_text())
 
+    def test_read_pico_file_lifetime_wrappers_are_isolated_to_sd_profiles(self):
+        cmake = (ROOT / "components/board_hal/CMakeLists.txt").read_text()
+        calls = re.search(r'foreach\(FS_CALL ([^)]+)\)', cmake).group(1).split()
+        self.assertEqual(set(calls), {'fopen', 'fdopen', 'fclose', 'open', 'close',
+                                     'opendir', 'closedir', 'stat', 'mkdir', 'unlink', 'rename'})
+        guard = cmake[cmake.rindex('if(CONFIG_BOARD_DRIVER_READ_PICO AND'):]
+        for profile in ('CONFIG_READ_PICO_STORAGE_VALIDATION',
+                        'CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION',
+                        'CONFIG_READ_PICO_PHOTO_VALIDATION'):
+            self.assertIn(profile, guard)
+        self.assertNotIn('CONFIG_READ_PICO_DISPLAY_VALIDATION', guard)
+        self.assertIn('target_link_options(${COMPONENT_LIB} INTERFACE', guard)
+        self.assertIn('src/read_pico_fs.c', cmake)
+
+    def test_read_pico_snapshot_refuses_overwrite_and_keeps_uncertain_output(self):
+        source = (ROOT / "main/display_manager.c").read_text()
+        snapshot = source[source.index('static esp_err_t display_save_frame_epdgz('):
+                          source.index('esp_err_t display_manager_push_rgb_column(')]
+        self.assertIn('read_pico_upload_begin(&snapshot', snapshot)
+        self.assertIn('upload_file_finish(&snapshot, snapshot.bytes)', snapshot)
+        self.assertIn('upload_file_publish(&snapshot, snapshot.source, path)', snapshot)
+        self.assertIn('upload_file_abort(&snapshot)', snapshot)
+        adapter = (ROOT / 'main/read_pico_upload.c').read_text()
+        self.assertIn('O_WRONLY | O_CREAT | O_EXCL', adapter)
+        self.assertIn('return fsync(fd)', adapter)
+        self.assertIn('read_pico_sd_note_file_close_failure()', adapter)
+        self.assertIn('read_pico_sd_get_status(&status)', snapshot)
+        self.assertRegex(snapshot, r'#if !CONFIG_BOARD_DRIVER_READ_PICO\s+unlink\(path\);')
+
+    def test_read_only_file_check_observes_handle_lease_without_new_io_capabilities(self):
+        source = (ROOT / "main/read_pico_storage_validation.c").read_text()
+        check = source[source.index('static void run_file_check('):
+                       source.index('typedef struct { probe_context_t errors;')]
+        self.assertIn('.verify_lease = true', check)
+        self.assertIn('sd_file_probe_check(session, &io)', check)
+        for unsafe in ('probe_open_new', 'probe_write', 'probe_sync', 'sdcard_deinit(',
+                       'read_pico_sd_unmount(', 'unlink(', 'rename('):
+            self.assertNotIn(unsafe, check)
+        self.assertIn('status.active_io == 1', source)
+        self.assertIn('status.active_io == 0', source)
+        self.assertIn('open(SD_FILE_PROBE_PATH, O_RDONLY)', source)
+
     def test_read_pico_business_nvs_and_sleep_fail_closed(self):
         main = (ROOT / "main/main.c").read_text()
         startup = main[main.index('void app_main(void)'):]
@@ -154,8 +322,595 @@ class ReadPicoBuildTests(unittest.TestCase):
                        'memfs', 'littlefs', 'nvs_flash_erase('):
             self.assertNotIn(unsafe, read_pico)
         self.assertIn('ESP_ERROR_CHECK(storage_init());', legacy)
+        self.assertLess(startup.index('config_manager_init()'), startup.index('storage_start != ESP_OK'))
         self.assertLess(startup.index('storage_start != ESP_OK'),
-                        startup.index('config_manager_init()'))
+                        startup.index('ESP_ERROR_CHECK(config_manager_init())')) # Legacy order is unchanged.
+
+    def test_config_read_failure_stops_before_network_and_never_panics_into_repair(self):
+        source = (ROOT / "main/main.c").read_text()
+        startup = source[source.index('void app_main(void)'):]
+        start = startup.index('esp_err_t config_start = config_manager_init();')
+        protected = startup[start:startup.index('#endif', start)]
+        self.assertIn('if (config_start != ESP_OK)', protected)
+        self.assertLess(startup.index('if (config_start != ESP_OK)'), startup.index('board_hal_init('))
+        self.assertLess(startup.index('if (config_start != ESP_OK)'), startup.index('storage_init('))
+        self.assertIn('return;', protected)
+        for unsafe in ('ESP_ERROR_CHECK', 'esp_restart(', 'nvs_erase', 'storage_format(',
+                       'wifi_manager_init(', 'display_manager_init(', 'board_hal_init(', 'storage_init('):
+            self.assertNotIn(unsafe, protected)
+        config = (ROOT / "main/config_manager.c").read_text()
+        self.assertIn('cron_load_from_joined(rule); // Preview in RAM', config)
+        self.assertRegex(config, r'#if !CONFIG_BOARD_DRIVER_READ_PICO\s+\{\s+nvs_handle_t erase_handle;')
+        self.assertIn('return guard.error;', config)
+        self.assertIn('config_read_string(g, err, out, capacity, *size)', config)
+
+    def test_read_pico_ota_is_report_only_not_a_migration_shortcut(self):
+        source = (ROOT / "main/ota_manager.c").read_text()
+        start = source.index('#if CONFIG_BOARD_DRIVER_READ_PICO', source.index('esp_err_t ota_manager_init'))
+        guarded = source[start:source.index('#else', start)]
+        self.assertIn('ota_status.state = OTA_STATE_ERROR;', guarded)
+        self.assertIn('return ESP_OK;', guarded)
+        for unsafe in ('esp_https_ota_begin(', 'ota_load_status_from_nvs(', 'periodic_tasks_register(',
+                       'esp_ota_mark_app_valid_cancel_rollback(', 'xTaskCreate('):
+            self.assertNotIn(unsafe, guarded)
+        for function in ('ota_check_for_update', 'ota_start_update'):
+            start = source.index('#if CONFIG_BOARD_DRIVER_READ_PICO', source.index('esp_err_t ' + function))
+            self.assertIn('return ESP_ERR_NOT_SUPPORTED;', source[start:source.index('#else', start)])
+        entry = (ROOT / 'main/read_pico_integration_entry.c').read_text()
+        self.assertNotIn('product_entry();', entry)
+        self.assertNotIn('photoframe_app_main();', entry)
+
+    def test_wifi_text_import_is_complete_read_only_and_saved_errors_do_not_start_ap(self):
+        source = (ROOT / 'main/storage.c').read_text()
+        start = source.index('esp_err_t storage_read_wifi_config(')
+        checked = source[start:source.index('#else', start)]
+        for required in ('fstat(', 'fgetc(fp) != EOF', '!feof(fp)', 'ferror(fp)', 'fclose(fp)',
+                         'read_pico_sd_note_file_close_failure()', 'errno != ENOENT', 'wifi_text_parse('):
+            self.assertIn(required, checked)
+        for forbidden in ('config_manager_set_device_name(', 'unlink(', 'rename(', 'nvs_'):
+            self.assertNotIn(forbidden, checked)
+        main = (ROOT / 'main/main.c').read_text()
+        self.assertIn('import_result != ESP_OK && import_result != ESP_ERR_NOT_FOUND', main)
+        self.assertIn('config_manager_set_device_name_checked(imported.device_name)', main)
+        self.assertIn('possible partial NVS result', main)
+
+    def test_wifi_recovery_retains_credentials_and_waits_for_this_session_not_old_nvs(self):
+        source = (ROOT / 'main/main.c').read_text()
+        start = source.index('static void recover_wifi_connection')
+        checked = source[start:source.index('#else', start)]
+        for forbidden in ('nvs_erase', 'nvs_commit', 'wifi_provisioning_is_provisioned('):
+            self.assertNotIn(forbidden, checked)
+        self.assertIn('http_server_stop()', checked)
+        self.assertIn('while (!wifi_provisioning_session_complete())', checked)
+        self.assertIn('wifi_provisioning_start_ap()', checked)
+        provision = (ROOT / 'main/wifi_provisioning.c').read_text()
+        self.assertIn('while (ret < req->content_len)', provision)
+        self.assertIn('wifi_text_form_valid((const uint8_t *)buf, ret)', provision)
+        self.assertIn('provisioning_session_commit(ticket)', provision)
+        ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
+        self.assertIn('AP_REQUIRE(dns_server_start())', ap)
+        self.assertIn('wifi_provisioning_ap_start(get_setup_ap_ssid(), register_provisioning_routes)', provision)
+        self.assertIn('AP_REGISTER(&save_uri)', provision)
+        manager = (ROOT / 'main/wifi_manager.c').read_text()
+        self.assertIn('password && *password ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN', manager)
+
+    def test_wifi_candidate_uses_checked_manager_not_stale_event_bits_or_driver_flash(self):
+        source = (ROOT / 'main/wifi_manager.c').read_text()
+        start = source.index('static esp_err_t checked_connect')
+        checked = source[start:source.index('esp_err_t wifi_manager_test_credentials', start)]
+        self.assertIn('esp_event_post(READ_PICO_WIFI_FENCE', checked)
+        self.assertIn('current_link_matches()', checked)
+        self.assertLess(checked.index('xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT'),
+                        checked.index('candidate ? esp_wifi_connect() : esp_wifi_start()'))
+        self.assertNotIn('ESP_ERROR_CHECK', checked)
+        self.assertIn('cfg.nvs_enable = 0', source)
+        self.assertIn('esp_wifi_set_storage(WIFI_STORAGE_RAM)', source)
+        self.assertIn('IP_EVENT_STA_LOST_IP', source)
+        self.assertIn('esp_err_t dns = apply_dns_override()', source)
+        self.assertIn('s_link.ready = s_is_connected = false', source)
+        self.assertIn('ret = ESP_ERR_INVALID_SIZE', source)
+        provision = (ROOT / 'main/wifi_provisioning.c').read_text()
+        self.assertIn('wifi_manager_test_network_owned(request->ssid, request->password, &request->network,', provision)
+        self.assertIn('Candidate connection could not be verified; configuration not saved', provision)
+
+    def test_wifi_credential_errors_are_not_missing_configuration_or_panic_recovery(self):
+        source = (ROOT / 'main/main.c').read_text()
+        self.assertIn('credential_check != ESP_OK && credential_check != ESP_ERR_NVS_NOT_FOUND', source)
+        self.assertIn('if (credentials_failed) return;', source)
+        self.assertIn('provision_state != ESP_OK && provision_state != ESP_ERR_NVS_NOT_FOUND', source)
+        self.assertIn('no import/reprovisioning/erase/restart', source)
+        credentials = (ROOT / 'main/wifi_credentials.c').read_text()
+        self.assertIn('sr != ESP_OK || pr != ESP_OK', credentials)
+        self.assertIn('config_read_string(&guard', credentials)
+        self.assertNotIn('nvs_erase', credentials)
+        cmake = (ROOT / 'main/CMakeLists.txt').read_text()
+        self.assertIn('"wifi_credentials.c"', cmake)
+
+    def test_online_startup_checks_current_address_before_logging_or_nvs(self):
+        source = (ROOT / 'main/main.c').read_text()
+        start = source.index('static void startup_online_work')
+        checked = source[start:source.index('// Interactive boot whose connect timed out', start)]
+        self.assertIn('char ip_str[16] = {0}', checked)
+        self.assertIn('address != ESP_OK', checked)
+        self.assertLess(checked.index('return;'), checked.index('Web interface available'))
+        self.assertLess(checked.index('return;'), checked.index('nvs_open('))
+
+    def test_candidate_parameters_are_temporary_and_group_save_is_checked(self):
+        source = (ROOT / 'main/wifi_provisioning.c').read_text()
+        start = source.index('wifi_network_t candidate_network, retained_network;')
+        temporary = source[start:source.index('#else', start)]
+        self.assertIn('wifi_network_copy(', temporary)
+        self.assertNotIn('config_manager_set_', temporary)
+        self.assertIn('provisioning_apply_run(&request, &ops, &context)', source)
+        self.assertIn('wifi_manager_cancel_candidate(context.candidate)', source)
+        self.assertIn('config_manager_save_provisioning_checked(request->ssid', source)
+        manager = (ROOT / 'main/wifi_manager.c').read_text()
+        self.assertIn('s_network = network', manager)
+        self.assertIn('const char *dns = s_network.dns', manager)
+        config = (ROOT / 'main/config_manager.c').read_text()
+        start = config.index('esp_err_t config_manager_save_provisioning_checked')
+        checked = config[start:config.index('#else', start)]
+        self.assertIn('if (err == ESP_OK) err = nvs_commit(handle)', checked)
+        self.assertLess(checked.index('nvs_close(handle)'), checked.index('memcpy(wifi_ssid'))
+        self.assertNotIn('nvs_erase', checked)
+
+    def test_provision_scan_uses_checked_results_and_json_library(self):
+        source = (ROOT / 'main/wifi_provisioning.c').read_text()
+        start = source.index('static esp_err_t provision_scan_handler')
+        scan = source[start:source.index('// Extract one field', start)]
+        self.assertIn('wifi_manager_scan_checked(ap_records, MAX_SCAN_RESULTS, &count)', scan)
+        self.assertIn('if (scanned != ESP_OK)', scan)
+        self.assertIn('cJSON_PrintUnformatted(array)', scan)
+        self.assertIn('cJSON_AddStringToObject(entry, "ssid"', scan)
+        self.assertIn('cJSON_free(json_buf)', scan)
+        self.assertIn('return response;', scan)
+        manager = (ROOT / 'main/wifi_manager.c').read_text()
+        start = manager.index('esp_err_t wifi_manager_scan_checked')
+        checked = manager[start:manager.index('int wifi_manager_scan(', start)]
+        self.assertIn('take_radio_operation(true)', checked)
+        self.assertIn('esp_wifi_clear_ap_list()', checked)
+        self.assertNotIn('ESP_ERROR_CHECK', checked)
+        cmake = (ROOT / 'host_tests/CMakeLists.txt').read_text()
+        self.assertIn('RESOURCE_LOCK host_display_flow_storage', cmake)
+
+    def test_wifi_initialization_checks_owned_resources_without_panic_helpers(self):
+        source = (ROOT / 'main/wifi_manager.c').read_text()
+        start = source.index('esp_err_t wifi_manager_init(void)')
+        checked = source[start:source.index('#else', start)]
+        self.assertIn('atomic_flag_test_and_set(&s_init_busy)', checked)
+        self.assertIn('if (s_initialized)', checked)
+        self.assertIn('esp_netif_new(&sta_config)', checked)
+        self.assertIn('esp_netif_attach_wifi_station(s_sta_netif)', checked)
+        self.assertIn('cleanup_initialization()', checked)
+        self.assertNotIn('ESP_ERROR_CHECK', checked)
+        self.assertNotIn('esp_netif_create_default_wifi_', checked)
+        self.assertNotIn('esp_wifi_start', checked)
+        self.assertNotIn('esp_event_loop_delete', source)
+        main = (ROOT / 'main/main.c').read_text()
+        self.assertEqual(main.count('esp_err_t wifi_init = wifi_manager_init();'), 2)
+        self.assertIn('Wake WiFi initialization failed', main)
+        self.assertIn('no provisioning/network restart', main)
+
+    def test_dns_startup_binds_before_worker_and_stop_waits_for_owner(self):
+        source = (ROOT / 'main/dns_server.c').read_text()
+        checked = source[:source.index('#else')]
+        start = checked.index('esp_err_t dns_server_start(void)')
+        startup = checked[start:checked.index('esp_err_t dns_server_stop_checked')]
+        self.assertLess(startup.index('bind(fd'), startup.index('xTaskCreate('))
+        self.assertIn('SO_RCVTIMEO', startup)
+        self.assertIn('SO_SNDTIMEO', startup)
+        self.assertIn('htonl(0xc0a80401)', startup)
+        self.assertIn('CAPTIVE_DNS_MAX_PACKET + 1', checked)
+        self.assertIn('captive_dns_response(query', checked)
+        stop = checked[checked.index('esp_err_t dns_server_stop_checked'):]
+        self.assertIn('xEventGroupWaitBits', stop)
+        self.assertNotIn('close(', stop)
+        self.assertNotIn('vTaskDelete', stop)
+        ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        self.assertIn('error = dns_server_stop_checked();', stop)
+        self.assertIn('if (error != ESP_OK) goto failed;', stop)
+        self.assertIn('error != ESP_ERR_WIFI_NOT_STARTED', stop)
+        self.assertLess(stop.index('dns_server_stop_checked'), stop.index('read_pico_http_stop'))
+        self.assertIn('"captive_dns.c"', (ROOT / 'main/CMakeLists.txt').read_text())
+
+    def test_provisioning_lifecycle_owns_sdk_objects_and_invalidates_stopped_sessions(self):
+        ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
+        self.assertIn('atomic_flag_test_and_set(&s_control)', ap)
+        self.assertIn('wifi_manager_provisioning_begin(&s_manager_owner, &netif)', ap)
+        self.assertIn('ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED', ap)
+        self.assertIn('provisioning_session_cancel()', ap)
+        start = ap[ap.index('esp_err_t wifi_provisioning_ap_start'):]
+        self.assertLess(start.index('AP_REQUIRE(dns_server_start())'),
+                        start.index('provisioning_session_begin()'))
+        self.assertLess(start.index('provisioning_session_begin()'), start.index('s_state = AP_ACTIVE'))
+        self.assertNotIn('ESP_ERROR_CHECK', ap)
+        for forbidden in ('nvs_', 'esp_restart', 'esp_netif_destroy', 'vTaskDelete'):
+            self.assertNotIn(forbidden, ap)
+        provision = (ROOT / 'main/wifi_provisioning.c').read_text()
+        self.assertIn('wifi_provisioning_ap_active() && provisioning_session_ticket() == ticket', provision)
+        self.assertIn('if (!wifi_provisioning_ap_active())', provision)
+        self.assertIn('return wifi_provisioning_ap_stop();', provision)
+        routes = provision[provision.index('static esp_err_t register_provisioning_routes'):
+                           provision.index('esp_err_t wifi_provisioning_start_ap')]
+        self.assertEqual(re.findall(r'\.uri\s*=\s*"([^"]+)"', routes), [
+            '/', '/provision', '/assets/index.css', '/assets/index.js', '/assets/index2.js',
+            '/assets/exif-reader.js', '/assets/browser.js', '/assets/__vite-browser-external.js',
+            '/icon.svg', '/save', '/api/wifi/scan', '/api/keep_alive', '/hotspot-detect.html',
+            '/generate_204', '/connecttest.txt'])
+        self.assertEqual(routes.count('AP_REGISTER(&'), 15)
+        self.assertIn('if (error != ESP_OK) return error;', routes)
+        self.assertIn('return httpd_register_err_handler', routes)
+        self.assertIn('"wifi_provisioning_ap.c"', (ROOT / 'main/CMakeLists.txt').read_text())
+        main = (ROOT / 'main/main.c').read_text()
+        self.assertEqual(main.count('esp_err_t ap_stopped = wifi_provisioning_stop_ap();'), 2)
+        self.assertEqual(main.count('if (!wifi_provisioning_is_active())'), 2)
+        recovery = main[main.index('static void recover_wifi_connection'):]
+        recovery = recovery[:recovery.index('#else')]
+        self.assertLess(recovery.index('wifi_provisioning_stop_ap()'), recovery.index('esp_restart()'))
+        self.assertIn('if (ap_stopped != ESP_OK)', recovery)
+        self.assertIn('no automatic restart', recovery)
+
+    def test_radio_reservation_and_checked_stop_are_wired_into_existing_services(self):
+        manager = (ROOT / 'main/wifi_manager.c').read_text()
+        self.assertIn('s_ap_task != xTaskGetCurrentTaskHandle()', manager)
+        self.assertIn('if (held) xSemaphoreGive(s_connection_lock)', manager)
+        self.assertIn('s_ap_serial == UINT32_MAX', manager)
+        quiesce = manager[manager.index('esp_err_t wifi_manager_provisioning_quiesce'):]
+        quiesce = quiesce[:quiesce.index('#else')]
+        self.assertLess(quiesce.index('cancel_link_locked()'),
+                        quiesce.index('xSemaphoreTake(s_connection_lock, 0)'))
+        ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        self.assertLess(stop.index('wifi_manager_provisioning_quiesce'), stop.index('dns_server_stop_checked'))
+        self.assertIn('WIFI_PROVISION_READY', ap)
+        self.assertIn('WIFI_PROVISION_FAILED', ap)
+        main = (ROOT / 'main/main.c').read_text()
+        self.assertEqual(main.count('wifi_manager_stop_connecting_checked()'), 3)
+        self.assertIn('no provisioning/restart', main)
+        self.assertIn('no further wake work', main)
+
+    def test_frame_http_routes_preserve_every_uri_method_and_auth_wrapper(self):
+        source = (ROOT / 'main/http_server.c').read_text()
+        routes = source[source.index('static esp_err_t register_http_routes'):
+                        source.index('esp_err_t http_server_init')]
+        self.assertEqual(re.findall(r'HTTP_REGISTER\("([^"]+)",\s*(HTTP_\w+)', routes), [
+            ("/", "HTTP_GET"),
+            ("/assets/index.css", "HTTP_GET"),
+            ("/assets/index.js", "HTTP_GET"),
+            ("/assets/index2.js", "HTTP_GET"),
+            ("/assets/exif-reader.js", "HTTP_GET"),
+            ("/assets/browser.js", "HTTP_GET"),
+            ("/assets/__vite-browser-external.js", "HTTP_GET"),
+            ("/icon.svg", "HTTP_GET"),
+            ("/measurement_sample.jpg", "HTTP_GET"),
+            ("/api/rotate", "HTTP_POST"),
+            ("/api/current_image", "HTTP_GET"),
+            ("/api/config", "HTTP_GET"),
+            ("/api/config", "HTTP_POST"),
+            ("/api/config", "HTTP_PATCH"),
+            ("/api/debug/log", "HTTP_GET"),
+            ("/api/debug/log", "HTTP_DELETE"),
+            ("/api/crash/clear", "HTTP_POST"),
+            ("/api/battery", "HTTP_GET"),
+            ("/api/sensor", "HTTP_GET"),
+            ("/api/sleep", "HTTP_POST"),
+            ("/api/system-info", "HTTP_GET"),
+            ("/api/time", "HTTP_GET"),
+            ("/api/time/sync", "HTTP_POST"),
+            ("/api/ota/status", "HTTP_GET"),
+            ("/api/ota/check", "HTTP_POST"),
+            ("/api/ota/update", "HTTP_POST"),
+            ("/api/keep_alive", "HTTP_POST"),
+            ("/api/format-storage", "HTTP_POST"),
+            ("/api/display-image", "HTTP_POST"),
+            ("/api/albums", "HTTP_GET"),
+            ("/api/albums", "HTTP_POST"),
+            ("/api/albums", "HTTP_DELETE"),
+            ("/api/albums/enabled", "HTTP_PUT"),
+            ("/api/images", "HTTP_GET"),
+            ("/api/upload", "HTTP_POST"),
+            ("/api/display", "HTTP_POST"),
+            ("/api/delete", "HTTP_POST"),
+            ("/api/image", "HTTP_GET"),
+            ("/api/settings/processing", "HTTP_GET"),
+            ("/api/settings/processing", "HTTP_POST"),
+            ("/api/settings/processing", "HTTP_DELETE"),
+            ("/api/settings/palette", "HTTP_GET"),
+            ("/api/settings/palette", "HTTP_POST"),
+            ("/api/settings/palette", "HTTP_DELETE"),
+            ("/api/factory-reset", "HTTP_POST"),
+            ("/api/calibration/display", "HTTP_POST"),
+        ])
+        self.assertIn('if (error != ESP_OK) return error;', routes)
+        self.assertIn('.handler = auth_gate', source)
+        self.assertIn('.user_ctx = (void *) handler', source)
+        auth = source[source.index('static esp_err_t auth_gate'):source.index('// Register a route')]
+        self.assertLess(auth.index('http_requests_ready(req)'), auth.index('http_auth_check(req'))
+        self.assertIn('READ_PICO_HTTP_FRAME, req->handle', source)
+
+    def test_shared_http_ownership_is_used_before_ap_radio_and_checked_main_startup(self):
+        ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
+        start = ap[ap.index('esp_err_t wifi_provisioning_ap_start'):]
+        self.assertLess(start.index('read_pico_http_claim'), start.index('wifi_manager_provisioning_begin'))
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        self.assertLess(stop.index('read_pico_http_stop'), stop.index('esp_wifi_stop'))
+        self.assertLess(stop.index('esp_wifi_stop'), stop.index('read_pico_http_release'))
+        source = (ROOT / 'main/http_server.c').read_text()
+        self.assertIn('atomic_flag_test_and_set(&s_http_control)', source)
+        self.assertIn('read_pico_http_claim(READ_PICO_HTTP_FRAME)', source)
+        self.assertIn('read_pico_http_active(READ_PICO_HTTP_FRAME)', source)
+        self.assertIn('read_pico_http_mark_ready(READ_PICO_HTTP_FRAME)', source)
+        service = (ROOT / 'main/read_pico_http_service.c').read_text()
+        self.assertIn('SERVICE_UNCERTAIN', service)
+        self.assertIn('if (s_role != role)', service)
+        for forbidden in ('nvs_', 'esp_restart', 'vTaskDelete', 'esp_wifi_'):
+            self.assertNotIn(forbidden, service)
+        main = (ROOT / 'main/main.c').read_text()
+        self.assertEqual(main.count('if (ensure_http_server_running() != ESP_OK) return;'), 2)
+        self.assertIn('no startup success or late WiFi task', main)
+        self.assertIn('Online startup skipped: HTTP not ready', main)
+        self.assertIn('"read_pico_http_service.c"', (ROOT / 'main/CMakeLists.txt').read_text())
+
+    def test_background_creation_and_publication_are_checked_in_main_and_power(self):
+        main = (ROOT / 'main/main.c').read_text()
+        startup = main[main.index('esp_err_t background_start ='):]
+        self.assertLess(startup.index('read_pico_background_add(READ_PICO_BACKGROUND_LATE_WIFI'),
+                        startup.index('http_server_init()'))
+        self.assertLess(startup.index('read_pico_background_activate(required, http_server_set_ready_checked)'),
+                        startup.index('PhotoFrame started successfully'))
+        self.assertIn('Background creation failed', startup)
+        self.assertIn('esp_err_t http_exit = http_server_stop()', startup)
+        wrapper = main[main.rindex('void app_main(void)'):]
+        self.assertIn('photoframe_boot();', wrapper)
+        self.assertIn('read_pico_background_cancel();', wrapper)
+        self.assertIn('not whole-device cleanup', wrapper)
+        power = (ROOT / 'main/power_manager.c').read_text()
+        for role in ('SLEEP', 'ROTATION'):
+            self.assertIn('read_pico_background_add(READ_PICO_BACKGROUND_' + role, power)
+        self.assertEqual(power.count('if (!read_pico_background_running() || !http_server_is_ready()) return;'), 2)
+        self.assertIn('esp_err_t power_start = power_manager_init()', main)
+        self.assertIn('"read_pico_background.c"', (ROOT / 'main/CMakeLists.txt').read_text())
+
+    def test_background_recovery_waits_before_radio_and_callbacks_return_to_owner(self):
+        main = (ROOT / 'main/main.c').read_text()
+        recovery = main[main.index('static void recover_wifi_connection'):main.index('static void startup_online_work')]
+        self.assertLess(recovery.index('read_pico_background_cancel_and_wait'),
+                        recovery.index('wifi_manager_stop_connecting_checked'))
+        self.assertIn('if (background != ESP_OK)', recovery)
+        late = main[main.index('static void late_wifi_task'):main.index('static void button_task')]
+        self.assertIn('pdFALSE, pdFALSE, pdMS_TO_TICKS(100)', late)
+        self.assertIn('if (!events) return;', late)
+        self.assertIn('#if !CONFIG_BOARD_DRIVER_READ_PICO\n    vTaskDelete(NULL);', late)
+        adapter = (ROOT / 'main/read_pico_background.c').read_text()
+        self.assertEqual(adapter.count('vTaskDelete('), 1)
+        self.assertIn('vTaskDelete(NULL)', adapter)
+        for forbidden in ('nvs_', 'esp_restart(', 'esp_wifi_', 'free(', 'vTaskSuspend('):
+            self.assertNotIn(forbidden, adapter)
+
+    def test_declined_read_pico_sleep_does_not_fall_through_and_boot_exit_waits(self):
+        main = (ROOT / 'main/main.c').read_text()
+        wake = main[main.index('void deep_sleep_wake_main'):main.index('static void photoframe_boot')]
+        self.assertEqual(wake.count('power_manager_enter_sleep();\n#if CONFIG_BOARD_DRIVER_READ_PICO\n        return;'), 4)
+        self.assertIn('deep_sleep_wake_main(wakeup_src);\n#if CONFIG_BOARD_DRIVER_READ_PICO\n        return;', main)
+        self.assertIn('power_manager_enter_sleep();  // Go back to sleep\n#if CONFIG_BOARD_DRIVER_READ_PICO\n        return;', main)
+        wrapper = main[main.rindex('void app_main(void)'):]
+        self.assertLess(wrapper.index('read_pico_background_cancel_and_wait'), wrapper.index('http_server_stop()'))
+        self.assertLess(wrapper.index('if (exited != ESP_OK)'), wrapper.index('http_server_stop()'))
+        self.assertIn('if (http_server_is_ready())', wrapper)
+
+    def test_read_pico_periodic_uses_owned_timer_and_managed_worker_not_timer_business_io(self):
+        source = (ROOT / 'main/read_pico_periodic.c').read_text()
+        timer = source[source.index('static void timer_callback'):source.index('static void periodic_worker')]
+        for forbidden in ('nvs_', 'vTaskDelay', 'ESP_LOG', 'periodic_tasks_check_and_run', 'esp_sntp_'):
+            self.assertNotIn(forbidden, timer)
+        self.assertIn('READ_PICO_BACKGROUND_PERIODIC, periodic_worker', source)
+        self.assertIn('esp_timer_stop_blocking(s_timer, pdMS_TO_TICKS(100))', source)
+        self.assertLess(source.index('esp_timer_stop_blocking'), source.index('esp_timer_delete(s_timer)'))
+        self.assertNotIn('nvs_erase', source)
+        self.assertNotIn('memset(s_tasks', source)
+        self.assertIn('list(REMOVE_ITEM SOURCES "periodic_tasks.c")', (ROOT / 'main/CMakeLists.txt').read_text())
+
+    def test_periodic_cancellation_is_before_recovery_and_boot_return_resource_cleanup(self):
+        main = (ROOT / 'main/main.c').read_text()
+        connect = main[main.index('static esp_err_t connect_to_wifi'):main.index('static void recover_wifi_connection')]
+        self.assertNotIn('periodic_tasks_request_stop', connect)
+        recover = main[main.index('static void recover_wifi_connection'):main.index('static void startup_online_work')]
+        self.assertLess(recover.index('periodic_tasks_request_stop'), recover.index('read_pico_background_cancel_and_wait'))
+        self.assertLess(recover.index('periodic_tasks_stop()'), recover.index('wifi_manager_stop_connecting_checked()'))
+        wrapper = main[main.rindex('void app_main(void)'):]
+        self.assertLess(wrapper.index('periodic_tasks_request_stop'), wrapper.index('read_pico_background_cancel_and_wait'))
+        self.assertLess(wrapper.index('periodic_tasks_stop()'), wrapper.index('http_server_stop()'))
+        self.assertIn('READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_PERIODIC)', main)
+        startup = main[main.index('esp_err_t periodic_start ='):]
+        self.assertLess(startup.index('periodic_tasks_register'), startup.index('periodic_tasks_force_run'))
+
+    def test_ntp_save_error_precedes_sync_and_legacy_setter_is_preserved(self):
+        utils = (ROOT / 'main/utils.c').read_text()
+        block = utils[utils.index('item = cJSON_GetObjectItem(root, "ntp_server")'):utils.index('// Clients PATCH')]
+        self.assertIn('item && !cJSON_IsString(item)', block)
+        self.assertLess(block.index('config_manager_set_ntp_server_checked'), block.index('periodic_tasks_run_now'))
+        self.assertLess(block.index('return saved;'), block.index('periodic_tasks_run_now'))
+        self.assertIn('NTP save not confirmed; synchronization not started', block)
+        self.assertIn('#else\n        config_manager_set_ntp_server', block)
+
+    def test_config_get_copies_ntp_before_json_and_checks_snapshot_failure(self):
+        http = (ROOT / 'main/http_server.c').read_text()
+        block = http[http.index('static esp_err_t config_handler'):http.index('static esp_err_t time_sync_handler')]
+        self.assertLess(block.index('config_manager_copy_ntp_server'), block.index('cJSON_CreateObject'))
+        self.assertIn('if (copied != ESP_OK)', block)
+        self.assertIn('Configuration snapshot unavailable', block)
+        self.assertIn('const char *ntp_server = ntp_snapshot;', block)
+        self.assertIn('if (!cJSON_AddStringToObject(root, "ntp_server", ntp_server))', block)
+        self.assertIn('cJSON_Delete(root);', block)
+        main = (ROOT / 'main/main.c').read_text()
+        sync = main[main.index('static esp_err_t sntp_sync_periodic_callback'):main.index('static esp_err_t connect_to_wifi')]
+        checked = sync[:sync.index('#else')]
+        self.assertIn('config_manager_copy_ntp_server(server, sizeof(server))', checked)
+        self.assertNotIn('config_manager_get_ntp_server()', checked)
+
+    def test_manual_sync_checks_atomic_run_and_sntp_owned_service_result(self):
+        main = (ROOT / 'main/main.c').read_text()
+        sync = main[main.index('static esp_err_t sntp_sync_periodic_callback'):main.index('static esp_err_t connect_to_wifi')]
+        self.assertIn('read_pico_sntp_sync(server, sntp_allowed, periodic_tasks_is_active, &now)', sync)
+        self.assertIn('if (synced != ESP_OK) return synced;', sync)
+        self.assertIn('return ret;', sync)
+        http = (ROOT / 'main/http_server.c').read_text()
+        handler = http[http.index('static esp_err_t time_sync_handler'):http.index('static esp_err_t color_palette_handler')]
+        self.assertIn('periodic_tasks_run_now(SNTP_TASK_NAME)', handler)
+        self.assertLess(handler.index('if (sync != ESP_OK)'), handler.index('"success"'))
+        self.assertIn('timestamp persistence not confirmed', handler)
+        utils = (ROOT / 'main/utils.c').read_text()
+        self.assertIn('esp_err_t sync = periodic_tasks_run_now(SNTP_TASK_NAME)', utils)
+        self.assertIn('NTP configuration changed, but synchronization not confirmed', utils)
+        response = http[http.index('static esp_err_t send_current_time_checked'):http.index('static esp_err_t time_handler')]
+        self.assertIn('return send_current_time_checked(req, "success")', handler)
+        self.assertIn('if (!json_str)', response)
+        self.assertIn('return sent;', response)
+
+    def test_timezone_save_reports_partial_application_and_does_not_apply_twice(self):
+        utils = (ROOT / 'main/utils.c').read_text()
+        block = utils[utils.index('item = cJSON_GetObjectItem(root, "timezone")'):utils.index('// Advanced network settings (#43):', utils.index('item = cJSON_GetObjectItem(root, "timezone")'))]
+        self.assertIn('item && !cJSON_IsString(item)', block)
+        self.assertIn('tz_err == ESP_ERR_NOT_FINISHED', block)
+        self.assertIn('Time zone saved, but system application not confirmed', block)
+        self.assertIn('#if !CONFIG_BOARD_DRIVER_READ_PICO\n        setenv', block)
+        manager = (ROOT / 'main/config_manager.c').read_text()
+        setter = manager[manager.index('esp_err_t config_manager_set_timezone'):manager.index('const char *config_manager_get_timezone')]
+        self.assertLess(setter.index('nvs_commit(handle)'), setter.index('memcpy(tz_string, candidate'))
+        self.assertLess(setter.index('nvs_close(handle)'), setter.index('err = apply_loaded_timezone()'))
+        self.assertIn('time_config_control', setter)
+
+    def test_remote_config_checks_stages_and_aborts_before_display_or_etag_claim(self):
+        utils = (ROOT / 'main/utils.c').read_text()
+        checked = utils[utils.index('static esp_err_t apply_remote_group'):utils.index('#else\nstatic void fetch_apply_remote_config')]
+        self.assertIn('return apply_config_values(group, true)', checked)
+        self.assertIn('return processing_settings_save(&settings)', checked)
+        self.assertLess(checked.index('if (saved != ESP_OK) return saved'), checked.index('return image_processor_reload_palette()'))
+        self.assertIn('return config_manager_touch_config_checked()', checked)
+        self.assertIn('remote_config_apply(request->payload, &ops, &request->result)', checked)
+        outer = utils[utils.index('bool thumbnail_downloaded = false;', utils.index('char fetched_url[')):utils.index('esp_err_t trigger_image_rotation')]
+        self.assertLess(outer.index('if (applied != ESP_OK)'), outer.index('fetch_present_owned'))
+        self.assertLess(outer.index('return applied;'), outer.index('config_manager_set_image_etag'))
+        self.assertNotIn('unlink(', outer.split('#else', 1)[0])
+
+    def test_remote_headers_refuse_truncation_duplicates_and_304_keeps_config(self):
+        utils = (ROOT / 'main/utils.c').read_text()
+        event = utils[utils.index('case HTTP_EVENT_HEADERS_SENT'):utils.index('case HTTP_EVENT_ON_DATA')]
+        self.assertIn('ctx->config_header_seen = false', event)
+        self.assertIn('remote_config_capture(ctx->config_payload, REMOTE_CONFIG_CAPACITY', utils)
+        not_modified = utils[utils.index('if (err == ESP_OK && status_code == 304)'):utils.index('// Check if download was successful')]
+        self.assertIn('*config_payload_out = config_payload_buffer', not_modified)
+        outer = utils[utils.index('if (was_not_modified)'):utils.index('bool thumbnail_downloaded = false;', utils.index('if (was_not_modified)'))]
+        self.assertLess(outer.index('fetch_apply_remote_config'), outer.index('*not_modified = true'))
+        self.assertIn('if (applied != ESP_OK)', outer)
+
+    def test_http_revision_and_palette_load_errors_precede_success(self):
+        http = (ROOT / 'main/http_server.c').read_text()
+        helper = http[http.index('static esp_err_t send_revision_error'):http.index('static esp_err_t config_handler')]
+        self.assertIn('config_manager_touch_config_checked()', helper)
+        self.assertIn('Configuration changed, but revision save not confirmed', helper)
+        self.assertEqual(http.count('esp_err_t revision = touch_config_for_http(req);'), 5)
+        palette = http[http.index('static esp_err_t color_palette_handler'):http.index('static esp_err_t register_http_routes')]
+        self.assertEqual(palette.count('if (loaded != ESP_OK)'), 3)
+        manager = (ROOT / 'main/config_manager.c').read_text()
+        revision = manager[manager.index('esp_err_t config_manager_touch_config_checked(void)'):]
+        self.assertIn('candidate = config_last_updated + 1', revision)
+        self.assertIn('config_last_updated == INT64_MAX', revision)
+        processing = (ROOT / 'main/processing_settings.c').read_text()
+        self.assertIn('if (err != ESP_OK) goto close', processing)
+        self.assertEqual(processing.count('SAVE_FIELD(nvs_set_'), 13)
+        palette_source = (ROOT / 'main/color_palette.c').read_text()
+        self.assertIn('if (err == ESP_OK) *palette = candidate;', palette_source)
+        self.assertIn('size != sizeof(candidate)', palette_source)
+        host = (ROOT / 'host_tests/CMakeLists.txt').read_text()
+        self.assertIn('READ_PICO_TEST_FETCH_CJSON OR NOT EXISTS', host)
+        self.assertIn('GIT_TAG b2890c8d76bbb64e710585ebc0a917196b9c67e7', host)
+        self.assertIn('607e756460fa0de37d20a7a9181f2de29c97bfb7ce5a0e6c2f548243836cd852', host)
+        self.assertIn('25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee', host)
+
+    def test_configuration_http_uses_bounded_complete_documents_and_checked_group_converters(self):
+        http = (ROOT / 'main/http_server.c').read_text()
+        helper = http[http.index('static esp_err_t receive_config_document'):http.index('static esp_err_t send_revision_error')]
+        self.assertLess(helper.index('req->content_len >= CONFIG_DOCUMENT_CAPACITY'), helper.index('malloc('))
+        self.assertLess(helper.index('config_document_receive('), helper.index('config_document_parse('))
+        self.assertIn('if (error == ESP_OK) error = config_document_parse', helper)
+        self.assertEqual(http.count('receive_config_document(req,'), 3)
+        self.assertIn('req->method != HTTP_GET && req->method != HTTP_POST', http)
+        for prefix in ('processing_settings', 'color_palette'):
+            start = http.index(f'static esp_err_t {prefix}_handler_values')
+            block = http[start:http.index(f'static esp_err_t {prefix}_handler(', start)]
+            self.assertIn(f'{prefix}_from_json_checked(json,', block)
+            self.assertIn('return send_settings_json(req,', block)
+            self.assertIn('return send_settings_failure(req,', block)
+        remote = (ROOT / 'main/remote_config.c').read_text()
+        self.assertIn('config_document_parse(payload, length, &root)', remote)
+        utils = (ROOT / 'main/utils.c').read_text()
+        block = utils[utils.index('static esp_err_t apply_remote_group'):utils.index('static esp_err_t finish_remote_config')]
+        self.assertIn('processing_settings_from_json_checked(group,', block)
+        self.assertIn('color_palette_from_json_checked(group,', block)
+
+    def test_processing_load_only_missing_records_default_and_serializers_check_additions(self):
+        source = (ROOT / 'main/processing_settings.c').read_text()
+        load = source[source.index('esp_err_t processing_settings_load'):source.index('esp_err_t processing_settings_from_json_checked')]
+        checked = load.split('#else', 1)[0]
+        self.assertIn('if (err == ESP_ERR_NVS_NOT_FOUND)', checked)
+        self.assertIn('if (err != ESP_OK) goto close', checked)
+        self.assertIn('if (err == ESP_OK) *settings = candidate', checked)
+        self.assertIn('if (compress > 1)', checked)
+        self.assertIn('JSON_ADD(cJSON_AddStringToObject', source)
+        palette = (ROOT / 'main/color_palette.c').read_text()
+        self.assertIn('!cJSON_AddItemToObject(json, names[i], color)', palette)
+        self.assertIn('cJSON_Delete(color); cJSON_Delete(json); return NULL', palette)
+
+    def test_time_http_uses_checked_single_snapshot_and_preserves_legacy_getter(self):
+        http = (ROOT / 'main/http_server.c').read_text()
+        response = http[http.index('static esp_err_t send_current_time_checked'):http.index('static esp_err_t time_handler')]
+        self.assertIn('config_manager_copy_local_time', response)
+        self.assertIn('if (copied != ESP_OK) return send_time_unavailable(req)', response)
+        self.assertIn('!cJSON_AddStringToObject(response, "timezone", timezone)', response)
+        self.assertNotIn('config_manager_get_timezone()', response)
+        config = http[http.index('static esp_err_t config_handler'):http.index('static esp_err_t time_handler')]
+        self.assertIn('config_manager_copy_timezone(timezone_snapshot', config)
+        self.assertIn('"timezone_applied", timezone_applied', config)
+        self.assertIn('config_manager_get_timezone()', config) # Legacy only.
+        sync = http[http.index('static esp_err_t time_sync_handler'):http.index('static esp_err_t color_palette_handler')]
+        self.assertLess(sync.index('http_requests_ready(req)'), sync.index('periodic_tasks_run_now'))
+
+    def test_owned_sntp_stop_checks_pending_resolution_before_network_cleanup(self):
+        main = (ROOT / 'main/main.c').read_text()
+        recover = main[main.index('static void recover_wifi_connection'):main.index('static void log_wall_clock', main.index('static void recover_wifi_connection'))]
+        self.assertLess(recover.index('read_pico_sntp_request_stop()'), recover.index('read_pico_background_cancel_and_wait'))
+        self.assertLess(recover.index('read_pico_sntp_stop()'), recover.index('wifi_manager_stop_connecting_checked()'))
+        wrapper = main[main.rindex('void app_main(void)'):]
+        self.assertLess(wrapper.index('read_pico_sntp_stop()'), wrapper.index('http_server_stop()'))
+        self.assertIn('if (sntp_exit != ESP_OK)', wrapper)
+        source = (ROOT / 'main/read_pico_sntp.c').read_text()
+        self.assertIn('if (!atomic_load(&core_ack))', source)
+        self.assertIn('result = ESP_ERR_NOT_FINISHED', source)
+        self.assertIn('sntp_setservername(0, NULL)', source)
+        self.assertNotIn('esp_sntp_init()', source)
+        self.assertNotIn('esp_sntp_stop()', source)
+        self.assertNotIn('free(', source)
+
+    def test_sntp_correlation_applies_to_sdk_build_and_real_service_wiring(self):
+        root = (ROOT / 'CMakeLists.txt').read_text()
+        self.assertIn('if(CONFIG_BOARD_DRIVER_READ_PICO AND CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION)', root)
+        self.assertIn('target_compile_definitions(${read_pico_lwip_lib} PRIVATE SNTP_CHECK_RESPONSE=2 SNTP_COMP_ROUNDTRIP=0)', root)
+        main = (ROOT / 'main/CMakeLists.txt').read_text()
+        self.assertIn('"read_pico_sntp.c" "sntp_stamp.c"', main)
+        self.assertIn('--wrap=sntp_get_system_time', main)
+        self.assertIn('--wrap=udp_new_ip_type', main)
+        source = (ROOT / 'main/read_pico_sntp.c').read_text()
+        self.assertIn('void sntp_sync_time(struct timeval *tv)', source)
+        self.assertIn('settimeofday(tv, NULL) == 0', source)
+        self.assertIn('if (closed != ESP_OK) result = closed;', source)
+        self.assertLess(source.index('close_owned_service();', source.index('cleanup:')), source.index('*confirmed = applied_time'))
+        self.assertIn('ticket != atomic_load(&dns_ticket)', source)
+        self.assertIn('reserved_pcb = __real_udp_new_ip_type(IPADDR_TYPE_ANY)', source)
+        self.assertIn('return ESP_ERR_NO_MEM;', source)
+        self.assertIn('if (!handing_pcb) return __real_udp_new_ip_type(type)', source)
+        self.assertIn('#if SNTP_CHECK_RESPONSE < 2 || SNTP_COMP_ROUNDTRIP != 0', source)
 
     def test_storage_entry_does_not_fall_through_to_product_or_write_paths(self):
         cmake = (ROOT / "main/CMakeLists.txt").read_text()
@@ -408,6 +1163,65 @@ class PhotoBuildTests(unittest.TestCase):
             self.assertNotIn(unsafe, entry)
         self.assertIn("CONFIG_READ_PICO_PHOTO_VALIDATION=n", (ROOT / "boards/sdkconfig.defaults.read_pico").read_text())
 
+
+    def test_checked_upload_keeps_legacy_board_and_exclusive_new_paths(self):
+        http = (ROOT / "main/http_server.c").read_text()
+        checked = http[http.index("static esp_err_t parse_multipart_checked"):http.index("#endif", http.index("static esp_err_t parse_multipart_checked"))]
+        self.assertIn("upload_stream_finish(parser)", checked)
+        self.assertIn("upload_file_abort(&result->files[0])", checked)
+        self.assertNotIn("unlink(", checked)
+        raw = http[http.index("static esp_err_t receive_raw_checked"):http.index("#else", http.index("static esp_err_t receive_raw_checked"))]
+        self.assertIn("upload_file_finish(&file, req->content_len)", raw)
+        self.assertNotIn("unlink(", raw)
+        self.assertIn("++timeouts < 8", raw)
+        self.assertIn("120000000", raw)
+        publication = http[http.index("// Both parts are closed/synced"):http.index("#else", http.index("// Both parts are closed/synced"))]
+        self.assertEqual(publication.count("upload_file_publish("), 2)
+        self.assertNotIn("unlink(", publication)
+        self.assertIn('"409 Conflict"', publication)
+        adapter = (ROOT / "main/read_pico_upload.c").read_text()
+        self.assertIn("O_WRONLY | O_CREAT | O_EXCL", adapter)
+        self.assertIn("retry < 16", adapter)
+        self.assertNotIn("unlink(", adapter)
+
+    def test_owned_display_url_and_snapshot_never_return_to_fixed_slot_cleanup(self):
+        flow = (ROOT / "main/display_flow.c").read_text()
+        owned = flow[flow.index("esp_err_t display_flow_publish_asset"):flow.index("FILE *display_flow_open_current")]
+        self.assertIn("upload_asset_publish(", owned)
+        self.assertIn("image_processor_detect_format(image->source)", owned)
+        self.assertNotIn("unlink(", owned)
+        http = (ROOT / "main/http_server.c").read_text()
+        self.assertIn("display_flow_present_asset(image_owner, thumbnail_owner", http)
+        self.assertIn("*owner = file", http)
+        url = (ROOT / "main/utils.c").read_text()
+        checked = url[url.index("static esp_err_t fetch_present_owned"):url.index("#endif", url.index("static esp_err_t fetch_present_owned"))]
+        for unsafe in ("unlink(", "rename(", "CURRENT_UPLOAD_PATH", "display_flow_read_file("):
+            self.assertNotIn(unsafe, checked)
+        self.assertIn("fetch_copy_new", checked)
+        self.assertIn('"%s/download_%.*s%s"', checked)
+        self.assertIn("download_file_finish(owner", url)
+        self.assertIn(".disable_auto_redirect = true", url)
+        self.assertIn("download_same_origin(image_url, thumbnail_url)", url)
+        manager = (ROOT / "main/display_manager.c").read_text()
+        self.assertIn("upload_file_publish(&snapshot, snapshot.source, path)", manager)
+        self.assertIn("display_manager_copy_current_image", manager)
+        self.assertIn("if (!create_image_link(record)) result = ESP_ERR_NOT_FINISHED", manager)
+
+    def test_synthetic_upload_probe_not_boot_or_product(self):
+        cmake = (ROOT / "main/CMakeLists.txt").read_text()
+        self.assertIn('"upload_file.c" "read_pico_upload.c" "upload_probe.c"', cmake)
+        probe = (ROOT / "main/upload_probe.c").read_text()
+        self.assertIn("s->attempted = true", probe)
+        self.assertIn("errno != EEXIST", probe)
+        for unsafe in ("unlink(", "remove(", "format(", "nvs_", "epaper", "esp_wifi"):
+            self.assertNotIn(unsafe, probe)
+        constants = (ROOT / "main/upload_probe.h").read_text()
+        for path in ("/storage/.RC3U0001.PART", "/storage/.RC3U0002.PART", "/storage/RC3U0001.BIN"):
+            self.assertIn(path, constants)
+        entry = (ROOT / "main/read_pico_storage_validation.c").read_text()
+        startup = entry[entry.index("void app_main(void)"):entry.index("while (!stopped)")]
+        self.assertNotIn("run_upload_probe(", startup)
+        self.assertIn("probe_session.close_failed |= upload_session.close_failed", entry)
 
 if __name__ == "__main__":
     unittest.main()

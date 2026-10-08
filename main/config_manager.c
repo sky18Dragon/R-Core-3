@@ -1,6 +1,8 @@
 #include "config_manager.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <time.h>
 
@@ -9,6 +11,11 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "storage.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include <stdatomic.h>
+#include "config_read.h"
+#include "wifi_text.h"
+#endif
 
 static const char *TAG = "config_manager";
 
@@ -23,11 +30,92 @@ static char wifi_password[WIFI_PASS_MAX_LEN] = {0};
 // Advanced network settings (collapsed section in the UI): custom NTP server,
 // static IP instead of DHCP, and DNS override
 static char ntp_server[NTP_SERVER_MAX_LEN] = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+// Protect checked name/network/time/revision and loading, not all caches/libc.
+static atomic_flag time_config_control = ATOMIC_FLAG_INIT;
+static bool timezone_applied;
+static bool device_hostnames_confirmed;
+static esp_err_t store_device_name_locked(const char *candidate)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    err = nvs_set_str(handle, NVS_DEVICE_NAME_KEY, candidate);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err == ESP_OK) {
+        memcpy(device_name, candidate, sizeof(device_name));
+        device_hostnames_confirmed = false;
+    }
+    return err;
+}
+static esp_err_t validate_device_name(const char *name, size_t *length)
+{
+    if (!name || !*name) return ESP_ERR_INVALID_ARG;
+    size_t n = strnlen(name, DEVICE_NAME_MAX_LEN);
+    if (n == DEVICE_NAME_MAX_LEN) return ESP_ERR_INVALID_SIZE;
+    for (size_t i = 0; i < n; ++i)
+        if ((unsigned char)name[i] < 0x20 || (unsigned char)name[i] == 0x7f) return ESP_ERR_INVALID_ARG;
+    *length = n;
+    return ESP_OK;
+}
+static esp_err_t validate_timezone(const char *tz, size_t *length)
+{
+    if (!tz || !*tz) return ESP_ERR_INVALID_ARG;
+    size_t n = strnlen(tz, TIMEZONE_MAX_LEN);
+    if (n == TIMEZONE_MAX_LEN) return ESP_ERR_INVALID_SIZE;
+    for (size_t i = 0; i < n; ++i)
+        if ((unsigned char)tz[i] < 0x20 || (unsigned char)tz[i] > 0x7e) return ESP_ERR_INVALID_ARG;
+    *length = n;
+    return ESP_OK; // Preserve upstream shape-only POSIX grammar policy.
+}
+static esp_err_t apply_loaded_timezone(void)
+{
+    timezone_applied = false;
+    if (setenv("TZ", tz_string, 1) != 0) return ESP_ERR_NOT_FINISHED;
+    tzset(); // libc has no grammar-validation/error result here.
+    const char *installed = getenv("TZ");
+    if (!installed || strcmp(installed, tz_string)) return ESP_ERR_NOT_FINISHED;
+    timezone_applied = true;
+    return ESP_OK;
+}
+static esp_err_t validate_ntp_server(const char *server, size_t *length)
+{
+    if (!server) return ESP_ERR_INVALID_ARG;
+    size_t n = strnlen(server, NTP_SERVER_MAX_LEN);
+    if (n == NTP_SERVER_MAX_LEN) return ESP_ERR_INVALID_SIZE;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)server[i];
+        if (c <= 0x20 || c > 0x7e) return ESP_ERR_INVALID_ARG;
+    }
+    *length = n;
+    return ESP_OK;
+}
+#endif
 static ip_mode_t ip_mode = IP_MODE_DHCP;
 static char static_ip[IP_ADDR_STR_MAX_LEN] = {0};
 static char static_netmask[IP_ADDR_STR_MAX_LEN] = {0};
 static char static_gateway[IP_ADDR_STR_MAX_LEN] = {0};
 static char dns_server[IP_ADDR_STR_MAX_LEN] = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static void copy_network_locked(wifi_network_t *out)
+{
+    wifi_network_t candidate = {.static_address = ip_mode == IP_MODE_STATIC};
+    memcpy(candidate.ip, static_ip, sizeof(candidate.ip));
+    memcpy(candidate.netmask, static_netmask, sizeof(candidate.netmask));
+    memcpy(candidate.gateway, static_gateway, sizeof(candidate.gateway));
+    memcpy(candidate.dns, dns_server, sizeof(candidate.dns));
+    *out = candidate;
+}
+static void publish_network_locked(const wifi_network_t *candidate)
+{
+    memcpy(static_ip, candidate->ip, sizeof(static_ip));
+    memcpy(static_netmask, candidate->netmask, sizeof(static_netmask));
+    memcpy(static_gateway, candidate->gateway, sizeof(static_gateway));
+    memcpy(dns_server, candidate->dns, sizeof(dns_server));
+    ip_mode = candidate->static_address ? IP_MODE_STATIC : IP_MODE_DHCP;
+}
+#endif
 
 // Auto Rotate
 static bool auto_rotate_enabled = false;
@@ -144,9 +232,111 @@ static void cron_from_legacy_interval(int seconds, char *out, size_t out_len)
     }
 }
 
-esp_err_t config_manager_init(void)
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static bool load_cron_valid(const char *joined)
+{
+    unsigned count = 0;
+    for (const char *p = joined; *p;) {
+        const char *newline = strchr(p, '\n');
+        size_t n = newline ? (size_t)(newline - p) : strlen(p);
+        if (n) {
+            if (n >= CRON_RULE_MAX_LEN || ++count > MAX_CRON_RULES) return false;
+            char rule[CRON_RULE_MAX_LEN];
+            memcpy(rule, p, n); rule[n] = 0;
+            cron_rule_t parsed;
+            if (!cron_parse(rule, &parsed)) return false;
+        }
+        if (!newline) break;
+        p = newline + 1;
+    }
+    return true;
+}
+static esp_err_t load_string(config_read_guard_t *g, nvs_handle_t h, const char *key,
+                              char *out, size_t *size)
+{
+    size_t capacity = *size;
+    memset(out, 0, capacity);
+    esp_err_t err = nvs_get_str(h, key, out, size);
+    return config_read_string(g, err, out, capacity, *size);
+}
+static esp_err_t load_u8(config_read_guard_t *g, nvs_handle_t h, const char *key, uint8_t *out)
+{
+    esp_err_t err = nvs_get_u8(h, key, out);
+    // All currently loaded booleans and two-choice enums have the same range.
+    return config_read_integer(g, err, *out, 0, 1);
+}
+static esp_err_t load_i32(config_read_guard_t *g, nvs_handle_t h, const char *key, int32_t *out)
+{
+    esp_err_t err = nvs_get_i32(h, key, out);
+    if (!err && !strcmp(key, NVS_DISPLAY_ROTATION_DEG_KEY) && *out != 0 && *out != 180)
+        return config_read_result(g, ESP_ERR_INVALID_RESPONSE);
+    int64_t minimum = !strcmp(key, NVS_LAST_INDEX_KEY) ? -1 : 0;
+    if (!strcmp(key, NVS_ROTATE_INTERVAL_KEY)) minimum = 1;
+    return config_read_integer(g, err, *out, minimum, INT32_MAX);
+}
+static esp_err_t load_i64(config_read_guard_t *g, nvs_handle_t h, const char *key, int64_t *out)
+{
+    esp_err_t err = nvs_get_i64(h, key, out);
+    return config_read_integer(g, err, *out, 0, INT64_MAX);
+}
+static esp_err_t load_blob(config_read_guard_t *g, nvs_handle_t h, const char *key,
+                            void *out, size_t *size)
+{
+    size_t capacity = *size;
+    esp_err_t err = nvs_get_blob(h, key, out, size);
+    if (out && err == ESP_ERR_NVS_NOT_FOUND) err = ESP_ERR_INVALID_RESPONSE;
+    if (!err && (!*size || *size > CA_CERT_MAX_LEN || (out && *size != capacity)))
+        err = ESP_ERR_INVALID_SIZE;
+    return config_read_result(g, err);
+}
+static void reset_load_defaults(void)
+{
+    device_hostnames_confirmed = false;
+    // Startup only, before any configuration consumer or network task exists.
+#define RESET_TEXT(field, initial) do { memset(field, 0, sizeof(field)); \
+    snprintf(field, sizeof(field), "%s", initial); } while (0)
+    RESET_TEXT(device_name, DEFAULT_DEVICE_NAME);
+    RESET_TEXT(tz_string, DEFAULT_TIMEZONE);
+    RESET_TEXT(ntp_server, DEFAULT_NTP_SERVER);
+    RESET_TEXT(wifi_ssid, DEFAULT_WIFI_SSID);
+    RESET_TEXT(wifi_password, DEFAULT_WIFI_PASSWORD);
+    RESET_TEXT(image_url, DEFAULT_IMAGE_URL);
+    RESET_TEXT(ha_url, DEFAULT_HA_URL);
+    RESET_TEXT(http_password, ""); RESET_TEXT(access_token, "");
+    RESET_TEXT(http_header_key, ""); RESET_TEXT(http_header_value, "");
+    RESET_TEXT(static_ip, ""); RESET_TEXT(static_netmask, "");
+    RESET_TEXT(static_gateway, ""); RESET_TEXT(dns_server, "");
+    RESET_TEXT(image_etag, ""); RESET_TEXT(openai_api_key, ""); RESET_TEXT(google_api_key, "");
+#undef RESET_TEXT
+    free(ca_cert_der); ca_cert_der = NULL; ca_cert_der_len = 0;
+    display_orientation = DISPLAY_ORIENTATION_LANDSCAPE;
+    display_rotation_deg = BOARD_HAL_DISPLAY_ROTATION_DEG;
+    auto_rotate_enabled = save_downloaded_images = debug_log_enabled = false;
+    deep_sleep_enabled = true;
+    ip_mode = IP_MODE_DHCP;
+    // The Read Pico product requires SD and has no volatile/flash fallback.
+    // Read config before board/mount IO; card availability is checked later.
+    rotation_mode = ROTATION_MODE_STORAGE;
+    sd_rotation_mode = SD_ROTATION_RANDOM;
+    last_index = -1; config_last_updated = 0;
+    memset(cron_rules_store, 0, sizeof(cron_rules_store)); cron_rule_count = 0;
+}
+// Restrict these aliases to startup loading. Explicit user save APIs below
+// retain the upstream contract and are not a migration-approval mechanism.
+#define nvs_get_str(...) load_string(&guard, __VA_ARGS__)
+#define nvs_get_u8(...) load_u8(&guard, __VA_ARGS__)
+#define nvs_get_i32(...) load_i32(&guard, __VA_ARGS__)
+#define nvs_get_i64(...) load_i64(&guard, __VA_ARGS__)
+#define nvs_get_blob(...) load_blob(&guard, __VA_ARGS__)
+#endif
+
+static esp_err_t config_manager_load(void)
 {
     ESP_LOGI(TAG, "Initializing config manager");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    config_read_guard_t guard = {0, ESP_ERR_NVS_NOT_FOUND, ESP_ERR_INVALID_RESPONSE};
+    reset_load_defaults();
+#endif
 
     // Rotation-schedule load is resolved after the read-only NVS handle closes
     // (migration / default seeding may need a read-write handle).
@@ -156,10 +346,19 @@ esp_err_t config_manager_init(void)
     bool seed_default_cron = true;
 
     nvs_handle_t nvs_handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) == ESP_OK) {
+    esp_err_t opened = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (config_read_result(&guard, opened) != ESP_OK && guard.error) return guard.error;
+#endif
+    if (opened == ESP_OK) {
         // General
         size_t device_name_len = DEVICE_NAME_MAX_LEN;
         if (nvs_get_str(nvs_handle, NVS_DEVICE_NAME_KEY, device_name, &device_name_len) == ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            size_t validated_length;
+            if (validate_device_name(device_name, &validated_length) != ESP_OK)
+                config_read_result(&guard, ESP_ERR_INVALID_RESPONSE);
+#endif
             ESP_LOGI(TAG, "Loaded device name from NVS: %s", device_name);
         } else {
             strncpy(device_name, DEFAULT_DEVICE_NAME, DEVICE_NAME_MAX_LEN - 1);
@@ -169,6 +368,11 @@ esp_err_t config_manager_init(void)
 
         size_t tz_len = TIMEZONE_MAX_LEN;
         if (nvs_get_str(nvs_handle, NVS_TIMEZONE_KEY, tz_string, &tz_len) == ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            size_t validated_length;
+            if (validate_timezone(tz_string, &validated_length) != ESP_OK)
+                config_read_result(&guard, ESP_ERR_INVALID_RESPONSE);
+#endif
             ESP_LOGI(TAG, "Loaded timezone from NVS: %s", tz_string);
         } else {
             strncpy(tz_string, DEFAULT_TIMEZONE, TIMEZONE_MAX_LEN - 1);
@@ -180,6 +384,13 @@ esp_err_t config_manager_init(void)
         esp_err_t pw_err =
             nvs_get_str(nvs_handle, NVS_HTTP_PASSWORD_KEY, http_password, &http_password_len);
         if (pw_err != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            // Missing means no password; an actual read error refuses startup
+            // after closing this read-only handle, never starts an unguarded API.
+            if (pw_err != ESP_ERR_NVS_NOT_FOUND)
+                ESP_LOGE(TAG, "HTTP password read failed (%s); configuration startup refused",
+                         esp_err_to_name(pw_err));
+#else
             // Not found is the normal "auth off" default. Any other error
             // also leaves auth off rather than failing closed: the routes that
             // could repair it, factory reset included, sit behind the same
@@ -188,11 +399,17 @@ esp_err_t config_manager_init(void)
                 ESP_LOGE(TAG, "Failed to read HTTP API password (%s); auth is OFF",
                          esp_err_to_name(pw_err));
             }
+#endif
             http_password[0] = '\0';
         }
 
         size_t ntp_server_len = NTP_SERVER_MAX_LEN;
         if (nvs_get_str(nvs_handle, NVS_NTP_SERVER_KEY, ntp_server, &ntp_server_len) == ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            size_t validated_length;
+            if (validate_ntp_server(ntp_server, &validated_length) != ESP_OK)
+                config_read_result(&guard, ESP_ERR_INVALID_RESPONSE);
+#endif
             ESP_LOGI(TAG, "Loaded NTP server from NVS: %s", ntp_server);
         } else {
             strncpy(ntp_server, DEFAULT_NTP_SERVER, NTP_SERVER_MAX_LEN - 1);
@@ -274,6 +491,9 @@ esp_err_t config_manager_init(void)
         // interval, else seed the default — both handled after this handle closes.
         size_t cron_len = sizeof(cron_buf);
         if (nvs_get_str(nvs_handle, NVS_ROTATE_CRON_KEY, cron_buf, &cron_len) == ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (!load_cron_valid(cron_buf)) config_read_result(&guard, ESP_ERR_INVALID_RESPONSE);
+#endif
             cron_load_from_joined(cron_buf);
             seed_default_cron = false;
             ESP_LOGI(TAG, "Loaded %d cron rule(s) from NVS", cron_rule_count);
@@ -287,12 +507,20 @@ esp_err_t config_manager_init(void)
             rotation_mode = (rotation_mode_t) stored_mode;
             ESP_LOGI(TAG, "Loaded rotation mode from NVS: %s",
                      rotation_mode == ROTATION_MODE_URL ? "url" : "storage");
-        } else if (storage_has_persistent_storage()) {
+        }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        else {
+            rotation_mode = ROTATION_MODE_STORAGE;
+            ESP_LOGI(TAG, "No rotation mode in NVS, using required Read Pico SD storage");
+        }
+#else
+        else if (storage_has_persistent_storage()) {
             rotation_mode = ROTATION_MODE_STORAGE;
             ESP_LOGI(TAG, "No rotation mode in NVS, using default for persistent storage: storage");
         } else {
             ESP_LOGI(TAG, "No rotation mode in NVS, using default for no-storage: url");
         }
+#endif
 
         // Auto Rotate - SDCARD
         uint8_t stored_sd_mode = SD_ROTATION_RANDOM;
@@ -322,6 +550,9 @@ esp_err_t config_manager_init(void)
         size_t blob_len = 0;
         if (nvs_get_blob(nvs_handle, NVS_CA_CERT_KEY, NULL, &blob_len) == ESP_OK && blob_len > 0) {
             ca_cert_der = malloc(blob_len);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (!ca_cert_der) config_read_result(&guard, ESP_ERR_NO_MEM);
+#endif
             if (ca_cert_der &&
                 nvs_get_blob(nvs_handle, NVS_CA_CERT_KEY, ca_cert_der, &blob_len) == ESP_OK) {
                 ca_cert_der_len = blob_len;
@@ -409,14 +640,31 @@ esp_err_t config_manager_init(void)
 
         nvs_close(nvs_handle);
     }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (guard.error) {
+        free(ca_cert_der); ca_cert_der = NULL; ca_cert_der_len = 0;
+        ESP_LOGE(TAG, "Configuration load refused (%s); no migration or key deletion",
+                 esp_err_to_name(guard.error));
+        return guard.error;
+    }
+#endif
 
     // Resolve the rotation schedule now that the read-only handle is closed.
     if (migrate_legacy_interval) {
         char rule[CRON_RULE_MAX_LEN];
         cron_from_legacy_interval((int) legacy_interval, rule, sizeof(rule));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        cron_load_from_joined(rule); // Preview in RAM, never persist a boot-time migration.
+#else
         const char *one[1] = {rule};
         config_manager_set_cron_rules(one, 1);  // persists to NVS
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        ESP_LOGI(TAG, "Legacy interval preview %d s -> cron \"%s\"; stored keys unchanged",
+                 (int) legacy_interval, rule);
+#else
         ESP_LOGI(TAG, "Migrated legacy interval %d s -> cron \"%s\"", (int) legacy_interval, rule);
+#endif
     } else if (seed_default_cron) {
         // Fresh device: seed default in memory; persists on the first user save.
         cron_load_from_joined(DEFAULT_ROTATE_CRON);
@@ -426,6 +674,7 @@ esp_err_t config_manager_init(void)
     // Erase the legacy quiet-hours (sleep schedule) keys. That feature was
     // replaced by cron rules that carry their own active-hours window; the
     // firmware no longer reads these keys, so drop them from NVS.
+#if !CONFIG_BOARD_DRIVER_READ_PICO
     {
         nvs_handle_t erase_handle;
         if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &erase_handle) == ESP_OK) {
@@ -447,10 +696,16 @@ esp_err_t config_manager_init(void)
             nvs_close(erase_handle);
         }
     }
+#endif
 
     // Apply timezone setting
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t applied = apply_loaded_timezone();
+    if (applied != ESP_OK) return applied;
+#else
     setenv("TZ", tz_string, 1);
     tzset();
+#endif
     ESP_LOGI(TAG, "Timezone set to: %s", tz_string);
 
     // Log current system time in local timezone
@@ -475,12 +730,57 @@ esp_err_t config_manager_init(void)
     ESP_LOGI(TAG, "Config manager initialized");
     return ESP_OK;
 }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#undef nvs_get_str
+#undef nvs_get_u8
+#undef nvs_get_i32
+#undef nvs_get_i64
+#undef nvs_get_blob
+#endif
+
+esp_err_t config_manager_init(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    char previous[NTP_SERVER_MAX_LEN];
+    char previous_timezone[TIMEZONE_MAX_LEN];
+    int64_t previous_revision = config_last_updated;
+    char previous_name[DEVICE_NAME_MAX_LEN];
+    bool previous_name_confirmed = device_hostnames_confirmed;
+    wifi_network_t previous_network;
+    memcpy(previous_name, device_name, sizeof(previous_name));
+    copy_network_locked(&previous_network);
+    memcpy(previous, ntp_server, sizeof(previous));
+    memcpy(previous_timezone, tz_string, sizeof(previous_timezone));
+    esp_err_t err = config_manager_load();
+    // Startup failures do not publish a partially loaded NTP value. Other
+    // caches retain their existing startup-only/fail-closed contract.
+    if (err != ESP_OK) {
+        memcpy(ntp_server, previous, sizeof(previous));
+        memcpy(tz_string, previous_timezone, sizeof(previous_timezone));
+        config_last_updated = previous_revision;
+        memcpy(device_name, previous_name, sizeof(previous_name));
+        device_hostnames_confirmed = previous_name_confirmed;
+        publish_network_locked(&previous_network);
+        // If application was attempted and failed, keep its false flag. A
+        // failed loader is not an approved rollback of the global environment.
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+#else
+    return config_manager_load();
+#endif
+}
 // ============================================================================
 // General
 // ============================================================================
 
 void config_manager_set_device_name(const char *name)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t err = config_manager_set_device_name_checked(name);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Device name save unconfirmed: %s", esp_err_to_name(err));
+#else
     if (name == NULL) {
         return;
     }
@@ -496,14 +796,145 @@ void config_manager_set_device_name(const char *name)
     }
 
     ESP_LOGI(TAG, "Device name set to: %s", device_name);
+#endif
+}
+esp_err_t config_manager_set_device_name_checked(const char *name)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    size_t length;
+    esp_err_t err = validate_device_name(name, &length);
+    if (err == ESP_OK) {
+        char candidate[DEVICE_NAME_MAX_LEN] = {0};
+        memcpy(candidate, name, length + 1);
+        err = store_device_name_locked(candidate);
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+#else
+    if (!name || !*name) return ESP_ERR_INVALID_ARG;
+    if (strnlen(name, sizeof(device_name)) >= sizeof(device_name)) return ESP_ERR_INVALID_SIZE;
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    err = nvs_set_str(handle, NVS_DEVICE_NAME_KEY, name);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err == ESP_OK) memcpy(device_name, name, strlen(name) + 1);
+    return err;
+#endif
 }
 const char *config_manager_get_device_name(void)
 {
     return device_name;
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t config_manager_apply_device_name_checked(const char *name, const device_name_ops_t *ops,
+                                                   device_name_result_t *result)
+{
+    if (!ops || !ops->mdns || !ops->wifi || !result) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    device_name_result_t state = {false, false, DEVICE_NAME_SAVE};
+    size_t length;
+    esp_err_t err = validate_device_name(name, &length);
+    if (err != ESP_OK) goto finished;
+    char candidate[DEVICE_NAME_MAX_LEN] = {0};
+    memcpy(candidate, name, length + 1);
+    const char *current = device_name[0] ? device_name : DEFAULT_DEVICE_NAME;
+    if (strcmp(candidate, current)) {
+        err = store_device_name_locked(candidate);
+        if (err != ESP_OK) goto finished;
+    }
+    state.name_accepted = true; // Existing loaded/current value needs no rewrite.
+    if (!device_hostnames_confirmed) {
+        state.step = DEVICE_NAME_MDNS;
+        err = ops->mdns(ops->context, candidate);
+        if (err != ESP_OK) goto finished;
+        state.step = DEVICE_NAME_WIFI;
+        err = ops->wifi(ops->context, candidate);
+        if (err != ESP_OK) goto finished;
+        device_hostnames_confirmed = true;
+    }
+    state.hostnames_confirmed = true;
+    state.step = DEVICE_NAME_COMPLETE;
+finished:
+    *result = state;
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+esp_err_t config_manager_copy_device_name(char *out, size_t capacity)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    const char *value = device_name[0] ? device_name : DEFAULT_DEVICE_NAME;
+    size_t length = strlen(value);
+    esp_err_t err = capacity > length ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    if (err == ESP_OK) memcpy(out, value, length + 1);
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+esp_err_t config_manager_copy_network(wifi_network_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    copy_network_locked(out);
+    atomic_flag_clear(&time_config_control);
+    return ESP_OK;
+}
+esp_err_t config_manager_patch_network_checked(uint32_t fields, const wifi_network_t *patch)
+{
+    if (!patch || fields & ~WIFI_NETWORK_PATCH_ALL) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    wifi_network_t current, candidate;
+    copy_network_locked(&current);
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (!wifi_network_patch(&candidate, &current, fields, patch)) goto finished;
+    err = ESP_OK;
+    if (!fields) goto finished;
+    nvs_handle_t handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) goto finished;
+    const char *keys[] = {NVS_STATIC_IP_KEY, NVS_STATIC_NETMASK_KEY, NVS_STATIC_GATEWAY_KEY, NVS_DNS_SERVER_KEY};
+    const char *values[] = {candidate.ip, candidate.netmask, candidate.gateway, candidate.dns};
+    for (unsigned i = 0; err == ESP_OK && i < 4; ++i) err = nvs_set_str(handle, keys[i], values[i]);
+    if (err == ESP_OK) err = nvs_set_u8(handle, NVS_IP_MODE_KEY, candidate.static_address ? IP_MODE_STATIC : IP_MODE_DHCP);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err == ESP_OK) publish_network_locked(&candidate);
+finished:
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+#endif
+
 esp_err_t config_manager_set_timezone(const char *tz)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    size_t length;
+    esp_err_t err = validate_timezone(tz, &length);
+    if (err == ESP_OK) {
+        char candidate[TIMEZONE_MAX_LEN] = {0};
+        memcpy(candidate, tz, length + 1);
+        nvs_handle_t handle;
+        err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+        if (err == ESP_OK) {
+            err = nvs_set_str(handle, NVS_TIMEZONE_KEY, candidate);
+            if (err == ESP_OK) err = nvs_commit(handle);
+            nvs_close(handle);
+        }
+        if (err == ESP_OK) {
+            memcpy(tz_string, candidate, sizeof(tz_string));
+            // Persisted but application may fail; callers must report this
+            // partial outcome, not claim saved/runtime state was rolled back.
+            err = apply_loaded_timezone();
+        }
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+#else
     if (tz == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -525,6 +956,7 @@ esp_err_t config_manager_set_timezone(const char *tz)
 
     ESP_LOGI(TAG, "Timezone set to: %s", tz_string);
     return ESP_OK;
+#endif
 }
 const char *config_manager_get_timezone(void)
 {
@@ -536,6 +968,10 @@ const char *config_manager_get_timezone(void)
 
 void config_manager_set_ntp_server(const char *server)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t err = config_manager_set_ntp_server_checked(server);
+    if (err != ESP_OK) ESP_LOGE(TAG, "NTP save not confirmed: %s", esp_err_to_name(err));
+#else
     if (server == NULL) {
         return;
     }
@@ -551,7 +987,93 @@ void config_manager_set_ntp_server(const char *server)
     }
 
     ESP_LOGI(TAG, "NTP server set to: %s", ntp_server);
+#endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t config_manager_copy_timezone(char *out, size_t capacity, bool *applied)
+{
+    if (!out || !applied) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    const char *value = tz_string[0] ? tz_string : DEFAULT_TIMEZONE;
+    size_t length = strlen(value);
+    esp_err_t err = capacity > length ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    if (err == ESP_OK) {
+        memcpy(out, value, length + 1);
+        *applied = timezone_applied;
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+esp_err_t config_manager_copy_local_time(time_t *timestamp, char *formatted, size_t formatted_capacity,
+                                        char *timezone, size_t capacity)
+{
+    if (!timestamp || !formatted || !timezone) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    const char *value = tz_string[0] ? tz_string : DEFAULT_TIMEZONE;
+    size_t length = strlen(value);
+    esp_err_t err = ESP_ERR_NOT_FINISHED;
+    if (capacity <= length || !formatted_capacity) err = ESP_ERR_INVALID_SIZE;
+    else if (timezone_applied) {
+        time_t now;
+        struct tm candidate;
+        char text[64];
+        err = ESP_ERR_INVALID_STATE;
+        if (time(&now) != (time_t)-1 && now >= 1577836800 && localtime_r(&now, &candidate) &&
+            strftime(text, sizeof(text), "%Y-%m-%d %H:%M:%S", &candidate)) {
+            size_t text_length = strlen(text);
+            if (text_length >= formatted_capacity) {
+                atomic_flag_clear(&time_config_control);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            *timestamp = now;
+            memcpy(formatted, text, text_length + 1);
+            memcpy(timezone, value, length + 1);
+            err = ESP_OK;
+        }
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+esp_err_t config_manager_set_ntp_server_checked(const char *server)
+{
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    size_t length;
+    esp_err_t err = validate_ntp_server(server, &length);
+    if (err != ESP_OK) {
+        atomic_flag_clear(&time_config_control);
+        return err;
+    }
+    // Snapshot before IO; a caller-owned request is not retained by NVS/cache.
+    char candidate[NTP_SERVER_MAX_LEN] = {0};
+    memcpy(candidate, server, length + 1);
+    nvs_handle_t handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_NTP_SERVER_KEY, candidate);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (err == ESP_OK) memcpy(ntp_server, candidate, sizeof(ntp_server));
+    atomic_flag_clear(&time_config_control);
+    // A failed set/commit may still have affected storage; no rollback claim.
+    return err;
+}
+
+esp_err_t config_manager_copy_ntp_server(char *out, size_t capacity)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    const char *value = ntp_server[0] ? ntp_server : DEFAULT_NTP_SERVER;
+    size_t length = strlen(value);
+    esp_err_t err = capacity > length ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    if (err == ESP_OK) memcpy(out, value, length + 1);
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+#endif
 
 const char *config_manager_get_ntp_server(void)
 {
@@ -568,6 +1090,22 @@ const char *config_manager_get_ntp_server(void)
 // Persist one dotted-IPv4 string setting (helper for the network settings).
 static void set_ip_str(const char *nvs_key, char *cache, const char *value)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    (void)cache;
+    wifi_network_t patch = {0};
+    uint32_t fields;
+    char *destination;
+    if (!strcmp(nvs_key, NVS_STATIC_IP_KEY)) { fields = WIFI_NETWORK_PATCH_IP; destination = patch.ip; }
+    else if (!strcmp(nvs_key, NVS_STATIC_NETMASK_KEY)) { fields = WIFI_NETWORK_PATCH_NETMASK; destination = patch.netmask; }
+    else if (!strcmp(nvs_key, NVS_STATIC_GATEWAY_KEY)) { fields = WIFI_NETWORK_PATCH_GATEWAY; destination = patch.gateway; }
+    else { fields = WIFI_NETWORK_PATCH_DNS; destination = patch.dns; }
+    if (!value) value = "";
+    size_t length = strnlen(value, 16);
+    if (length == 16) { ESP_LOGE(TAG, "Network value too long; not saved"); return; }
+    memcpy(destination, value, length + 1);
+    esp_err_t err = config_manager_patch_network_checked(fields, &patch);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Network value save unconfirmed: %s", esp_err_to_name(err));
+#else
     if (value == NULL) {
         value = "";
     }
@@ -580,10 +1118,17 @@ static void set_ip_str(const char *nvs_key, char *cache, const char *value)
         nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
     }
+#endif
 }
 
 void config_manager_set_ip_mode(ip_mode_t mode)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (mode != IP_MODE_DHCP && mode != IP_MODE_STATIC) { ESP_LOGE(TAG, "Invalid IP mode; not saved"); return; }
+    wifi_network_t patch = {.static_address = mode == IP_MODE_STATIC};
+    esp_err_t err = config_manager_patch_network_checked(WIFI_NETWORK_PATCH_MODE, &patch);
+    if (err != ESP_OK) ESP_LOGE(TAG, "IP mode save unconfirmed: %s", esp_err_to_name(err));
+#else
     ip_mode = mode;
 
     nvs_handle_t nvs_handle;
@@ -593,6 +1138,7 @@ void config_manager_set_ip_mode(ip_mode_t mode)
         nvs_close(nvs_handle);
     }
     ESP_LOGI(TAG, "IP mode set to: %s", mode == IP_MODE_STATIC ? "static" : "dhcp");
+#endif
 }
 
 ip_mode_t config_manager_get_ip_mode(void)
@@ -638,6 +1184,56 @@ void config_manager_set_dns_server(const char *dns)
 const char *config_manager_get_dns_server(void)
 {
     return dns_server;
+}
+
+esp_err_t config_manager_save_provisioning_checked(const char *ssid, const char *password,
+                                                  const char *name, const wifi_network_t *network)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    size_t name_length;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    if (!wifi_text_credentials_valid(ssid, password) ||
+        validate_device_name(name, &name_length) != ESP_OK || !wifi_network_valid(network)) {
+        atomic_flag_clear(&time_config_control);
+        return ESP_ERR_INVALID_ARG;
+    }
+    wifi_text_t strings = {0};
+    memcpy(strings.ssid, ssid, strlen(ssid) + 1);
+    memcpy(strings.password, password, strlen(password) + 1);
+    memcpy(strings.device_name, name, strlen(name) + 1);
+    wifi_network_t settings = *network;
+    // One handle/commit reduces intermediate published state, but NVS set calls
+    // may already have persisted. Never claim rollback or multi-key atomicity.
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        atomic_flag_clear(&time_config_control);
+        return err;
+    }
+    const char *keys[] = {NVS_WIFI_SSID_KEY, NVS_WIFI_PASS_KEY, NVS_DEVICE_NAME_KEY,
+                         NVS_STATIC_IP_KEY, NVS_STATIC_NETMASK_KEY, NVS_STATIC_GATEWAY_KEY,
+                         NVS_DNS_SERVER_KEY};
+    const char *values[] = {strings.ssid, strings.password, strings.device_name, settings.ip,
+                           settings.netmask, settings.gateway, settings.dns};
+    for (unsigned i = 0; err == ESP_OK && i < sizeof(keys) / sizeof(keys[0]); ++i)
+        err = nvs_set_str(handle, keys[i], values[i]);
+    if (err == ESP_OK) err = nvs_set_u8(handle, NVS_IP_MODE_KEY,
+                                      settings.static_address ? IP_MODE_STATIC : IP_MODE_DHCP);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err == ESP_OK) {
+        memcpy(wifi_ssid, strings.ssid, sizeof(wifi_ssid));
+        memcpy(wifi_password, strings.password, sizeof(wifi_password));
+        memcpy(device_name, strings.device_name, sizeof(device_name));
+        device_hostnames_confirmed = false;
+        publish_network_locked(&settings);
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+#else
+    (void)ssid; (void)password; (void)name; (void)network;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 void config_manager_set_display_orientation(display_orientation_t orientation)
@@ -1212,8 +1808,33 @@ bool config_manager_get_debug_log_enabled(void)
     return debug_log_enabled;
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t store_config_revision(int64_t candidate)
+{
+    if (candidate < 1577836800 || candidate < config_last_updated) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_i64(handle, "cfg_updated", candidate);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (err == ESP_OK) config_last_updated = candidate;
+    return err;
+}
+#endif
+
 void config_manager_set_config_last_updated(int64_t timestamp)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&time_config_control)) {
+        ESP_LOGE(TAG, "Config revision busy; not saved");
+        return;
+    }
+    esp_err_t err = store_config_revision(timestamp);
+    atomic_flag_clear(&time_config_control);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Config revision save unconfirmed: %s", esp_err_to_name(err));
+#else
     config_last_updated = timestamp;
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
@@ -1221,6 +1842,7 @@ void config_manager_set_config_last_updated(int64_t timestamp)
         nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
     }
+#endif
 }
 
 int64_t config_manager_get_config_last_updated(void)
@@ -1230,7 +1852,37 @@ int64_t config_manager_get_config_last_updated(void)
 
 void config_manager_touch_config(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t err = config_manager_touch_config_checked();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Config revision not confirmed: %s", esp_err_to_name(err));
+#else
     time_t now;
     time(&now);
     config_manager_set_config_last_updated((int64_t) now);
+#endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t config_manager_copy_config_last_updated(int64_t *timestamp)
+{
+    if (!timestamp) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    *timestamp = config_last_updated;
+    atomic_flag_clear(&time_config_control);
+    return ESP_OK;
+}
+
+esp_err_t config_manager_touch_config_checked(void)
+{
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    time_t now;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (time(&now) == (time_t)-1 || now < 1577836800 || config_last_updated == INT64_MAX) goto done;
+    int64_t candidate = (int64_t)now;
+    if (candidate <= config_last_updated) candidate = config_last_updated + 1;
+    err = store_config_revision(candidate);
+done:
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+#endif

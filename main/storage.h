@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <stdbool.h>
+#include "wifi_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,8 @@ bool storage_has_persistent_storage(void);
  * @return esp_err_t ESP_OK if found and read successfully, ESP_ERR_NOT_FOUND if not found
  */
 esp_err_t storage_read_wifi_credentials(char *ssid, char *password);
+// Read Pico's checked read-only import; returns device name without saving it.
+esp_err_t storage_read_wifi_config(wifi_text_t *out);
 
 /**
  * @brief Unmount storage before deep sleep to release flash references

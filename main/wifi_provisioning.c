@@ -18,9 +18,18 @@
 #include "power_manager.h"
 #include "utils.h"
 #include "wifi_manager.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "cJSON.h"
+#include "wifi_text.h"
+#include "provisioning_session.h"
+#include "provisioning_apply.h"
+#include "wifi_provisioning_ap.h"
+#endif
 
 static const char *TAG = "wifi_prov";
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static httpd_handle_t provisioning_server = NULL;
+#endif
 
 // Structure to pass credentials to test task
 typedef struct {
@@ -193,6 +202,10 @@ static const char *auth_mode_str(wifi_auth_mode_t authmode)
 
 static esp_err_t provision_scan_handler(httpd_req_t *req)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!wifi_provisioning_ap_active())
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Provisioning unavailable");
+#endif
     ESP_LOGI(TAG, "WiFi scan requested");
 
 #define MAX_SCAN_RESULTS 20
@@ -202,7 +215,17 @@ static esp_err_t provision_scan_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    int count = 0;
+    esp_err_t scanned = wifi_manager_scan_checked(ap_records, MAX_SCAN_RESULTS, &count);
+    if (scanned != ESP_OK) {
+        free(ap_records);
+        ESP_LOGE(TAG, "WiFi scan unavailable: %s", esp_err_to_name(scanned));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "WiFi scan unavailable");
+    }
+#else
     int count = wifi_manager_scan(ap_records, MAX_SCAN_RESULTS);
+#endif
 
     // Deduplicate by SSID, keeping strongest signal for each
     // Use in-place dedup: for each entry, check if SSID already seen earlier
@@ -244,6 +267,30 @@ static esp_err_t provision_scan_handler(httpd_req_t *req)
         }
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // SSIDs are untrusted: a fixed 80-byte estimate cannot bound JSON escapes.
+    cJSON *array = cJSON_CreateArray();
+    bool json_ok = array != NULL;
+    for (int i = 0; json_ok && i < unique_count; ++i) {
+        cJSON *entry = cJSON_CreateObject();
+        json_ok = entry && cJSON_AddStringToObject(entry, "ssid", (char *)ap_records[i].ssid) &&
+                  cJSON_AddNumberToObject(entry, "rssi", ap_records[i].rssi) &&
+                  cJSON_AddStringToObject(entry, "auth", auth_mode_str(ap_records[i].authmode));
+        if (!json_ok || !cJSON_AddItemToArray(array, entry)) {
+            cJSON_Delete(entry);
+            json_ok = false;
+        }
+    }
+    char *json_buf = json_ok ? cJSON_PrintUnformatted(array) : NULL;
+    cJSON_Delete(array);
+    free(ap_records);
+    if (!json_buf)
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scan response unavailable");
+    esp_err_t response = httpd_resp_set_type(req, "application/json");
+    if (response == ESP_OK) response = httpd_resp_send(req, json_buf, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(json_buf);
+    return response;
+#else
     // Build JSON response
     // Each entry: {"ssid":"...", "rssi":-xx, "auth":"..."} ~ max 80 chars
     // Array overhead + commas: ~2 + unique_count
@@ -289,6 +336,7 @@ static esp_err_t provision_scan_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "WiFi scan returned %d unique networks", unique_count);
     return ESP_OK;
+#endif
 }
 
 // Extract one field from a URL-encoded form body ("key=value&..."), decoding
@@ -328,14 +376,72 @@ static bool get_form_field(const char *buf, const char *key, char *out, size_t o
     return true;
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+typedef struct { httpd_req_t *req; uint32_t candidate; } provisioning_apply_context_t;
+static bool apply_current(void *ctx, uint32_t ticket)
+{
+    (void)ctx; return wifi_provisioning_ap_active() && provisioning_session_ticket() == ticket;
+}
+static int apply_test(void *ctx, const provisioning_apply_request_t *request)
+{
+    provisioning_apply_context_t *context = ctx;
+    return wifi_manager_test_network_owned(request->ssid, request->password, &request->network,
+                                           &context->candidate);
+}
+static int apply_save(void *ctx, const provisioning_apply_request_t *request)
+{
+    (void)ctx;
+    return config_manager_save_provisioning_checked(request->ssid, request->password,
+                                                    request->name, &request->network);
+}
+static int apply_response(void *ctx, const provisioning_apply_request_t *request)
+{
+    (void)request;
+    const char *response = "<html><body><h1>WiFi Configured!</h1>"
+                           "<p>Successfully connected to your WiFi network.</p>"
+                           "<p>Device will restart in 3 seconds...</p></body></html>";
+    provisioning_apply_context_t *context = ctx;
+    return httpd_resp_send(context->req, response, strlen(response));
+}
+static bool apply_complete(void *ctx, uint32_t ticket)
+{
+    (void)ctx; return wifi_provisioning_ap_active() && provisioning_session_commit(ticket);
+}
+#endif
+
 static esp_err_t provision_save_handler(httpd_req_t *req)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    uint32_t ticket = provisioning_session_ticket();
+    if (!ticket) return ESP_ERR_INVALID_STATE;
+#endif
     char buf[512];
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (req->content_len <= 0 || req->content_len >= sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid setup body length");
+        return ESP_FAIL;
+    }
+    int ret = 0, timeouts = 0;
+    while (ret < req->content_len) {
+        int n = httpd_req_recv(req, buf + ret, req->content_len - ret);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 8) continue;
+        if (n <= 0 || n > req->content_len - ret) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete setup body");
+            return ESP_FAIL;
+        }
+        timeouts = 0; ret += n;
+    }
+    if (!wifi_text_form_valid((const uint8_t *)buf, ret)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid, duplicate or overlong setup field");
+        return ESP_FAIL;
+    }
+#else
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data received");
         return ESP_FAIL;
     }
+#endif
     buf[ret] = '\0';
 
     char ssid[WIFI_SSID_MAX_LEN] = {0};
@@ -353,6 +459,12 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
     }
     get_form_field(buf, "password", password, sizeof(password));
     get_form_field(buf, "deviceName", device_name, sizeof(device_name));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!wifi_text_credentials_valid(ssid, password)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid SSID or WPA password");
+        return ESP_FAIL;
+    }
+#endif
 
     // Use default if device name is empty
     if (strlen(device_name) == 0) {
@@ -372,6 +484,12 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
     char field_dns[IP_ADDR_STR_MAX_LEN] = {0};
     get_form_field(buf, "ipMode", ip_mode_str, sizeof(ip_mode_str));
     bool want_static = (strcmp(ip_mode_str, "static") == 0);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (ip_mode_str[0] && strcmp(ip_mode_str, "dhcp") && strcmp(ip_mode_str, "static")) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid IP mode");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
     if (want_static) {
         esp_ip4_addr_t parsed;
         if (!get_form_field(buf, "staticIp", field_ip, sizeof(field_ip)) ||
@@ -394,6 +512,23 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
         }
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    wifi_network_t candidate_network, retained_network;
+    esp_err_t copied = config_manager_copy_network(&retained_network);
+    if (copied != ESP_OK) {
+        esp_err_t response = httpd_resp_set_status(req, "503 Service Unavailable");
+        if (response == ESP_OK) response = httpd_resp_sendstr(req, "Network configuration snapshot unavailable");
+        if (response != ESP_OK) return response;
+        return copied;
+    }
+    if (!wifi_network_copy(&candidate_network, want_static,
+                           want_static ? field_ip : retained_network.ip,
+                           want_static ? field_mask : retained_network.netmask,
+                           want_static ? field_gw : retained_network.gateway, field_dns)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid dotted IPv4 network configuration");
+        return ESP_ERR_INVALID_ARG;
+    }
+#else
     if (want_static) {
         config_manager_set_static_ip(field_ip);
         config_manager_set_static_netmask(field_mask);
@@ -403,11 +538,53 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
         config_manager_set_ip_mode(IP_MODE_DHCP);
     }
     config_manager_set_dns_server(field_dns);
+#endif
 
     ESP_LOGI(TAG, "Received WiFi credentials - SSID: %s", ssid);
     ESP_LOGI(TAG, "Device name: %s", device_name);
     ESP_LOGI(TAG, "Testing WiFi connection in APSTA mode...");
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    provisioning_apply_request_t request = {.ticket = ticket, .network = candidate_network};
+    memcpy(request.ssid, ssid, sizeof(request.ssid));
+    memcpy(request.password, password, sizeof(request.password));
+    memcpy(request.name, device_name, sizeof(request.name));
+    const provisioning_apply_ops_t ops = {apply_current, apply_test, apply_save, apply_response, apply_complete};
+    provisioning_apply_context_t context = {.req = req};
+    provisioning_apply_result_t result = provisioning_apply_run(&request, &ops, &context);
+    if (result.stage != PROVISION_APPLY_DONE && context.candidate) {
+        esp_err_t cleanup = wifi_manager_cancel_candidate(context.candidate);
+        if (cleanup != ESP_OK)
+            ESP_LOGE(TAG, "Candidate cleanup not confirmed (%s); no automatic restart", esp_err_to_name(cleanup));
+    }
+    switch (result.stage) {
+    case PROVISION_APPLY_DONE: return ESP_OK;
+    case PROVISION_APPLY_TEST:
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                           "Candidate connection could not be verified; configuration not saved");
+        return result.error;
+    case PROVISION_APPLY_SAVE:
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                           "Configuration save failed; persistent values may be partial; no automatic restart");
+        return result.error;
+    case PROVISION_APPLY_STALE:
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_send(req, "Configuration session expired; not saved", HTTPD_RESP_USE_STRLEN);
+        return ESP_ERR_INVALID_STATE;
+    case PROVISION_APPLY_INVALID: return ESP_ERR_INVALID_ARG;
+    case PROVISION_APPLY_SAVED_STALE:
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_send(req, "Configuration saved but session expired; no automatic restart", HTTPD_RESP_USE_STRLEN);
+        return ESP_ERR_INVALID_STATE;
+    case PROVISION_APPLY_RESPONSE:
+        ESP_LOGE(TAG, "Configuration saved but response failed; session not completed");
+        return result.error;
+    case PROVISION_APPLY_COMPLETE:
+        ESP_LOGE(TAG, "Configuration saved/response sent but session expired; no completion/automatic restart");
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_ERR_INVALID_STATE;
+#else
     // Switch to APSTA mode to test connection while keeping AP running
     esp_wifi_set_mode(WIFI_MODE_APSTA);
 
@@ -465,10 +642,9 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
         httpd_resp_send(req, error_response, strlen(error_response));
         return ESP_FAIL;
     }
-
     ESP_LOGI(TAG, "WiFi connection successful! Saving credentials...");
 
-    // Connection successful - save credentials
+    // Legacy successful connection - save credentials then device name.
     esp_err_t err = wifi_manager_save_credentials(ssid, password);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save credentials");
@@ -486,6 +662,7 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
     httpd_resp_send(req, response, strlen(response));
 
     return ESP_OK;
+#endif
 }
 
 esp_err_t wifi_provisioning_init(void)
@@ -494,8 +671,124 @@ esp_err_t wifi_provisioning_init(void)
     return ESP_OK;
 }
 
+static esp_err_t register_provisioning_routes(httpd_handle_t server)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#define AP_REGISTER(uri) do { esp_err_t error = httpd_register_uri_handler(server, uri); \
+                          if (error != ESP_OK) return error; } while (0)
+#else
+#define AP_REGISTER(uri) httpd_register_uri_handler(server, uri)
+#endif
+    // Serve main webapp - Vue router will handle /provision route
+    httpd_uri_t index_uri = {
+        .uri = "/", .method = HTTP_GET, .handler = provision_index_handler, .user_ctx = NULL};
+    AP_REGISTER(&index_uri);
+
+    httpd_uri_t provision_uri = {.uri = "/provision",
+                                 .method = HTTP_GET,
+                                 .handler = provision_index_handler,
+                                 .user_ctx = NULL};
+    AP_REGISTER(&provision_uri);
+
+    // Webapp assets
+    httpd_uri_t css_uri = {.uri = "/assets/index.css",
+                           .method = HTTP_GET,
+                           .handler = provision_css_handler,
+                           .user_ctx = NULL};
+    AP_REGISTER(&css_uri);
+
+    httpd_uri_t js_uri = {.uri = "/assets/index.js",
+                          .method = HTTP_GET,
+                          .handler = provision_js_handler,
+                          .user_ctx = NULL};
+    AP_REGISTER(&js_uri);
+
+    httpd_uri_t js2_uri = {.uri = "/assets/index2.js",
+                           .method = HTTP_GET,
+                           .handler = provision_js2_handler,
+                           .user_ctx = NULL};
+    AP_REGISTER(&js2_uri);
+
+    httpd_uri_t exif_uri = {.uri = "/assets/exif-reader.js",
+                            .method = HTTP_GET,
+                            .handler = provision_exif_js_handler,
+                            .user_ctx = NULL};
+    AP_REGISTER(&exif_uri);
+
+    httpd_uri_t browser_uri = {.uri = "/assets/browser.js",
+                               .method = HTTP_GET,
+                               .handler = provision_browser_js_handler,
+                               .user_ctx = NULL};
+    AP_REGISTER(&browser_uri);
+
+    httpd_uri_t vite_uri = {.uri = "/assets/__vite-browser-external.js",
+                            .method = HTTP_GET,
+                            .handler = provision_vite_js_handler,
+                            .user_ctx = NULL};
+    AP_REGISTER(&vite_uri);
+
+    httpd_uri_t icon_uri = {.uri = "/icon.svg",
+                            .method = HTTP_GET,
+                            .handler = provision_icon_handler,
+                            .user_ctx = NULL};
+    AP_REGISTER(&icon_uri);
+
+    // Save credentials handler
+    httpd_uri_t save_uri = {.uri = "/save",
+                            .method = HTTP_POST,
+                            .handler = provision_save_handler,
+                            .user_ctx = NULL};
+    AP_REGISTER(&save_uri);
+
+    // WiFi scan handler
+    httpd_uri_t scan_uri = {.uri = "/api/wifi/scan",
+                            .method = HTTP_GET,
+                            .handler = provision_scan_handler,
+                            .user_ctx = NULL};
+    AP_REGISTER(&scan_uri);
+
+    // Keep-alive handler
+    httpd_uri_t keep_alive_uri = {.uri = "/api/keep_alive",
+                                  .method = HTTP_GET,
+                                  .handler = provision_keep_alive_handler,
+                                  .user_ctx = NULL};
+    AP_REGISTER(&keep_alive_uri);
+
+    // iOS captive portal detection
+    httpd_uri_t ios_captive = {.uri = "/hotspot-detect.html",
+                               .method = HTTP_GET,
+                               .handler = captive_portal_handler,
+                               .user_ctx = NULL};
+    AP_REGISTER(&ios_captive);
+
+    // Android captive portal detection
+    httpd_uri_t android_captive = {.uri = "/generate_204",
+                                   .method = HTTP_GET,
+                                   .handler = captive_portal_handler,
+                                   .user_ctx = NULL};
+    AP_REGISTER(&android_captive);
+
+    // Windows captive portal detection
+    httpd_uri_t windows_captive = {.uri = "/connecttest.txt",
+                                   .method = HTTP_GET,
+                                   .handler = captive_portal_handler,
+                                   .user_ctx = NULL};
+    AP_REGISTER(&windows_captive);
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_portal_error_handler);
+#else
+    httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_portal_error_handler);
+    return ESP_OK;
+#endif
+#undef AP_REGISTER
+}
+
 esp_err_t wifi_provisioning_start_ap(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return wifi_provisioning_ap_start(get_setup_ap_ssid(), register_provisioning_routes);
+#else
     const char *ap_ssid = get_setup_ap_ssid();
     size_t ap_ssid_len = strnlen(ap_ssid, sizeof(((wifi_config_t *) 0)->ap.ssid) + 1);
     if (ap_ssid_len == 0 || ap_ssid_len > sizeof(((wifi_config_t *) 0)->ap.ssid)) {
@@ -551,118 +844,23 @@ esp_err_t wifi_provisioning_start_ap(void)
     config.max_uri_handlers = 16;
 
     if (httpd_start(&provisioning_server, &config) == ESP_OK) {
-        // Serve main webapp - Vue router will handle /provision route
-        httpd_uri_t index_uri = {
-            .uri = "/", .method = HTTP_GET, .handler = provision_index_handler, .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &index_uri);
-
-        httpd_uri_t provision_uri = {.uri = "/provision",
-                                     .method = HTTP_GET,
-                                     .handler = provision_index_handler,
-                                     .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &provision_uri);
-
-        // Webapp assets
-        httpd_uri_t css_uri = {.uri = "/assets/index.css",
-                               .method = HTTP_GET,
-                               .handler = provision_css_handler,
-                               .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &css_uri);
-
-        httpd_uri_t js_uri = {.uri = "/assets/index.js",
-                              .method = HTTP_GET,
-                              .handler = provision_js_handler,
-                              .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &js_uri);
-
-        httpd_uri_t js2_uri = {.uri = "/assets/index2.js",
-                               .method = HTTP_GET,
-                               .handler = provision_js2_handler,
-                               .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &js2_uri);
-
-        httpd_uri_t exif_uri = {.uri = "/assets/exif-reader.js",
-                                .method = HTTP_GET,
-                                .handler = provision_exif_js_handler,
-                                .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &exif_uri);
-
-        httpd_uri_t browser_uri = {.uri = "/assets/browser.js",
-                                   .method = HTTP_GET,
-                                   .handler = provision_browser_js_handler,
-                                   .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &browser_uri);
-
-        httpd_uri_t vite_uri = {.uri = "/assets/__vite-browser-external.js",
-                                .method = HTTP_GET,
-                                .handler = provision_vite_js_handler,
-                                .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &vite_uri);
-
-        httpd_uri_t icon_uri = {.uri = "/icon.svg",
-                                .method = HTTP_GET,
-                                .handler = provision_icon_handler,
-                                .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &icon_uri);
-
-        // Save credentials handler
-        httpd_uri_t save_uri = {.uri = "/save",
-                                .method = HTTP_POST,
-                                .handler = provision_save_handler,
-                                .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &save_uri);
-
-        // WiFi scan handler
-        httpd_uri_t scan_uri = {.uri = "/api/wifi/scan",
-                                .method = HTTP_GET,
-                                .handler = provision_scan_handler,
-                                .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &scan_uri);
-
-        // Keep-alive handler
-        httpd_uri_t keep_alive_uri = {.uri = "/api/keep_alive",
-                                      .method = HTTP_GET,
-                                      .handler = provision_keep_alive_handler,
-                                      .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &keep_alive_uri);
-
-        // iOS captive portal detection
-        httpd_uri_t ios_captive = {.uri = "/hotspot-detect.html",
-                                   .method = HTTP_GET,
-                                   .handler = captive_portal_handler,
-                                   .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &ios_captive);
-
-        // Android captive portal detection
-        httpd_uri_t android_captive = {.uri = "/generate_204",
-                                       .method = HTTP_GET,
-                                       .handler = captive_portal_handler,
-                                       .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &android_captive);
-
-        // Windows captive portal detection
-        httpd_uri_t windows_captive = {.uri = "/connecttest.txt",
-                                       .method = HTTP_GET,
-                                       .handler = captive_portal_handler,
-                                       .user_ctx = NULL};
-        httpd_register_uri_handler(provisioning_server, &windows_captive);
-
+        register_provisioning_routes(provisioning_server);
         ESP_LOGI(TAG, "Provisioning web server started on http://192.168.4.1");
         ESP_LOGI(TAG, "Captive portal detection enabled for iOS/Android/Windows");
-
-        // Register error handler for 404 (catch-all for unmatched URLs)
-        httpd_register_err_handler(provisioning_server, HTTPD_404_NOT_FOUND,
-                                   captive_portal_error_handler);
     }
 
     // Start DNS server for captive portal
     dns_server_start();
 
     return ESP_OK;
+#endif
 }
 
 esp_err_t wifi_provisioning_stop_ap(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return wifi_provisioning_ap_stop();
+#else
     dns_server_stop();
 
     if (provisioning_server) {
@@ -674,6 +872,16 @@ esp_err_t wifi_provisioning_stop_ap(void)
     ESP_LOGI(TAG, "WiFi AP stopped");
 
     return ESP_OK;
+#endif
+}
+
+bool wifi_provisioning_is_active(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return wifi_provisioning_ap_active();
+#else
+    return provisioning_server != NULL;
+#endif
 }
 
 bool wifi_provisioning_is_provisioned(void)
@@ -683,4 +891,12 @@ bool wifi_provisioning_is_provisioned(void)
 
     esp_err_t ret = wifi_manager_load_credentials(ssid, password);
     return (ret == ESP_OK && strlen(ssid) > 0);
+}
+bool wifi_provisioning_session_complete(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return provisioning_session_complete();
+#else
+    return wifi_provisioning_is_provisioned();
+#endif
 }

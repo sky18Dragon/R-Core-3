@@ -1,5 +1,11 @@
 # 固件烧写与维护
 
+2026-10-07最新部署：用户确认仍用测试卡并允许更新后，332,304字节/c876599f…SD合成发布诊断仅factory写[0x10000,0x61210)、实际擦除[0x10000,0x62000)。旧328,016字节/7861965c…完整回读保存，新应用独立全长回读逐字节/SHA一致，4096字节分区表前后保持f078383d…。新启动一次mount/upload-test通过4112字节新写、单次发布、两次8192字节累计复读/EOF及同名拒绝/内容保持，关闭无错/占用归零。最终status正常、卸载/HAL清理ESP_OK、STOPPED，控制台EOF退出0。产物保留、不刷新/读原片/启产品；以下“新候选未部署”及旧镜像均为此前轮次。证据`.cache/p3-upload-storage-hardware-fAeGCh/`，见VALIDATION。
+
+2026-10-07新软件候选（未部署）：合成文件发布SD诊断332,304字节/c876599f…，固定副本`.cache/p3-upload-storage-candidate-EuBiLz/`，计划仅factory写`[0x10000,0x61210)`/擦除`[0x10000,0x62000)`。需新的更新及4112字节合成文件创建/发布许可；不继承之前只读file-check授权，不连接设备或启产品。写前身份/安全/分区及完整旧应用、写后独立全长回读/分区保持仍必须重新核对，详见[上传探针](READ-PICO-UPLOAD.md)。
+
+2026-10-07当前部署：用户新许可下，328,016字节/7861965c…仅factory写`[0x10000,0x60150)`、擦除`[0x10000,0x61000)`。旧404,336字节/9f6d6f6f…完整应用保留，新应用独立全长回读一致，4096字节分区表前后保持f078383d…。新启动一次mount/file-check通过4096字节/EOF、打开占用1→关闭0；status正常、卸载/HAL清理ESP_OK、STOPPED。控制台退出见VALIDATION。未刷新屏幕、操作原片、写数据分区或校准/启产品；下述照片镜像为历史，不能按屏幕保留S1判断当前应用仍是照片固件。私有证据`.cache/p3-fs-lease-storage-hardware-ed4twS/`，固定输入`.cache/p3-fs-lease-storage-candidate-T7Skvt/`。
+
 2026-10-05最新部署：用户允许更新并明确“刷白后直接执行S1显示”。404,336字节/`9f6d6f6fc329344647f601b976d1869d70bd758b141f4db4f580f389fa2540a5`仅factory写`[0x10000,0x72b70)`、擦除`[0x10000,0x73000)`；旧62cac21b…完整应用已读回保留，新应用独立全长回读一致，4096字节分区表前后保持`f078383d…`。新启动一次挂载、清白78/78软件成功，按本次许可推进white-confirm而不记人工白屏验收；同一S1一次处理56,161ms、GC16 36/36相398.130ms、刷新/电源退出成功。用户实拍确认“画面正常没有问题”，photo-confirm接受后一次stop、显示/SD/HAL清理ESP_OK、STOPPED/operation=cleanup=0，控制台exit0/串口无占用、SD卸载、原片保留。不重刷、不写数据分区/校准，不启动产品；旧状态以下按历史保留。私有证据`.cache/p3-buffered-photo-hardware-PAms8H/`。
 
 2026-10-05最新部署与验收：403,184字节/`62cac21b8cc7502fd6c79611f6b57d3f1c174d2549b2be41ee539f7827c0a554`已仅factory写入`[0x10000,0x726f0)`，擦除`[0x10000,0x73000)`。写前旧e7d5bd8d…完整回读保留，写后新应用全长一致，4096字节分区表保持`f078383d…`。清白及S1正向实屏获用户确认；photo-confirm接受后正常stop，显示/SD/HAL退出均ESP_OK、最终STOPPED，SD已卸载、串口关闭。私有证据目录`.cache/p3-photo-orientation-hardware-GxPcPw/`。下文e7d5bd8d…为历史部署，当前以本段及VALIDATION最新条目为准。
@@ -106,6 +112,8 @@ python build.py --board read_pico --step firmware --read-pico-factory-diagnostic
 新启动门禁/PSRAM/PMU 1.0.9/VCOM 1580 mV 通过；唯一清白 14.022 秒/78 帧/退出通过，用户确认全白后同启动 white-confirm。唯一编号 GC16 2.137 秒/completed=1/错误均 0，主动温度 28°C/ON=1/PGOOD=1，退出及内存释放通过；用户仍报告明显白偏，不计实屏通过。pattern-reject 后 stop/完整 status=STOPPED/operation=0、drawn=0x40/visually_confirmed=0，显示/HAL ESP_OK，参考清除。控制台随后报 Device not configured、exit 1，已结束且端口消失；不猜断连原因、不复位/重连。下一步按 [官方灰阶对照](READ-PICO-DISPLAY.md#官方-16-灰阶示例对照) 制定隔离实验，追加设备动作需新的具体许可。
 
 ## 分区迁移审查方案（尚未批准或执行）
+
+2026-10-07软件补充：[迁移审查](READ-PICO-MIGRATION.md)已核对下面分区冲突和配置消费边界。Read Pico启动加载现在只读/严格区分缺失与错误，失败在板级/SD前退出；OTA仅报不可用，不后台检查/升级、写OTA NVS或启动即确认回滚。600普通/600ASan、48Python、六配置编译/ELF检查通过，仅软件、设备未动。有效0/180旧方向覆盖不自动改写；这些保护不是实际配置/分区迁移或OTA验收，不解除本节人工门禁。
 
 实板已核实为 Demo 布局。默认双 OTA 诊断仍生成 PhotoFrame NVS 0x9000/0x6000、PHY 0x11000、OTA metadata 0xF000/0x2000、ota_0 0x20000；这些不是设备当前布局，也不是本次 factory 诊断布局。
 

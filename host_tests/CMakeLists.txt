@@ -20,6 +20,236 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
+add_executable(wifi_text_test test_wifi_text.cpp ../main/wifi_text.c)
+target_include_directories(wifi_text_test PRIVATE ../main)
+target_link_libraries(wifi_text_test GTest::gtest_main)
+gtest_discover_tests(wifi_text_test)
+
+add_executable(read_pico_provisioning_ap_test test_read_pico_provisioning_ap.cpp
+  ../main/wifi_provisioning_ap.c ../main/provisioning_session.c ../main/read_pico_http_service.c)
+target_compile_definitions(read_pico_provisioning_ap_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_provisioning_ap_test PRIVATE ap_stubs dns_stubs wifi_stubs
+  stubs ../main)
+target_link_libraries(read_pico_provisioning_ap_test GTest::gtest_main)
+gtest_discover_tests(read_pico_provisioning_ap_test)
+
+add_executable(read_pico_http_service_test test_read_pico_http_service.cpp
+  ../main/read_pico_http_service.c)
+target_include_directories(read_pico_http_service_test PRIVATE ap_stubs stubs ../main)
+target_link_libraries(read_pico_http_service_test GTest::gtest_main)
+gtest_discover_tests(read_pico_http_service_test)
+
+add_executable(read_pico_background_test test_read_pico_background.cpp
+  ../main/read_pico_background.c)
+target_include_directories(read_pico_background_test PRIVATE background_stubs stubs ../main)
+target_link_libraries(read_pico_background_test GTest::gtest_main)
+gtest_discover_tests(read_pico_background_test)
+
+add_executable(read_pico_periodic_test test_read_pico_periodic.cpp
+  ../main/read_pico_periodic.c ../main/read_pico_background.c)
+target_compile_definitions(read_pico_periodic_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_periodic_test PRIVATE periodic_stubs background_stubs config_load_stubs stubs ../main)
+set_source_files_properties(../main/read_pico_periodic.c PROPERTIES COMPILE_DEFINITIONS
+  "time=read_pico_periodic_test_time")
+target_link_libraries(read_pico_periodic_test GTest::gtest_main)
+gtest_discover_tests(read_pico_periodic_test)
+
+add_executable(sntp_stamp_test test_sntp_stamp.cpp ../main/sntp_stamp.c)
+target_include_directories(sntp_stamp_test PRIVATE ../main)
+target_link_libraries(sntp_stamp_test GTest::gtest_main)
+gtest_discover_tests(sntp_stamp_test)
+
+add_executable(read_pico_sntp_test test_read_pico_sntp.cpp ../main/read_pico_sntp.c ../main/sntp_stamp.c)
+target_compile_definitions(read_pico_sntp_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1
+  SNTP_CHECK_RESPONSE=2 SNTP_COMP_ROUNDTRIP=0)
+target_include_directories(read_pico_sntp_test PRIVATE sntp_stubs background_stubs config_load_stubs stubs ../main)
+set_source_files_properties(../main/read_pico_sntp.c PROPERTIES COMPILE_DEFINITIONS
+  "settimeofday=read_pico_sntp_test_settimeofday")
+target_link_libraries(read_pico_sntp_test GTest::gtest_main)
+gtest_discover_tests(read_pico_sntp_test)
+
+# Optional explicit local fixed SDK path: no download or copied SDK fork. The
+# exact unmodified parser joins the real adapter; IO/timeouts are synthetic.
+set(READ_PICO_TEST_IDF_PATH "" CACHE PATH "Fixed IDF v6.1 checkout for real SNTP parser tests")
+if(READ_PICO_TEST_IDF_PATH)
+  set(read_pico_sntp_sdk_source "${READ_PICO_TEST_IDF_PATH}/components/lwip/lwip/src/apps/sntp/sntp.c")
+  file(SHA256 "${read_pico_sntp_sdk_source}" read_pico_sntp_sdk_sha)
+  if(NOT read_pico_sntp_sdk_sha STREQUAL "8695155c80c807d7ac949801b023d4e2f27db7975f78bcbba726bcdc012020e7")
+    message(FATAL_ERROR "SNTP parser tests require the reviewed unmodified fixed SDK source")
+  endif()
+  add_executable(read_pico_sntp_wire_test test_read_pico_sntp_wire.cpp
+    ../main/read_pico_sntp.c ../main/sntp_stamp.c "${read_pico_sntp_sdk_source}")
+  target_compile_definitions(read_pico_sntp_wire_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1
+    SNTP_CHECK_RESPONSE=2 SNTP_COMP_ROUNDTRIP=0)
+  target_include_directories(read_pico_sntp_wire_test PRIVATE sntp_wire_stubs sntp_stubs
+    background_stubs config_load_stubs stubs ../main)
+  target_link_libraries(read_pico_sntp_wire_test GTest::gtest_main)
+  gtest_discover_tests(read_pico_sntp_wire_test)
+endif()
+
+add_executable(wifi_network_test test_wifi_network.cpp ../main/wifi_network.c)
+target_include_directories(wifi_network_test PRIVATE ../main)
+target_link_libraries(wifi_network_test GTest::gtest_main)
+gtest_discover_tests(wifi_network_test)
+
+add_executable(captive_dns_test test_captive_dns.cpp ../main/captive_dns.c)
+target_include_directories(captive_dns_test PRIVATE ../main)
+target_link_libraries(captive_dns_test GTest::gtest_main)
+gtest_discover_tests(captive_dns_test)
+
+add_executable(read_pico_dns_server_test test_read_pico_dns_server.cpp
+  ../main/dns_server.c ../main/captive_dns.c)
+target_compile_definitions(read_pico_dns_server_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_dns_server_test PRIVATE dns_stubs wifi_stubs stubs ../main)
+target_link_libraries(read_pico_dns_server_test GTest::gtest_main)
+gtest_discover_tests(read_pico_dns_server_test)
+
+add_executable(provisioning_apply_test test_provisioning_apply.cpp ../main/provisioning_apply.c
+  ../main/wifi_network.c ../main/wifi_text.c)
+target_include_directories(provisioning_apply_test PRIVATE ../main)
+target_link_libraries(provisioning_apply_test GTest::gtest_main)
+gtest_discover_tests(provisioning_apply_test)
+
+add_executable(provisioning_session_test test_provisioning_session.cpp ../main/provisioning_session.c)
+target_include_directories(provisioning_session_test PRIVATE ../main)
+target_link_libraries(provisioning_session_test GTest::gtest_main)
+gtest_discover_tests(provisioning_session_test)
+
+add_executable(config_read_test test_config_read.cpp ../main/config_read.c)
+target_include_directories(config_read_test PRIVATE ../main)
+target_link_libraries(config_read_test GTest::gtest_main)
+gtest_discover_tests(config_read_test)
+
+set(read_pico_cjson_dir "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")
+option(READ_PICO_TEST_FETCH_CJSON "Fetch pinned cJSON even if SDK managed cache exists" OFF)
+if(READ_PICO_TEST_FETCH_CJSON OR NOT EXISTS "${read_pico_cjson_dir}/cJSON.c")
+  # Host CI runs before SDK dependencies are resolved. Fetch source only, not
+  # cJSON's own tests/install/shared-library policy; verify identical source.
+  if(CMAKE_VERSION VERSION_LESS "3.18")
+    FetchContent_Declare(read_pico_cjson GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+      GIT_TAG b2890c8d76bbb64e710585ebc0a917196b9c67e7)
+    FetchContent_GetProperties(read_pico_cjson)
+    if(NOT read_pico_cjson_POPULATED)
+      FetchContent_Populate(read_pico_cjson)
+    endif()
+  else()
+    FetchContent_Declare(read_pico_cjson GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+      GIT_TAG b2890c8d76bbb64e710585ebc0a917196b9c67e7 SOURCE_SUBDIR read-pico-host-source-only)
+    FetchContent_MakeAvailable(read_pico_cjson)
+  endif()
+  set(read_pico_cjson_dir "${read_pico_cjson_SOURCE_DIR}")
+endif()
+file(SHA256 "${read_pico_cjson_dir}/cJSON.c" read_pico_cjson_source_sha)
+file(SHA256 "${read_pico_cjson_dir}/cJSON.h" read_pico_cjson_header_sha)
+if(NOT read_pico_cjson_source_sha STREQUAL "607e756460fa0de37d20a7a9181f2de29c97bfb7ce5a0e6c2f548243836cd852" OR
+   NOT read_pico_cjson_header_sha STREQUAL "25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee")
+  message(FATAL_ERROR "Host JSON tests require the fixed cJSON 1.7.19 source/header used by SDK")
+endif()
+add_executable(remote_config_test test_remote_config.cpp test_wifi_network_json.cpp test_config_document.cpp
+  ../main/remote_config.c ../main/config_document.c ../main/config_apply.c ../main/wifi_network_json.c ../main/wifi_network.c "${read_pico_cjson_dir}/cJSON.c")
+target_include_directories(remote_config_test PRIVATE "${read_pico_cjson_dir}" stubs ../main)
+target_link_libraries(remote_config_test GTest::gtest_main)
+gtest_discover_tests(remote_config_test)
+
+add_executable(config_apply_test test_config_apply.cpp ../main/config_apply.c)
+target_include_directories(config_apply_test PRIVATE stubs ../main)
+target_link_libraries(config_apply_test GTest::gtest_main)
+gtest_discover_tests(config_apply_test)
+
+add_executable(read_pico_mdns_test test_read_pico_mdns.cpp ../main/mdns_service.c)
+target_compile_definitions(read_pico_mdns_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1 BOARD_HAL_NAME="synthetic")
+target_include_directories(read_pico_mdns_test PRIVATE mdns_stubs config_load_stubs stubs ../main "${read_pico_cjson_dir}")
+target_link_libraries(read_pico_mdns_test GTest::gtest_main)
+gtest_discover_tests(read_pico_mdns_test)
+
+add_executable(read_pico_settings_save_test test_read_pico_settings_save.cpp
+  ../main/processing_settings.c ../main/color_palette.c ../main/config_apply.c ../main/request_config.c "${read_pico_cjson_dir}/cJSON.c")
+target_compile_definitions(read_pico_settings_save_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_settings_save_test PRIVATE "${read_pico_cjson_dir}" config_load_stubs stubs ../main)
+target_link_libraries(read_pico_settings_save_test GTest::gtest_main)
+if(READ_PICO_TEST_IDF_PATH)
+  set(request_header_sdk "${READ_PICO_TEST_IDF_PATH}/components/esp_http_client/lib")
+  set(request_header_sdk_files http_header.c http_utils.c include/http_header.h include/http_utils.h)
+  set(request_header_sdk_hashes
+    23056c41505aa38885cf210e22117e1fa57d964080ff537a36a5c9d99d76701e
+    50bfee8e6ef9d0b74e590f58975c9d35ce32012579994012a6d0717743c6a84b
+    77f7e4faf9f2fe2d3afee3d100a3d642cdd3354d7556147d430ed0fe5e2c8f69
+    7e4110110767661e60a01d639565f2926ffe30f9d449558a3a5008de5dfeecc2)
+  foreach(request_header_index RANGE 0 3)
+    list(GET request_header_sdk_files ${request_header_index} request_header_file)
+    list(GET request_header_sdk_hashes ${request_header_index} request_header_expected)
+    file(SHA256 "${request_header_sdk}/${request_header_file}" request_header_actual)
+    if(NOT request_header_actual STREQUAL request_header_expected)
+      message(FATAL_ERROR "Header tests require reviewed fixed SDK source/headers")
+    endif()
+  endforeach()
+  target_sources(read_pico_settings_save_test PRIVATE "${request_header_sdk}/http_header.c" "${request_header_sdk}/http_utils.c")
+  set_source_files_properties("${request_header_sdk}/http_header.c" "${request_header_sdk}/http_utils.c"
+    PROPERTIES COMPILE_DEFINITIONS "calloc=request_test_calloc;realloc=request_test_realloc;strdup=request_test_strdup;free=request_test_free")
+  target_include_directories(read_pico_settings_save_test PRIVATE header_stubs "${request_header_sdk}/include")
+  target_compile_definitions(read_pico_settings_save_test PRIVATE READ_PICO_REQUEST_HEADER_SDK_TESTS=1)
+endif()
+gtest_discover_tests(read_pico_settings_save_test)
+
+add_executable(read_pico_ota_gate_test test_read_pico_ota_gate.cpp ../main/ota_manager.c)
+target_compile_definitions(read_pico_ota_gate_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_ota_gate_test PRIVATE config_load_stubs display_checked_stubs stubs ../main)
+target_link_libraries(read_pico_ota_gate_test GTest::gtest_main)
+gtest_discover_tests(read_pico_ota_gate_test)
+
+foreach(config_profile IN ITEMS read_pico legacy)
+  add_executable(${config_profile}_config_load_test test_config_load.cpp
+    ../main/config_manager.c ../main/config_read.c ../main/cron.c
+    ../main/wifi_credentials.c ../main/wifi_text.c ../main/wifi_network.c)
+  if(config_profile STREQUAL "read_pico")
+    target_compile_definitions(${config_profile}_config_load_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+  else()
+    target_compile_definitions(${config_profile}_config_load_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=0)
+  endif()
+  target_include_directories(${config_profile}_config_load_test PRIVATE config_load_stubs stubs ../main)
+  target_link_libraries(${config_profile}_config_load_test GTest::gtest_main)
+  gtest_discover_tests(${config_profile}_config_load_test)
+endforeach()
+set_source_files_properties(../main/config_manager.c PROPERTIES COMPILE_DEFINITIONS
+  "malloc=config_load_test_malloc;setenv=config_load_test_setenv;tzset=config_load_test_tzset;time=config_load_test_time;localtime_r=config_load_test_localtime_r;strftime=config_load_test_strftime")
+
+add_executable(wifi_link_test test_wifi_link.cpp ../main/wifi_link.c)
+target_include_directories(wifi_link_test PRIVATE ../main)
+target_link_libraries(wifi_link_test GTest::gtest_main)
+gtest_discover_tests(wifi_link_test)
+
+add_executable(read_pico_wifi_manager_test test_read_pico_wifi_manager.cpp
+  ../main/wifi_manager.c ../main/wifi_link.c ../main/wifi_text.c ../main/wifi_network.c)
+target_compile_definitions(read_pico_wifi_manager_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
+target_include_directories(read_pico_wifi_manager_test PRIVATE wifi_stubs config_load_stubs
+  display_checked_stubs stubs ../main)
+target_link_libraries(read_pico_wifi_manager_test GTest::gtest_main)
+gtest_discover_tests(read_pico_wifi_manager_test)
+
+add_executable(upload_stream_test test_upload_stream.cpp ../main/upload_stream.c)
+target_include_directories(upload_stream_test PRIVATE ../main)
+target_link_libraries(upload_stream_test GTest::gtest_main)
+gtest_discover_tests(upload_stream_test)
+
+add_executable(upload_file_test test_upload_file.cpp ../main/upload_file.c)
+target_include_directories(upload_file_test PRIVATE ../main)
+target_link_libraries(upload_file_test GTest::gtest_main)
+gtest_discover_tests(upload_file_test)
+
+add_executable(upload_asset_test test_upload_asset.cpp ../main/upload_asset.c ../main/upload_file.c
+  ../main/download_file.c ../main/upload_copy.c)
+target_include_directories(upload_asset_test PRIVATE ../main)
+target_link_libraries(upload_asset_test GTest::gtest_main)
+gtest_discover_tests(upload_asset_test)
+
+add_executable(read_pico_upload_test test_read_pico_upload.cpp
+  ../main/read_pico_upload.c ../main/upload_file.c ../main/upload_probe.c)
+target_include_directories(read_pico_upload_test PRIVATE stubs ../main ../components/board_hal/include)
+set_source_files_properties(../main/read_pico_upload.c PROPERTIES COMPILE_DEFINITIONS
+  "open=upload_test_open;write=upload_test_write;fsync=upload_test_fsync;close=upload_test_close;rename=upload_test_rename")
+target_link_libraries(read_pico_upload_test GTest::gtest_main)
+gtest_discover_tests(read_pico_upload_test)
+
 add_executable(jpeg_buffered_source_test test_jpeg_buffered_source.cpp
   ../main/jpeg_buffered_source.c)
 target_include_directories(jpeg_buffered_source_test PRIVATE ../main)
@@ -67,6 +297,7 @@ if(READ_PICO_JPEG_STREAM_TESTS)
   gtest_discover_tests(jpeg_stream_probe_test)
   add_library(read_pico_jpeg_pipeline STATIC
     ../main/image_processor.c ../main/display_flow.c ../main/jpeg_metadata.c
+    ../main/upload_asset.c ../main/upload_file.c
     stubs/esp_stubs.c stubs/fake_display_manager.c stubs/fake_config_manager.c
     stubs/fake_processing_settings.c stubs/fake_storage.c stubs/fake_jpeg_media.c)
   target_include_directories(read_pico_jpeg_pipeline PUBLIC
@@ -113,11 +344,13 @@ target_compile_definitions(read_pico_nvs_bootstrap_test PRIVATE CONFIG_BOARD_DRI
 target_link_libraries(read_pico_nvs_bootstrap_test GTest::gtest_main)
 gtest_discover_tests(read_pico_nvs_bootstrap_test)
 
-add_executable(read_pico_storage_test test_read_pico_storage.cpp ../main/storage.c)
+add_executable(read_pico_storage_test test_read_pico_storage.cpp ../main/storage.c ../main/wifi_text.c)
 target_include_directories(read_pico_storage_test PRIVATE
   stubs ../main ../components/board_hal/include ../components/memfs/include)
 target_compile_definitions(read_pico_storage_test PRIVATE
-  CONFIG_BOARD_DRIVER_READ_PICO=1 CONFIG_HAS_SDCARD=1)
+  CONFIG_BOARD_DRIVER_READ_PICO=1 CONFIG_HAS_SDCARD=1 FS_MOUNT_POINT="pf_wifi_storage")
+set_source_files_properties(../main/storage.c PROPERTIES COMPILE_DEFINITIONS
+  "fclose=wifi_storage_test_fclose")
 target_link_libraries(read_pico_storage_test GTest::gtest_main)
 gtest_discover_tests(read_pico_storage_test)
 
@@ -311,7 +544,8 @@ target_link_libraries(
   m
 )
 
-gtest_discover_tests(display_flow_test)
+# Cases clean the same pf_storage directory; never run them concurrently.
+gtest_discover_tests(display_flow_test PROPERTIES RESOURCE_LOCK host_display_flow_storage)
 
 # Read-only PMU codec: no ESP-IDF or board I/O in the portable core.
 add_executable(read_pico_pmu_test
@@ -350,6 +584,13 @@ target_include_directories(read_pico_sd_test PRIVATE
 )
 target_link_libraries(read_pico_sd_test GTest::gtest_main)
 gtest_discover_tests(read_pico_sd_test)
+
+add_executable(read_pico_fs_test test_read_pico_fs.cpp
+  ../components/board_hal/src/read_pico_fs.c)
+target_include_directories(read_pico_fs_test PRIVATE stubs ../components/board_hal/include)
+find_package(Threads REQUIRED)
+target_link_libraries(read_pico_fs_test GTest::gtest_main Threads::Threads)
+gtest_discover_tests(read_pico_fs_test)
 
 add_executable(sd_file_probe_test
   test_sd_file_probe.cpp
@@ -393,14 +634,17 @@ gtest_discover_tests(read_pico_sy_power_test)
 find_package(ZLIB REQUIRED)
 add_executable(read_pico_display_commit_test
   test_read_pico_display_commit.cpp
+  ../main/upload_file.c
   ../main/display_manager.c
   ../components/epaper_src/GUI_Paint.c
   ../components/epaper_src/GUI_RawBuffer.c
 )
 target_compile_definitions(read_pico_display_commit_test PRIVATE
   CONFIG_BOARD_DRIVER_READ_PICO=1 FS_MOUNT_POINT="pf_display_checked")
+set_source_files_properties(../main/display_manager.c PROPERTIES
+  COMPILE_DEFINITIONS "fclose=read_pico_display_test_fclose")
 target_include_directories(read_pico_display_commit_test PRIVATE
-  display_checked_stubs stubs ../main
+  display_checked_stubs stubs ../main ../components/board_hal/include
   ../components/epaper/include ../components/epaper_src ../components/epaper_src/Fonts
   ../components/epaper_driver_read_pico/include ../components/read_pico_display/include
 )

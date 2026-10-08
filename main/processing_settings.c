@@ -2,12 +2,17 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include <float.h>
 
 #include "cJSON.h"
 #include "config.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "config_apply.h"
+#endif
 
 static const char *TAG = "processing_settings";
 
@@ -27,6 +32,9 @@ static const char *TAG = "processing_settings";
 
 void processing_settings_get_defaults(processing_settings_t *settings)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    memset(settings, 0, sizeof(*settings)); // Terminate every fixed text slot, including parser truncation limits.
+#endif
     settings->exposure = 1.0f;
     settings->saturation = 1.0f;
     strncpy(settings->tone_mode, "contrast", sizeof(settings->tone_mode) - 1);
@@ -41,6 +49,41 @@ void processing_settings_get_defaults(processing_settings_t *settings)
     strncpy(settings->scale_mode, "cover", sizeof(settings->scale_mode) - 1);
     strncpy(settings->background_color, "white", sizeof(settings->background_color) - 1);
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t copy_options(void *context)
+{
+    processing_settings_t settings;
+    esp_err_t err = processing_settings_load(&settings);
+    if (err != ESP_OK) return err;
+    processing_options_t candidate = {0};
+    if (strcmp(settings.dither_algorithm, "floyd-steinberg") == 0)
+        candidate.dither_algorithm = DITHER_FLOYD_STEINBERG;
+    else if (strcmp(settings.dither_algorithm, "stucki") == 0)
+        candidate.dither_algorithm = DITHER_STUCKI;
+    else if (strcmp(settings.dither_algorithm, "burkes") == 0)
+        candidate.dither_algorithm = DITHER_BURKES;
+    else if (strcmp(settings.dither_algorithm, "sierra") == 0)
+        candidate.dither_algorithm = DITHER_SIERRA;
+    else return ESP_ERR_INVALID_ARG;
+    if (strcmp(settings.scale_mode, "cover") == 0)
+        candidate.scale_mode = SCALE_MODE_COVER;
+    else if (strcmp(settings.scale_mode, "fit") == 0)
+        candidate.scale_mode = SCALE_MODE_FIT;
+    else return ESP_ERR_INVALID_ARG;
+    if (strcmp(settings.background_color, "white") != 0 &&
+        strcmp(settings.background_color, "black") != 0) return ESP_ERR_INVALID_ARG;
+    memcpy(candidate.background_color, settings.background_color, sizeof(candidate.background_color));
+    *(processing_options_t *)context = candidate;
+    return ESP_OK;
+}
+
+esp_err_t processing_settings_copy_options(processing_options_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    return config_apply_run(copy_options, out);
+}
+#endif
 
 dither_algorithm_t processing_settings_get_dithering_algorithm(void)
 {
@@ -91,6 +134,17 @@ esp_err_t processing_settings_init(void)
 
 esp_err_t processing_settings_save(const processing_settings_t *settings)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!settings || !isfinite(settings->exposure) || !isfinite(settings->saturation) ||
+        !isfinite(settings->contrast) || !isfinite(settings->strength) ||
+        !isfinite(settings->shadow_boost) || !isfinite(settings->highlight_compress) ||
+        !isfinite(settings->midpoint)) return ESP_ERR_INVALID_ARG;
+    if (!memchr(settings->tone_mode, 0, sizeof(settings->tone_mode)) ||
+        !memchr(settings->color_method, 0, sizeof(settings->color_method)) ||
+        !memchr(settings->dither_algorithm, 0, sizeof(settings->dither_algorithm)) ||
+        !memchr(settings->scale_mode, 0, sizeof(settings->scale_mode)) ||
+        !memchr(settings->background_color, 0, sizeof(settings->background_color))) return ESP_ERR_INVALID_SIZE;
+#endif
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
@@ -108,6 +162,25 @@ esp_err_t processing_settings_save(const processing_settings_t *settings)
     memcpy(&high_bits, &settings->highlight_compress, sizeof(float));
     memcpy(&mid_bits, &settings->midpoint, sizeof(float));
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Preserve the upstream field/key order; stop on the first unconfirmed
+    // set, never commit or report success after an earlier field error.
+#define SAVE_FIELD(call) do { err = (call); if (err != ESP_OK) goto close; } while (0)
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_EXPOSURE_KEY, exp_bits));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_SATURATION_KEY, sat_bits));
+    SAVE_FIELD(nvs_set_str(nvs_handle, NVS_PROC_TONE_MODE_KEY, settings->tone_mode));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_CONTRAST_KEY, cont_bits));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_STRENGTH_KEY, str_bits));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_SHADOW_KEY, shad_bits));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_HIGHLIGHT_KEY, high_bits));
+    SAVE_FIELD(nvs_set_u32(nvs_handle, NVS_PROC_MIDPOINT_KEY, mid_bits));
+    SAVE_FIELD(nvs_set_str(nvs_handle, NVS_PROC_COLOR_METHOD_KEY, settings->color_method));
+    SAVE_FIELD(nvs_set_u8(nvs_handle, NVS_PROC_COMPRESS_DR_KEY, settings->compress_dynamic_range ? 1 : 0));
+    SAVE_FIELD(nvs_set_str(nvs_handle, NVS_PROC_DITHER_ALGO_KEY, settings->dither_algorithm));
+    SAVE_FIELD(nvs_set_str(nvs_handle, NVS_PROC_SCALE_MODE_KEY, settings->scale_mode));
+    SAVE_FIELD(nvs_set_str(nvs_handle, NVS_PROC_BG_COLOR_KEY, settings->background_color));
+#undef SAVE_FIELD
+#else
     nvs_set_u32(nvs_handle, NVS_PROC_EXPOSURE_KEY, exp_bits);
     nvs_set_u32(nvs_handle, NVS_PROC_SATURATION_KEY, sat_bits);
     nvs_set_str(nvs_handle, NVS_PROC_TONE_MODE_KEY, settings->tone_mode);
@@ -121,8 +194,12 @@ esp_err_t processing_settings_save(const processing_settings_t *settings)
     nvs_set_str(nvs_handle, NVS_PROC_DITHER_ALGO_KEY, settings->dither_algorithm);
     nvs_set_str(nvs_handle, NVS_PROC_SCALE_MODE_KEY, settings->scale_mode);
     nvs_set_str(nvs_handle, NVS_PROC_BG_COLOR_KEY, settings->background_color);
+#endif
 
     err = nvs_commit(nvs_handle);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+close:
+#endif
     nvs_close(nvs_handle);
 
     if (err == ESP_OK) {
@@ -136,6 +213,58 @@ esp_err_t processing_settings_save(const processing_settings_t *settings)
 
 esp_err_t processing_settings_load(processing_settings_t *settings)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!settings) return ESP_ERR_INVALID_ARG;
+    processing_settings_t candidate;
+    processing_settings_get_defaults(&candidate);
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) { *settings = candidate; return ESP_OK; }
+    if (err != ESP_OK) return err;
+    struct { const char *key; float *value; } numbers[] = {
+        {NVS_PROC_EXPOSURE_KEY, &candidate.exposure}, {NVS_PROC_SATURATION_KEY, &candidate.saturation},
+        {NVS_PROC_CONTRAST_KEY, &candidate.contrast}, {NVS_PROC_STRENGTH_KEY, &candidate.strength},
+        {NVS_PROC_SHADOW_KEY, &candidate.shadow_boost}, {NVS_PROC_HIGHLIGHT_KEY, &candidate.highlight_compress},
+        {NVS_PROC_MIDPOINT_KEY, &candidate.midpoint}};
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
+        uint32_t bits = 0;
+        err = nvs_get_u32(handle, numbers[i].key, &bits);
+        if (err == ESP_ERR_NVS_NOT_FOUND) continue;
+        if (err != ESP_OK) goto close;
+        float value;
+        memcpy(&value, &bits, sizeof(value));
+        if (!isfinite(value)) { err = ESP_ERR_INVALID_RESPONSE; goto close; }
+        *numbers[i].value = value;
+    }
+    struct { const char *key; char *value; size_t capacity; } strings[] = {
+        {NVS_PROC_TONE_MODE_KEY, candidate.tone_mode, sizeof(candidate.tone_mode)},
+        {NVS_PROC_COLOR_METHOD_KEY, candidate.color_method, sizeof(candidate.color_method)},
+        {NVS_PROC_DITHER_ALGO_KEY, candidate.dither_algorithm, sizeof(candidate.dither_algorithm)},
+        {NVS_PROC_SCALE_MODE_KEY, candidate.scale_mode, sizeof(candidate.scale_mode)},
+        {NVS_PROC_BG_COLOR_KEY, candidate.background_color, sizeof(candidate.background_color)}};
+    for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); ++i) {
+        char value[20] = {0}; // Largest existing fixed text slot.
+        if (strings[i].capacity > sizeof(value)) { err = ESP_ERR_INVALID_SIZE; goto close; }
+        size_t length = strings[i].capacity;
+        err = nvs_get_str(handle, strings[i].key, value, &length);
+        if (err == ESP_ERR_NVS_NOT_FOUND) continue;
+        if (err != ESP_OK) goto close;
+        if (!length || length > strings[i].capacity || value[length - 1] != '\0' ||
+            strnlen(value, length) != length - 1) { err = ESP_ERR_INVALID_RESPONSE; goto close; }
+        memcpy(strings[i].value, value, length);
+    }
+    uint8_t compress = 0;
+    err = nvs_get_u8(handle, NVS_PROC_COMPRESS_DR_KEY, &compress);
+    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    else if (err == ESP_OK) {
+        if (compress > 1) err = ESP_ERR_INVALID_RESPONSE;
+        else candidate.compress_dynamic_range = compress != 0;
+    }
+close:
+    nvs_close(handle);
+    if (err == ESP_OK) *settings = candidate;
+    return err;
+#else
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
@@ -195,7 +324,58 @@ esp_err_t processing_settings_load(processing_settings_t *settings)
     nvs_close(nvs_handle);
 
     return ESP_OK;
+#endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t processing_settings_from_json_checked(cJSON *json, processing_settings_t *settings)
+{
+    if (!settings || !cJSON_IsObject(json)) return ESP_ERR_INVALID_ARG;
+    processing_settings_t candidate = *settings;
+    struct { const char *key; float *value; } numbers[] = {
+        {"exposure", &candidate.exposure}, {"saturation", &candidate.saturation},
+        {"contrast", &candidate.contrast}, {"strength", &candidate.strength},
+        {"shadowBoost", &candidate.shadow_boost}, {"highlightCompress", &candidate.highlight_compress},
+        {"midpoint", &candidate.midpoint}};
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
+        cJSON *item = cJSON_GetObjectItem(json, numbers[i].key);
+        if (!item) continue;
+        if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) || fabs(item->valuedouble) > FLT_MAX)
+            return ESP_ERR_INVALID_ARG;
+        *numbers[i].value = (float)item->valuedouble;
+    }
+    static const char *tone[] = {"contrast", "scurve", NULL};
+    static const char *color[] = {"rgb", "lab", NULL};
+    static const char *dither[] = {"floyd-steinberg", "stucki", "burkes", "sierra", NULL};
+    static const char *scale[] = {"cover", "fit", NULL};
+    static const char *background[] = {"white", "black", NULL};
+    struct { const char *key; char *value; size_t capacity; const char *const *allowed; } strings[] = {
+        {"toneMode", candidate.tone_mode, sizeof(candidate.tone_mode), tone},
+        {"colorMethod", candidate.color_method, sizeof(candidate.color_method), color},
+        {"ditherAlgorithm", candidate.dither_algorithm, sizeof(candidate.dither_algorithm), dither},
+        {"scaleMode", candidate.scale_mode, sizeof(candidate.scale_mode), scale},
+        {"backgroundColor", candidate.background_color, sizeof(candidate.background_color), background}};
+    for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); ++i) {
+        cJSON *item = cJSON_GetObjectItem(json, strings[i].key);
+        if (!item) continue;
+        if (!cJSON_IsString(item) || !item->valuestring) return ESP_ERR_INVALID_ARG;
+        size_t length = strnlen(item->valuestring, strings[i].capacity);
+        if (length == strings[i].capacity) return ESP_ERR_INVALID_SIZE;
+        bool supported = false;
+        for (size_t j = 0; strings[i].allowed[j]; ++j)
+            if (!strcmp(item->valuestring, strings[i].allowed[j])) supported = true;
+        if (!supported) return ESP_ERR_INVALID_ARG;
+        memcpy(strings[i].value, item->valuestring, length + 1);
+    }
+    cJSON *boolean = cJSON_GetObjectItem(json, "compressDynamicRange");
+    if (boolean) {
+        if (!cJSON_IsBool(boolean)) return ESP_ERR_INVALID_ARG;
+        candidate.compress_dynamic_range = cJSON_IsTrue(boolean);
+    }
+    *settings = candidate;
+    return ESP_OK;
+}
+#endif
 
 void processing_settings_from_json(cJSON *json, processing_settings_t *settings)
 {
@@ -242,24 +422,40 @@ void processing_settings_from_json(cJSON *json, processing_settings_t *settings)
 
 char *processing_settings_to_json(const processing_settings_t *settings)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!settings || !isfinite(settings->exposure) || !isfinite(settings->saturation) ||
+        !isfinite(settings->contrast) || !isfinite(settings->strength) || !isfinite(settings->shadow_boost) ||
+        !isfinite(settings->highlight_compress) || !isfinite(settings->midpoint) ||
+        !memchr(settings->tone_mode, 0, sizeof(settings->tone_mode)) ||
+        !memchr(settings->color_method, 0, sizeof(settings->color_method)) ||
+        !memchr(settings->dither_algorithm, 0, sizeof(settings->dither_algorithm)) ||
+        !memchr(settings->scale_mode, 0, sizeof(settings->scale_mode)) ||
+        !memchr(settings->background_color, 0, sizeof(settings->background_color))) return NULL;
+#endif
     cJSON *json = cJSON_CreateObject();
     if (!json) {
         return NULL;
     }
 
-    cJSON_AddNumberToObject(json, "exposure", settings->exposure);
-    cJSON_AddNumberToObject(json, "saturation", settings->saturation);
-    cJSON_AddStringToObject(json, "toneMode", settings->tone_mode);
-    cJSON_AddNumberToObject(json, "contrast", settings->contrast);
-    cJSON_AddNumberToObject(json, "strength", settings->strength);
-    cJSON_AddNumberToObject(json, "shadowBoost", settings->shadow_boost);
-    cJSON_AddNumberToObject(json, "highlightCompress", settings->highlight_compress);
-    cJSON_AddNumberToObject(json, "midpoint", settings->midpoint);
-    cJSON_AddStringToObject(json, "colorMethod", settings->color_method);
-    cJSON_AddStringToObject(json, "ditherAlgorithm", settings->dither_algorithm);
-    cJSON_AddBoolToObject(json, "compressDynamicRange", settings->compress_dynamic_range);
-    cJSON_AddStringToObject(json, "scaleMode", settings->scale_mode);
-    cJSON_AddStringToObject(json, "backgroundColor", settings->background_color);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#define JSON_ADD(call) do { if (!(call)) { cJSON_Delete(json); return NULL; } } while (0)
+#else
+#define JSON_ADD(call) (void)(call)
+#endif
+    JSON_ADD(cJSON_AddNumberToObject(json, "exposure", settings->exposure));
+    JSON_ADD(cJSON_AddNumberToObject(json, "saturation", settings->saturation));
+    JSON_ADD(cJSON_AddStringToObject(json, "toneMode", settings->tone_mode));
+    JSON_ADD(cJSON_AddNumberToObject(json, "contrast", settings->contrast));
+    JSON_ADD(cJSON_AddNumberToObject(json, "strength", settings->strength));
+    JSON_ADD(cJSON_AddNumberToObject(json, "shadowBoost", settings->shadow_boost));
+    JSON_ADD(cJSON_AddNumberToObject(json, "highlightCompress", settings->highlight_compress));
+    JSON_ADD(cJSON_AddNumberToObject(json, "midpoint", settings->midpoint));
+    JSON_ADD(cJSON_AddStringToObject(json, "colorMethod", settings->color_method));
+    JSON_ADD(cJSON_AddStringToObject(json, "ditherAlgorithm", settings->dither_algorithm));
+    JSON_ADD(cJSON_AddBoolToObject(json, "compressDynamicRange", settings->compress_dynamic_range));
+    JSON_ADD(cJSON_AddStringToObject(json, "scaleMode", settings->scale_mode));
+    JSON_ADD(cJSON_AddStringToObject(json, "backgroundColor", settings->background_color));
+#undef JSON_ADD
 
     char *json_str = cJSON_PrintUnformatted(json);
     cJSON_Delete(json);

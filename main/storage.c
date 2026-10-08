@@ -1,6 +1,8 @@
 #include "storage.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "config.h"
@@ -266,8 +268,57 @@ esp_err_t storage_format(void)
 #endif
 }
 
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t storage_read_wifi_config(wifi_text_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (!storage_has_persistent_storage()) return ESP_ERR_INVALID_STATE;
+    const char *paths[] = {FS_MOUNT_POINT "/config/wifi.txt", FS_MOUNT_POINT "/wifi.txt"};
+    FILE *fp = NULL;
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        errno = 0;
+        fp = fopen(paths[i], "rb");
+        if (fp) break;
+        if (errno != ENOENT) return ESP_FAIL; // Do not hide IO/access errors with root fallback.
+    }
+    if (!fp) return storage_has_persistent_storage() ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_STATE;
+    struct stat st;
+    uint8_t bytes[WIFI_TEXT_MAX_BYTES];
+    wifi_text_t parsed;
+    esp_err_t err = ESP_OK;
+    if (fstat(fileno(fp), &st) != 0 || !S_ISREG(st.st_mode)) err = ESP_FAIL;
+    else if (st.st_size <= 0 || st.st_size > sizeof(bytes)) err = ESP_ERR_INVALID_SIZE;
+    else if (!storage_has_persistent_storage() ||
+             fread(bytes, 1, (size_t)st.st_size, fp) != (size_t)st.st_size || ferror(fp)) err = ESP_FAIL;
+    else if (fgetc(fp) != EOF || !feof(fp) || ferror(fp)) err = ESP_FAIL;
+    else if (!wifi_text_parse(bytes, (size_t)st.st_size, &parsed)) err = ESP_ERR_INVALID_ARG;
+    if (fclose(fp) != 0) {
+        read_pico_sd_note_file_close_failure();
+        err = ESP_FAIL;
+    }
+    if (!storage_has_persistent_storage()) err = ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK) *out = parsed;
+    return err; // No credential/name save, unlink, retry or source modification.
+}
+#else
+esp_err_t storage_read_wifi_config(wifi_text_t *out)
+{
+    (void)out;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+#endif
+
 esp_err_t storage_read_wifi_credentials(char *ssid, char *password)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    if (!ssid || !password) return ESP_ERR_INVALID_ARG;
+    wifi_text_t parsed;
+    esp_err_t err = storage_read_wifi_config(&parsed);
+    if (err != ESP_OK) return err;
+    memcpy(ssid, parsed.ssid, sizeof(parsed.ssid));
+    memcpy(password, parsed.password, sizeof(parsed.password));
+    return ESP_OK;
+#else
 #ifdef CONFIG_HAS_SDCARD
 #ifdef CONFIG_BOARD_DRIVER_READ_PICO
     if (!storage_has_persistent_storage()) {
@@ -333,5 +384,6 @@ esp_err_t storage_read_wifi_credentials(char *ssid, char *password)
     }
 #else
     return ESP_ERR_NOT_SUPPORTED;
+#endif
 #endif
 }

@@ -1,9 +1,15 @@
 #include "ota_manager.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <sys/time.h>
 #include <time.h>
 
+#include "esp_app_desc.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 #include "board_hal.h"
 #include "cJSON.h"
 #include "config.h"
@@ -22,6 +28,7 @@
 #include "nvs.h"
 #include "periodic_tasks.h"
 #include "power_manager.h"
+#endif
 
 static const char *TAG = "ota_manager";
 #define OTA_NVS_NAMESPACE "ota"
@@ -36,6 +43,7 @@ static ota_status_t ota_status = {.state = OTA_STATE_IDLE,
                                   .progress_percent = 0};
 
 static SemaphoreHandle_t ota_status_mutex = NULL;
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static bool update_available = false;
 static char firmware_url[256] = "";
 
@@ -426,6 +434,8 @@ static void ota_update_task(void *pvParameter)
     vTaskDelete(NULL);
 }
 
+#endif // Legacy OTA implementation is retained, never linked into unaccepted Read Pico startup.
+
 esp_err_t ota_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing OTA manager");
@@ -448,6 +458,16 @@ esp_err_t ota_manager_init(void)
 
     ESP_LOGI(TAG, "Current firmware version: %s", ota_status.current_version);
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Current verified factory layout has neither otadata nor OTA slots.
+    // A filename/chip match cannot establish panel, board or partition safety.
+    // Keep the API contract, but do not query releases, touch OTA NVS, mark an
+    // unaccepted image valid, register background checks or write a partition.
+    ota_status.state = OTA_STATE_ERROR;
+    snprintf(ota_status.error_message, sizeof(ota_status.error_message),
+             "Read Pico OTA withheld: board/image compatibility and partition migration require acceptance");
+    return ESP_OK;
+#else
     // Load last known OTA status from NVS (latest_version, state)
     ota_load_status_from_nvs();
 
@@ -470,10 +490,16 @@ esp_err_t ota_manager_init(void)
     }
 
     return ESP_OK;
+#endif
 }
 
 esp_err_t ota_check_for_update(bool *update_available_out, int timeout)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    (void)timeout;
+    if (update_available_out) *update_available_out = false;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     if (ota_status.state == OTA_STATE_CHECKING || ota_status.state == OTA_STATE_DOWNLOADING ||
         ota_status.state == OTA_STATE_INSTALLING) {
         return ESP_ERR_INVALID_STATE;
@@ -493,10 +519,14 @@ esp_err_t ota_check_for_update(bool *update_available_out, int timeout)
     }
 
     return ESP_OK;
+#endif
 }
 
 esp_err_t ota_start_update(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     if (!update_available) {
         ESP_LOGW(TAG, "No update available");
         return ESP_ERR_INVALID_STATE;
@@ -510,6 +540,7 @@ esp_err_t ota_start_update(void)
     xTaskCreate(&ota_update_task, "ota_update_task", 12288, NULL, 5, NULL);
 
     return ESP_OK;
+#endif
 }
 
 void ota_get_status(ota_status_t *status)
@@ -529,14 +560,21 @@ const char *ota_get_current_version(void)
 
 bool ota_should_check_daily(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return false;
+#else
     return periodic_tasks_should_run(OTA_CHECK_TASK_NAME);
+#endif
 }
 
 void ota_update_last_check_time(void)
 {
+#if !CONFIG_BOARD_DRIVER_READ_PICO
     periodic_tasks_update_last_run(OTA_CHECK_TASK_NAME);
+#endif
 }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static esp_err_t ota_check_periodic_callback(void)
 {
     ESP_LOGI(TAG, "Periodic OTA check triggered");
@@ -574,7 +612,6 @@ static void ota_save_status_to_nvs(void)
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
 }
-
 static void ota_load_status_from_nvs(void)
 {
     // Initialize to safe defaults first
@@ -607,3 +644,4 @@ static void ota_load_status_from_nvs(void)
 
     nvs_close(nvs_handle);
 }
+#endif

@@ -133,7 +133,7 @@ class ConsoleTest(unittest.TestCase):
         self.assertEqual(port.writes, [])
 
     def test_storage_profile_has_only_explicit_commands_and_no_auto_command(self):
-        self.assertEqual(console.STORAGE_COMMANDS, {"status", "mount", "file-test", "file-check", "photo-check", "stop"})
+        self.assertEqual(console.STORAGE_COMMANDS, {"status", "mount", "file-test", "file-check", "upload-test", "photo-check", "stop"})
         result, port, reset = self.run_console(profile="storage")
         self.assertEqual(result, 0)
         self.assertEqual(port.writes, [])
@@ -203,6 +203,17 @@ class ConsoleTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(port.writes, [b"status\n"])
 
+
+    def test_upload_probe_only_explicit_storage_command(self):
+        result, port, _ = self.run_console(
+            "upload-test /storage/a\nupload-test;stop\nUPLOAD-TEST\nupload-test\x00\n"
+            "upload-test\t\n upload-test\nupload-test\r\n", profile="storage")
+        self.assertEqual(result, 0)
+        self.assertEqual(port.writes, [b"upload-test\n"])
+        for profile in ("display", "photo"):
+            result, port, _ = self.run_console("upload-test\n", profile=profile)
+            self.assertEqual(result, 0)
+            self.assertEqual(port.writes, [])
 
 if __name__ == "__main__":
     unittest.main()

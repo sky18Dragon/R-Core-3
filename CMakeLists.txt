@@ -87,3 +87,10 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32-photoframe)
+
+# Outer adaptation only: keep the pinned SDK source unchanged. The numeric
+# Read Pico SNTP client requires sender/port and originate timestamp checks.
+if(CONFIG_BOARD_DRIVER_READ_PICO AND CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION)
+    idf_component_get_property(read_pico_lwip_lib lwip COMPONENT_LIB)
+    target_compile_definitions(${read_pico_lwip_lib} PRIVATE SNTP_CHECK_RESPONSE=2 SNTP_COMP_ROUNDTRIP=0)
+endif()

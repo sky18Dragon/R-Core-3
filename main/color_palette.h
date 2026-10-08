@@ -34,5 +34,9 @@ esp_err_t color_palette_load(color_palette_t *palette);
 void color_palette_get_defaults(color_palette_t *palette);
 char *color_palette_to_json(const color_palette_t *palette);
 void color_palette_from_json(cJSON *json, color_palette_t *palette);
+// Read Pico checked conversion; selected RGB components must be integral 0..255
+// and calibration numbers finite/float-representable. No automatic calibration.
+// Candidate/output is untouched on any error; unknown fields remain ignored.
+esp_err_t color_palette_from_json_checked(cJSON *json, color_palette_t *palette);
 
 #endif

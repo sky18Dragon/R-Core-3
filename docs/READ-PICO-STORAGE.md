@@ -1,5 +1,13 @@
 # Read Pico SD 接入与隔离入口
 
+2026-10-07后续文件消费者软件：Read Pico wifi.txt新增非空普通文件≤1KiB、完整长度/EOF/错误/关闭/最终介质检查，解析后只返回值，不保存设备名或删除来源；IO/坏优先文件不被根文件掩盖。7项真实storage源码/主机文件与关闭故障用例通过；普通/ASan各626、Python50、六配置编译通过，仅软件无卡IO。SD镜像仍332,304字节/c876599f…，未重新部署或重跑探针；整个配网/实际FAT故障不计通过，见[Wi-Fi说明](READ-PICO-WIFI.md)及VALIDATION末节。
+
+2026-10-07最新设备：332,304字节/c876599f…合成发布SD诊断已获新许可仅factory部署，独立全长回读/4096字节分区保持、旧7861965c…完整应用保存。唯一mount/upload-test通过created2/written4112/published1/verified8192/conflict_rejected1/close_failed0，各打开/关闭占用1→0、介质有效；最终status正常，卸载/HAL清理ESP_OK并STOPPED，控制台EOF退出0。保留4096字节BIN和16字节PART，不操作原片/旧测试文件、不刷新/启产品；以下未部署/待许可/786…当前状态为历史轮次，详见[验证记录](VALIDATION.md)。
+
+2026-10-07最新软件：已准备332,304字节/c876599f…独立合成发布候选，新增精确upload-test、每启动仅一次、不自动运行；需要新的factory更新及两份合成文件写入许可。只验证新建/同步/关闭、FAT同名拒绝与复读，不替代真实HTTP/产品。候选未部署，当前仍如下7861965c…/STOPPED，见[上传探针](READ-PICO-UPLOAD.md)。
+
+2026-10-07最新设备：新获准SD候选328,016字节/7861965c…已factory app-only更新，独立全长回读/4096字节分区保持，旧9f6d6f6f…完整应用保存。新启动唯一mount及file-check通过：实际打开active_io=1、关闭0，4096字节/EOF正确，created=written=0、关闭错误0；最终status正常、stop卸载/HAL清理ESP_OK、STOPPED，主机控制台退出见VALIDATION。不清白/显示、不file-test/photo-check、不修复文件或启产品；下述未部署及较早设备状态均属历史轮次。
+
 SD软件接入与主机测试已完成，PhotoFrame业务存储层已接到单一适配；本卡有限实板挂载/文件测试通过，完整相框产品运行尚未验收。编译成功不等于挂载、读写或照片显示成功。完整栈默认禁止运行，见 [集成说明](READ-PICO-INTEGRATION.md)。
 
 2026-10-04当前实板：用户确认样本已复制并允许更新后，325,904字节/d760371b…原片只读诊断仅factory烧写，全长回读一致、4096字节分区表不变。新启动一次1-bit挂载及photo-check，RC3P0001.JPG完整9,464,714字节/EOF和S3 ROM 1/4解码通过、关闭无错；显式卸载/HAL退出ESP_OK、STOPPED/串口关闭。卡仍插入且已卸载，文件保留，不创建/写入/修复/删除文件、不格式化/启屏/NVS/网络。不计EXIF/Cover/dither/照片显示、整机/异常断电、全部卡容量或长期稳定。
@@ -46,11 +54,12 @@ python3 build.py --board read_pico --step firmware \
 - `file-test`：明确一次限定文件写入/回读，见下节；已保留同名文件，后续请求会拒绝创建，不要重试或删除/改名绕过门禁。
 - `file-check`：只读核对已保留专用文件，源码与当前镜像支持；此前d62fd8d2…的4096字节/EOF核对通过，本轮没有发送此命令。
 - `photo-check`：当前d760371b…支持，固定RC3P0001.JPG分块只读JPEG解码/完整源读取及EOF检查；本轮S1单次ROM解码及正常退出通过，不刷新。见 [照片检查](READ-PICO-PHOTO.md)。
+- `upload-test`：当前332,304字节/c876599f…镜像支持，本轮新许可下单次已通过；独占新建两份合成文件、非覆盖发布/复读与同名拒绝，每启动一次，见[上传探针](READ-PICO-UPLOAD.md)。产物已保留，不再次运行/删除/换名，不能套用此前只读许可。
 - `stop`：文件测试返回后先卸载，成功后HAL退出；文件关闭失败则拒绝卸载/HAL拆除、保持租约，报告FAILED。成功STOPPED、失败FAILED，两者均结束命令处理，需重新启动开启新会话。
 
 解析器固定16字节缓冲，超长、二进制、控制字符和非白名单整行拒绝，不执行前缀或溢出尾部。使用同步SDK挂载，未新增可取消硬超时，stop不能承诺打断SDK。启动不代发HOST_READY，因此已有PMU启动超时行为仍是实板限制。
 
-主机控制台显式选择 `scripts/read_pico_display_console.py --port <已核验端口> --profile storage`，源码白名单为status/mount/file-test/file-check/photo-check/stop；默认display白名单不变，不串用显示/格式化命令，必须核验实板镜像支持。只有另加 `--reset` 才ESP复位，不自动发指令、不自动重连/重试。部分写入即退出；file-check轮次31项、photo-check轮次32项构建/控制台替身测试分别通过，不访问真实串口。
+主机控制台显式选择 `scripts/read_pico_display_console.py --port <已核验端口> --profile storage`，最新源码白名单为status/mount/file-test/file-check/photo-check/upload-test/stop；默认display白名单不变，不串用显示/格式化命令，必须核验实板镜像支持及当轮许可。只有另加 `--reset` 才ESP复位，不自动发指令、不自动重连/重试。部分写入即退出；最新软件build28/console17共45项通过，不访问真实串口；较早file-check/photo-check轮次的检查数量仅属历史证据。
 
 ## 限定文件测试与已验证范围
 
@@ -68,6 +77,8 @@ python3 build.py --board read_pico --step firmware \
 
 `sd_file_probe_check`接收独立read-only IO结构，仅有介质检查、open_read/read/close，没有create/write/sync能力；实际隔离入口只以O_RDONLY打开固定RC3T0001.BIN，无任意路径参数，不列目录或读取私人照片。file-test与file-check共享逐字节/EOF核对核心，但独立attempted/check_attempted门禁，每种命令每启动最多一次（含失败），不自动挂载/重试。
 
+2026-10-07候选增加同一file-check的句柄观测：SD隔离入口只有该单一消费者，打开成功后必须active_io=1、关闭成功后0，介质/退出状态有效；不符则该一次检查失败，不新增路径/写能力/重试，不在持有句柄时尝试实卡卸载。software已编译但这两点还没有真机证据。
+
 文件缺失返回READ_OPEN_FAILED及errno，损坏/缺字节/多尾字节/EOF读取错误失败，不创建或修复；完整结果只允许created=0/written=0/verified=4096、close_failed=0及有效介质。每次IO前读取新鲜CD/挂载状态，所有已打开句柄在返回前关闭一次；主读错误与关闭错误分别报告，任一file命令的close失败都锁存并阻止正常卸载/HAL退出。正常短读处理有界，不把字节已读完但EOF读取失败算通过。
 
 当前诊断仍开机无挂载/文件IO，完整产品/显示/NVS/网络/PMU写保持关闭。本轮获准后只执行status→mount一次→file-check一次→status→stop，不发送file-test，已证明此前文件在ESP重启及FAT重新挂载后完整。单次ESP USB reset不是卡断电，不将此称为断电持久性。真实断电/重新插拔须正常卸载后人工安排；挂载不是硬件写保护，不保证FAT元数据完全不变，不能把无应用写入等同于硬件只读。软件、部署及实卡证据分别见 [验证记录](VALIDATION.md)。
@@ -75,3 +86,13 @@ python3 build.py --board read_pico --step firmware \
 后续本卡单次取卡断电验证另行完成：在前轮正常卸载/STOPPED后，用户按完整取卡再插回要求确认“已重新插入”，本轮新启动同一只读序列再次核对4096字节及EOF成功。断电动作来源是人工确认，不是固件测量卡供电；没有记录断电持续时间，不扩大为整机断电、异常断电或长期数据保持。
 
 初始软件接入轮次没有串口、烧写/回读或实体卡IO；后续获准SD轮次完成旧镜像有卡/无卡门禁，并在本次新镜像完成上述有限文件IO及退出。文件写入许可仅用于新建专用测试文件，不碰原片。完整PhotoFrame业务已有NVS防擦除及启动门禁，并发文件消费者退出、照片链路和实际迁移仍待完成，见 [TODO](../TODO.md)、[验证记录](VALIDATION.md)。
+
+## 2026-10-07 · 标准文件句柄与元数据资源保护（仅软件）
+
+`read_pico_sd_io_begin/end`在打开/关闭之间或元数据操作期间持有IO占用：begin和mount/unmount使用同一Board锁，end只做原子计数、不访问I²C；有占用时unmount立即拒绝且不使正常介质失效。移除/检测错误使新IO不可用，已知句柄可关闭后再卸载；关闭失败或不匹配释放锁存，保留占用/Board租约至重启。它是资源生命周期保护，不是SDK调用硬取消/超时、热拔恢复或数据原子发布。
+
+三个SD相关profile链接包装fopen/fdopen/fclose、open/close、opendir/closedir、stat/mkdir/unlink/rename；覆盖本次查到的main、PNG/BMP/gzip、HTTP、相册/文件日志标准入口，不改固定厂家源码。非/storage路径和socket/console句柄透传；/storage前缀有边界检查。固定32槽，无动态分配，登记临界区内没有IO/日志；fdopen转移同一占用，真实关闭完成后才释放。新libc打开可能复用尚在记账的旧指针/FD，已为SD与非SD新对象解除过期键，避免误拒绝/泄漏。不得把这个API扩展为任意并发close同一无效句柄的安全保证；未审查的直接VFS、freopen/dup等别名或未来新消费者仍须检查。
+
+主机普通/ASan各510项、Python42项及六配置编译通过；新增24项含生命周期/关闭锁存、描述符转移、目录、元数据、注册表上限、跨路径句柄复用及快照保护。8线程各50次打开/关闭的用例额外执行100次成功；只证明主机模型，不替代FreeRTOS/实际FAT/DMA/掉卡验收。初次普通回归揭露旧记账窗口的句柄复用竞态，修正后确定性用例及全量通过，失败记录不抹为已通过。
+
+上述SD候选已获新许可，status→唯一mount→唯一file-check→status→stop完成；固定4KiB内容/EOF、占用1→0及正常卸载/HAL退出通过，不创建或换文件，不刷新屏幕/启产品。已有新标准库适配的单次基本实卡证据；继续上传错误反馈、所有临时文件/原片所有权、原子发布及配置迁移审查，不宣称故障/并发/全产品已验收。

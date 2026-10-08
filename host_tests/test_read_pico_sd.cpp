@@ -137,6 +137,72 @@ TEST_F(ReadPicoSdTest, FileCloseFailureLatchesAndRetainsLeaseWithoutBackendTeard
     unmount_error = ESP_ERR_INVALID_STATE; // No reset/unlatch API; process ends as reboot.
 }
 
+TEST_F(ReadPicoSdTest, IoLeaseBlocksUnmountWithoutInvalidatingMountedMedia)
+{
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_ERR_INVALID_STATE);
+    ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
+    ASSERT_EQ(read_pico_sd_io_begin(), ESP_OK);
+    ASSERT_EQ(read_pico_sd_io_begin(), ESP_OK);
+    read_pico_sd_status_t status;
+    ASSERT_EQ(read_pico_sd_get_status(&status), ESP_OK);
+    EXPECT_EQ(status.active_io, 2u);
+    EXPECT_TRUE(status.media_valid && status.mounted);
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(unmount_calls, 0);
+    EXPECT_TRUE(lease && mounted);
+    read_pico_sd_io_end();
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_ERR_INVALID_STATE);
+    read_pico_sd_io_end();
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_OK);
+    EXPECT_EQ(unmount_calls, 1);
+}
+
+TEST_F(ReadPicoSdTest, RemovalPreventsNewIoButOutstandingUsersCanDrainBeforeUnmount)
+{
+    ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
+    ASSERT_EQ(read_pico_sd_io_begin(), ESP_OK);
+    present = false;
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_ERR_NOT_FOUND);
+    present = true;
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_ERR_INVALID_STATE);
+    read_pico_sd_io_end();
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_OK);
+    EXPECT_EQ(read_pico_sd_mount(), ESP_OK);
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_OK);
+    read_pico_sd_io_end();
+}
+
+TEST_F(ReadPicoSdTest, IoLockAndCardDetectionFailuresDoNotAcquirePhantomUsers)
+{
+    ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
+    lock_error = ESP_ERR_TIMEOUT;
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_ERR_TIMEOUT);
+    lock_error = ESP_OK;
+    detect_error = ESP_ERR_TIMEOUT;
+    EXPECT_EQ(read_pico_sd_io_begin(), ESP_ERR_TIMEOUT);
+    detect_error = ESP_OK;
+    read_pico_sd_status_t status;
+    ASSERT_EQ(read_pico_sd_get_status(&status), ESP_OK);
+    EXPECT_EQ(status.active_io, 0u);
+    EXPECT_FALSE(status.media_valid);
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_OK);
+}
+
+TEST_F(ReadPicoSdTest, UnmatchedIoReleaseLatchesInsteadOfWrappingOwnershipCount)
+{
+    ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
+    read_pico_sd_io_end();
+    read_pico_sd_status_t status;
+    ASSERT_EQ(read_pico_sd_get_status(&status), ESP_OK);
+    EXPECT_EQ(status.active_io, 0u);
+    EXPECT_TRUE(status.exit_failed);
+    EXPECT_FALSE(status.media_valid);
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(unmount_calls, 0);
+    unmount_error = ESP_ERR_INVALID_STATE;
+}
+
 TEST_F(ReadPicoSdTest, MountUsesPhotoFramePathOneBitPinsAndOptInPullups)
 {
     ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
@@ -255,6 +321,7 @@ TEST(ReadPicoSdParserTest, AcceptsOnlyExactCommandsAndCrLf)
     EXPECT_EQ(line(parser, "mount\r\n"), READ_PICO_SD_COMMAND_MOUNT);
     EXPECT_EQ(line(parser, "file-test\r\n"), READ_PICO_SD_COMMAND_FILE_TEST);
     EXPECT_EQ(line(parser, "file-check\r\n"), READ_PICO_SD_COMMAND_FILE_CHECK);
+    EXPECT_EQ(line(parser, "upload-test\r\n"), READ_PICO_SD_COMMAND_UPLOAD_TEST);
     EXPECT_EQ(line(parser, "photo-check\r\n"), READ_PICO_SD_COMMAND_PHOTO_CHECK);
     EXPECT_EQ(line(parser, "stop\n"), READ_PICO_SD_COMMAND_STOP);
     for (const char *invalid :

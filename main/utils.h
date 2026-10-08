@@ -16,6 +16,17 @@
 // client of the device's own API; such config may not touch the device
 // password.
 esp_err_t apply_config_from_json(cJSON *root, bool from_remote);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "config_apply.h"
+typedef struct {
+    config_apply_result_t state;
+    char config_error[256];
+    char cert_error[256];
+} local_config_result_t;
+// Local general update, diagnostic snapshot, and checked revision share one
+// application control. Caller owns result; no shared error consume after return.
+esp_err_t apply_local_config_checked(cJSON *root, local_config_result_t *result);
+#endif
 
 // Get/set the last image fetch error (transient, for UI display)
 void utils_set_last_fetch_error(const char *error);

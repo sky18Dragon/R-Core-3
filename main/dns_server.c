@@ -7,6 +7,124 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "captive_dns.h"
+#include "freertos/event_groups.h"
+#include <stdatomic.h>
+#include <errno.h>
+
+enum { DNS_STOPPED, DNS_RUNNING, DNS_STOPPING, DNS_FAILED };
+static atomic_int s_state = DNS_STOPPED;
+static atomic_bool s_stop, s_close_ok;
+static atomic_flag s_control = ATOMIC_FLAG_INIT;
+static EventGroupHandle_t s_done;
+static atomic_int s_worker_socket = -1;
+#define DNS_DONE_BIT BIT0
+static const char *TAG = "dns_server";
+
+static void close_owned_socket(int fd)
+{
+    s_close_ok = close(fd) == 0;
+    if (s_close_ok) s_worker_socket = -1;
+    else ESP_LOGE(TAG, "DNS socket close unconfirmed; no reuse");
+}
+
+static void dns_server_task(void *unused)
+{
+    (void)unused;
+    int fd = s_worker_socket;
+    uint8_t query[CAPTIVE_DNS_MAX_PACKET + 1], response[CAPTIVE_DNS_MAX_PACKET];
+    const uint8_t address[4] = {192, 168, 4, 1};
+    bool failed = false;
+    while (!s_stop) {
+        struct sockaddr_in client = {0};
+        socklen_t client_length = sizeof(client);
+        int length = recvfrom(fd, query, sizeof(query), 0, (struct sockaddr *)&client, &client_length);
+        if (length < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                vTaskDelay(pdMS_TO_TICKS(1)); continue;
+            }
+            failed = true; break;
+        }
+        if (s_stop) break;
+        size_t written;
+        if (client_length == sizeof(client) && client.sin_family == AF_INET &&
+            captive_dns_response(query, (size_t)length, address, response, sizeof(response), &written)) {
+            int sent = sendto(fd, response, written, 0, (struct sockaddr *)&client, client_length);
+            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                vTaskDelay(pdMS_TO_TICKS(1)); continue;
+            }
+            if (sent != (int)written) { failed = true; break; }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    close_owned_socket(fd); // Worker is the only socket owner after task creation.
+    if (failed) ESP_LOGE(TAG, "DNS worker failed; explicit stop acknowledgement required");
+    s_state = DNS_FAILED; // Not restartable until stop_checked acknowledges completion.
+    xEventGroupSetBits(s_done, DNS_DONE_BIT);
+    // No shared-state access after acknowledgement; a new start cannot affect this exit.
+    vTaskDelete(NULL);
+}
+
+esp_err_t dns_server_start(void)
+{
+    if (atomic_flag_test_and_set(&s_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+    if (s_state == DNS_RUNNING) { result = ESP_OK; goto finished; }
+    if (s_state != DNS_STOPPED) goto finished;
+    if (!s_done) s_done = xEventGroupCreate();
+    if (!s_done) { result = ESP_ERR_NO_MEM; goto finished; }
+    xEventGroupClearBits(s_done, DNS_DONE_BIT);
+    s_stop = false; s_close_ok = false;
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) { result = ESP_FAIL; goto finished; }
+    s_worker_socket = fd;
+    struct timeval timeout = {.tv_sec = 0, .tv_usec = 250000};
+    struct sockaddr_in local = {0};
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(0xc0a80401); // Only the provisioning AP, not station/ANY.
+    local.sin_port = htons(53);
+    result = ESP_FAIL;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0 ||
+        bind(fd, (struct sockaddr *)&local, sizeof(local)) < 0) goto failed;
+    s_state = DNS_RUNNING;
+    if (xTaskCreate(dns_server_task, "dns_server", 4096, NULL, 5, NULL) != pdPASS) goto failed;
+    result = s_state == DNS_RUNNING ? ESP_OK : ESP_FAIL;
+    goto finished;
+failed:
+    // No task was created: ownership is still with this caller.
+    close_owned_socket(fd);
+    s_state = s_close_ok ? DNS_STOPPED : DNS_FAILED;
+    xEventGroupSetBits(s_done, DNS_DONE_BIT);
+finished:
+    atomic_flag_clear(&s_control);
+    return result;
+}
+
+esp_err_t dns_server_stop_checked(void)
+{
+    if (atomic_flag_test_and_set(&s_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t result = ESP_OK;
+    if (s_state != DNS_STOPPED) {
+        s_stop = true;
+        s_state = DNS_STOPPING;
+        EventBits_t done = xEventGroupWaitBits(s_done, DNS_DONE_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
+        if (!(done & DNS_DONE_BIT)) result = ESP_ERR_TIMEOUT;
+        else if (!s_close_ok) { result = ESP_FAIL; s_state = DNS_FAILED; }
+        else s_state = DNS_STOPPED;
+    }
+    atomic_flag_clear(&s_control);
+    return result;
+}
+
+void dns_server_stop(void)
+{
+    esp_err_t stopped = dns_server_stop_checked();
+    if (stopped != ESP_OK) ESP_LOGE(TAG, "DNS stop unconfirmed: %s", esp_err_to_name(stopped));
+}
+#else
+
 static const char *TAG = "dns_server";
 static int dns_socket = -1;
 static TaskHandle_t dns_task_handle = NULL;
@@ -140,3 +258,6 @@ void dns_server_stop(void)
         ESP_LOGI(TAG, "DNS server stopped");
     }
 }
+
+esp_err_t dns_server_stop_checked(void) { dns_server_stop(); return ESP_OK; }
+#endif

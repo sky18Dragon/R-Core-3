@@ -28,6 +28,10 @@
 #include "storage.h"
 #include "utils.h"
 #include "wifi_manager.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_background.h"
+#include "http_server.h"
+#endif
 
 // RTC memory to store expected wakeup time (persists across deep sleep)
 RTC_DATA_ATTR static time_t expected_wakeup_time = 0;
@@ -92,8 +96,10 @@ static uint64_t ext1_button_mask(void)
     return mask;
 }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static TaskHandle_t sleep_timer_task_handle = NULL;
 static TaskHandle_t rotation_timer_task_handle = NULL;
+#endif
 static int64_t next_sleep_time = 0;  // Use absolute time for sleep timer
 static uint32_t auto_sleep_timeout_sec = AUTO_SLEEP_TIMEOUT_SEC;
 static wakeup_source_t wakeup_source = WAKEUP_SOURCE_NONE;
@@ -104,6 +110,9 @@ static void rotation_timer_task(void *arg)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
 
         // Run active rotation when:
         // 1. USB is connected (device stays awake), OR
@@ -158,6 +167,9 @@ static void sleep_timer_task(void *arg)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
 
         // Tiered WiFi power-save policy: disable modem power save (full RX,
         // low latency, fast web UI) only when a user may actually be looking —
@@ -273,6 +285,9 @@ static void power_manager_disable_auto_light_sleep(void)
 
 esp_err_t power_manager_init(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!read_pico_background_preparing()) return ESP_ERR_INVALID_STATE;
+#endif
     bool deep_sleep_enabled = config_manager_get_deep_sleep_enabled();
     ESP_LOGI(TAG, "Deep sleep %s", deep_sleep_enabled ? "enabled" : "disabled");
 
@@ -300,7 +315,12 @@ esp_err_t power_manager_init(void)
             // If drift exceeds 30 seconds, force NTP sync
             if (drift > 30 || drift < -30) {
                 ESP_LOGW(TAG, "Time drift exceeds 30s, will force NTP sync");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                esp_err_t forced = periodic_tasks_force_run(SNTP_TASK_NAME);
+                if (forced != ESP_OK) return forced;
+#else
                 periodic_tasks_force_run(SNTP_TASK_NAME);
+#endif
             }
             expected_wakeup_time = 0;  // Reset after checking
         }
@@ -404,9 +424,21 @@ esp_err_t power_manager_init(void)
         wakeup_source == WAKEUP_SOURCE_CLEAR_BUTTON || wakeup_source == WAKEUP_SOURCE_TIMER) {
         ESP_LOGI(TAG, "Woken by ROTATE button, KEY button or timer, disabling auto-sleep timer");
     } else {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t error = read_pico_background_add(READ_PICO_BACKGROUND_SLEEP, sleep_timer_task,
+                                                    NULL, 4096, 5);
+        if (error != ESP_OK) return error;
+#else
         xTaskCreate(sleep_timer_task, "sleep_timer", 4096, NULL, 5, &sleep_timer_task_handle);
+#endif
     }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t error = read_pico_background_add(READ_PICO_BACKGROUND_ROTATION, rotation_timer_task,
+                                                NULL, 16384, 5);
+    if (error != ESP_OK) return error;
+#else
     xTaskCreate(rotation_timer_task, "rotation_timer", 16384, NULL, 5, &rotation_timer_task_handle);
+#endif
 
     power_manager_enable_auto_light_sleep();
 

@@ -1,5 +1,6 @@
 #include "read_pico_sd.h"
 #include <stdatomic.h>
+#include <limits.h>
 
 #include "board_read_pico.h"
 #include "read_pico_board.h"
@@ -9,10 +10,46 @@ static bool owned;
 static bool media_valid;
 static esp_err_t exit_failure;
 static atomic_bool file_close_failed;
+static atomic_uint active_io;
 
 void read_pico_sd_note_file_close_failure(void)
 {
     atomic_store(&file_close_failed, true);
+}
+
+esp_err_t read_pico_sd_io_begin(void)
+{
+    esp_err_t err = read_pico_board_lock(100);
+    if (err != ESP_OK)
+        return err;
+    if (!owned || !media_valid || exit_failure != ESP_OK ||
+        atomic_load(&file_close_failed) || !sdcard_is_mounted()) {
+        err = ESP_ERR_INVALID_STATE;
+    } else {
+        bool present = false;
+        err = read_pico_board_sd_present(&present);
+        if (err == ESP_OK && !present)
+            err = ESP_ERR_NOT_FOUND;
+        if (err != ESP_OK)
+            media_valid = false;
+        else if (atomic_load(&active_io) == UINT_MAX)
+            err = ESP_ERR_INVALID_STATE;
+        else
+            atomic_fetch_add(&active_io, 1);
+    }
+    read_pico_board_unlock();
+    return err;
+}
+
+void read_pico_sd_io_end(void)
+{
+    unsigned count = atomic_load(&active_io);
+    while (count) {
+        if (atomic_compare_exchange_weak(&active_io, &count, count - 1))
+            return;
+    }
+    // Never wrap the count or silently permit teardown after ownership misuse.
+    read_pico_sd_note_file_close_failure();
 }
 
 esp_err_t read_pico_sd_mount(void)
@@ -20,7 +57,8 @@ esp_err_t read_pico_sd_mount(void)
     esp_err_t err = read_pico_board_lock(100);
     if (err != ESP_OK)
         return err;
-    if (atomic_load(&file_close_failed) || owned || sdcard_is_mounted() || exit_failure != ESP_OK) {
+    if (atomic_load(&file_close_failed) || atomic_load(&active_io) || owned ||
+        sdcard_is_mounted() || exit_failure != ESP_OK) {
         read_pico_board_unlock();
         return ESP_ERR_INVALID_STATE;
     }
@@ -71,7 +109,7 @@ esp_err_t read_pico_sd_unmount(void)
     esp_err_t err = read_pico_board_lock(100);
     if (err != ESP_OK)
         return err;
-    if (atomic_load(&file_close_failed))
+    if (atomic_load(&file_close_failed) || atomic_load(&active_io))
         err = ESP_ERR_INVALID_STATE;
     else if (exit_failure != ESP_OK)
         err = exit_failure;
@@ -107,6 +145,7 @@ esp_err_t read_pico_sd_get_status(read_pico_sd_status_t *out)
     out->mounted = owned && sdcard_is_mounted();
     out->media_valid = out->mounted && media_valid && exit_failure == ESP_OK;
     out->exit_failed = exit_failure != ESP_OK || atomic_load(&file_close_failed);
+    out->active_io = atomic_load(&active_io);
     read_pico_board_unlock();
     return err;
 }

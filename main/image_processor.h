@@ -52,6 +52,13 @@ esp_err_t image_processor_process_jpeg_file_to_display(const char *path,
  * This function takes raw image data (PNG or JPG), processes it, and streams
  * the result row by row straight into the display buffer, then refreshes the
  * panel. The full-resolution processed image is never materialized in RAM.
+ * Read Pico JPEG uses the same baseline-only, EXIF 1..8 and centered Cover
+ * contract as file input, with <=32MiB encoded input and <=5MiB scaled RGB.
+ * The RGB limit is not a total heap guarantee: caller-owned compressed bytes,
+ * display buffers and processing workspace coexist. Input remains unchanged
+ * and must stay valid/immutable until this synchronous call returns. JPEG
+ * decoding does not open files or poll SD; display publication and optional
+ * snapshot storage retain the display_manager contract below.
  *
  * @param input_data Raw image data (PNG or JPG format)
  * @param input_size Size of input data in bytes

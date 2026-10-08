@@ -22,8 +22,14 @@ typedef enum { IP_MODE_DHCP = 0, IP_MODE_STATIC = 1 } ip_mode_t;
 #define IP_ADDR_STR_MAX_LEN 16  // dotted IPv4 + NUL
 
 #define DEVICE_NAME_MAX_LEN 64
+// C-string capacities, including NUL (the STA wire fields are 32/64 bytes).
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#define WIFI_SSID_MAX_LEN 33
+#define WIFI_PASS_MAX_LEN 65
+#else
 #define WIFI_SSID_MAX_LEN 32
 #define WIFI_PASS_MAX_LEN 64
+#endif
 #define IMAGE_URL_MAX_LEN 256
 #define HA_URL_MAX_LEN 256
 #define ROTATION_MODE_MAX_LEN 16

@@ -575,9 +575,14 @@ static void background_theoretical_rgb(const char *name, uint8_t rgb[3])
 // rotate is passed in (not re-read from config) so one snapshot governs the
 // whole pass -- geometry, decoder gating, and sink must agree even if the
 // user flips the orientation setting mid-stream
-static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int src_h, bool rotate,
-                          bool force_cover)
+static esp_err_t geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int src_h, bool rotate,
+                          bool force_cover, const processing_options_t *options)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!force_cover && !options) return ESP_ERR_INVALID_ARG;
+#else
+    (void)options;
+#endif
     geo->src = src;
     geo->src_w = src_w;
     geo->src_h = src_h;
@@ -607,7 +612,11 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
     // produces). The resample math is shared with cover mode -- off_x/off_y
     // just become the (negative) content origin.
     char bg_name[12] = "";
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    geo->fit = !force_cover && options->scale_mode == SCALE_MODE_FIT;
+#else
     geo->fit = !force_cover && processing_settings_get_scale_mode() == SCALE_MODE_FIT;
+#endif
     geo->content_x0 = 0;
     geo->content_y0 = 0;
     geo->content_x1 = geo->proc_w;
@@ -627,7 +636,11 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
         geo->off_x = -geo->content_x0;
         geo->off_y = -geo->content_y0;
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        memcpy(bg_name, options->background_color, sizeof(bg_name));
+#else
         processing_settings_get_background_color(bg_name, sizeof(bg_name));
+#endif
         background_theoretical_rgb(bg_name, geo->bg);
         if (board_is_grayscale()) {
             // Grayscale output palette: quantize the background to its ramp
@@ -660,6 +673,7 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
                  src_h, geo->proc_w, geo->proc_h, geo->rotate ? " (rotated to native)" : "",
                  geo->scale, geo->off_x, geo->off_y, geo->box ? "box" : "bilinear");
     }
+    return ESP_OK;
 }
 
 // Emit rows in processing-space order instead of native order: the sink
@@ -846,12 +860,14 @@ static esp_err_t run_stream(geometry_t *geo, dither_algorithm_t dither_algorithm
 
 static esp_err_t process_rgb_stream(const uint8_t *rgb_buffer, int width, int height,
                                     dither_algorithm_t dither_algorithm, row_sink_fn sink,
-                                    void *sink_ctx, bool processing_order, bool rotated)
+                                    void *sink_ctx, bool processing_order, bool rotated,
+                                    const processing_options_t *options)
 {
     ESP_LOGI(TAG, "Processing RGB buffer: %dx%d", width, height);
 
     geometry_t geo;
-    geometry_init(&geo, rgb_buffer, width, height, rotated, false);
+    esp_err_t err = geometry_init(&geo, rgb_buffer, width, height, rotated, false, options);
+    if (err != ESP_OK) return err;
     if (processing_order) {
         geometry_set_processing_order(&geo);
     }
@@ -865,8 +881,9 @@ static esp_err_t process_oriented_rgb(const uint8_t *rgb, int width, int height,
                                       bool rotated)
 {
     geometry_t geo;
-    geometry_init(&geo, rgb, orientation >= 5 ? height : width,
-                   orientation >= 5 ? width : height, rotated, true);
+    esp_err_t err = geometry_init(&geo, rgb, orientation >= 5 ? height : width,
+                   orientation >= 5 ? width : height, rotated, true, NULL);
+    if (err != ESP_OK) return err;
     geo.stored_w = width;
     geo.stored_h = height;
     geo.exif_orientation = orientation;
@@ -1124,6 +1141,94 @@ done:
     ESP_LOGI(TAG, "JPEG read/decode/close: %lld ms, physical reads=%zu bytes=%zu cache=4096 result=%s",
              (long long) ((image_stage_time_us() - started) / 1000), buffered.read_calls,
              buffered.physical_bytes, esp_err_to_name(err));
+    return err;
+}
+
+// Caller-owned upload/URL bytes: no SD/file operations and no compressed copy.
+// Keep the same baseline metadata, RGB budget and EXIF contract as file JPEGs.
+typedef struct {
+    const uint8_t *data;
+    size_t size, offset, bytes_since_yield;
+} jpeg_memory_source_t;
+
+static bool jpeg_memory_read_at(void *context, size_t offset, uint8_t *data, size_t size)
+{
+    jpeg_memory_source_t *source = context;
+    if (offset > source->size || size > source->size - offset)
+        return false;
+    memcpy(data, source->data + offset, size);
+    return true;
+}
+
+static bool jpeg_memory_ready(void *context)
+{
+    (void) context;
+    return true; // Immutable memory is owned by the caller for this synchronous call.
+}
+
+static int jpeg_memory_read(void *context, uint8_t *data, size_t size)
+{
+    jpeg_memory_source_t *source = context;
+    if (size > source->size - source->offset)
+        size = source->size - source->offset;
+    if (source->bytes_since_yield >= 32768) {
+        vTaskDelay(1);
+        source->bytes_since_yield = 0;
+    }
+    memcpy(data, source->data + source->offset, size);
+    source->offset += size;
+    source->bytes_since_yield += size;
+    return (int) size; // The bounded decoder requests at most 256 bytes.
+}
+
+static esp_err_t decode_read_pico_jpeg_memory(const uint8_t *data, size_t size, uint8_t **rgb,
+                                             int *width, int *height, unsigned *orientation)
+{
+    *rgb = NULL;
+    jpeg_memory_source_t source = {.data = data, .size = size};
+    const jpeg_metadata_io_t metadata_io = {&source, jpeg_memory_read_at, size};
+    jpeg_metadata_t info;
+    jpeg_metadata_error_t metadata_err = jpeg_metadata_read(&metadata_io, &info);
+    if (metadata_err != JPEG_METADATA_OK) {
+        set_last_error(metadata_err == JPEG_METADATA_UNSUPPORTED ?
+                       "JPEG format unsupported (baseline only)" : "JPEG memory metadata/limit invalid");
+        return metadata_err == JPEG_METADATA_UNSUPPORTED ? ESP_ERR_NOT_SUPPORTED : ESP_FAIL;
+    }
+    unsigned scale;
+    size_t rgb_size;
+    if (!jpeg_metadata_scale(&info, 5u * 1024u * 1024u, &scale, &rgb_size)) {
+        set_last_error("JPEG scaled raster exceeds 5MiB budget");
+        return ESP_ERR_NO_MEM;
+    }
+    *rgb = heap_caps_malloc(rgb_size, MALLOC_CAP_SPIRAM);
+    void *work = heap_caps_malloc(3100, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    esp_err_t err = ESP_ERR_NO_MEM;
+    if (!*rgb || !work) {
+        set_last_error("JPEG decode allocation failed");
+        goto done;
+    }
+    const jpeg_stream_probe_io_t io = {&source, jpeg_memory_ready, jpeg_memory_read};
+    jpeg_stream_probe_result_t result = jpeg_stream_decode_rgb(&io, work, 3100, scale,
+                                                              *rgb, rgb_size);
+    err = ESP_FAIL;
+    if (result.error != JPEG_STREAM_OK || result.width != info.width ||
+        result.height != info.height || result.output_width != (info.width >> scale) ||
+        result.output_height != (info.height >> scale)) {
+        set_last_error("JPEG memory decode failed");
+        goto done;
+    }
+    *width = result.output_width;
+    *height = result.output_height;
+    *orientation = info.orientation;
+    ESP_LOGI(TAG, "JPEG memory: %ux%u EXIF=%u scale=1/%u RGB=%zu (budget 5MiB)",
+             info.width, info.height, info.orientation, 1u << scale, rgb_size);
+    err = ESP_OK;
+done:
+    heap_caps_free(work);
+    if (err != ESP_OK) {
+        heap_caps_free(*rgb);
+        *rgb = NULL;
+    }
     return err;
 }
 #endif
@@ -1609,19 +1714,20 @@ static const uint8_t *png_stream_get_row(void *ctx, int src_y)
 
 static esp_err_t png_stream_run(png_stream_src_t *src, dither_algorithm_t dither_algorithm,
                                 row_sink_fn sink, void *sink_ctx, bool processing_order,
-                                bool rotated)
+                                bool rotated, const processing_options_t *options)
 {
     ESP_LOGI(TAG, "Streaming PNG: %dx%d (%d-row window)", src->width, src->height, src->ring_rows);
 
     geometry_t geo;
-    geometry_init(&geo, NULL, src->width, src->height, rotated, false);
+    esp_err_t err = geometry_init(&geo, NULL, src->width, src->height, rotated, false, options);
+    if (err != ESP_OK) return err;
     if (processing_order) {
         geometry_set_processing_order(&geo);
     }
     geo.get_row = png_stream_get_row;
     geo.row_ctx = src;
 
-    esp_err_t err = run_stream(&geo, dither_algorithm, sink, sink_ctx);
+    err = run_stream(&geo, dither_algorithm, sink, sink_ctx);
     if (err == ESP_OK && !src->error) {
         // Cover can crop the last source rows. Still validate all IDAT data and
         // IEND, so corrupt cropped-away content is not silently published.
@@ -1699,6 +1805,18 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     last_error_msg[0] = '\0';
 
     esp_err_t err;
+    processing_options_t options = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Read once before opening a display stream. Fixed EXIF JPEG Cover and
+    // caller-supplied dithering remain independent of these layout options.
+    if (format == IMAGE_FORMAT_PNG) {
+        err = processing_settings_copy_options(&options);
+        if (err != ESP_OK) {
+            set_last_error("Processing options unavailable or invalid");
+            return err;
+        }
+    }
+#endif
 
     // The display sink accepts processing-order rows, so PNGs stream
     // straight from the decoder regardless of rotation -- no source buffer,
@@ -1723,7 +1841,7 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
             err = display_manager_begin_rgb_stream();
             if (err == ESP_OK) {
                 err = png_stream_run(&stream, dither_algorithm, display_row_sink, &sink_ctx, true,
-                                     sink_ctx.rotated);
+                                     sink_ctx.rotated, &options);
                 {
                     esp_err_t end_err = display_manager_end_rgb_stream(err == ESP_OK, pub);
                     if (err == ESP_OK) {
@@ -1740,9 +1858,17 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     // Decode input to RGB
     uint8_t *rgb_buffer = NULL;
     int width = 0, height = 0;
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    unsigned jpeg_orientation = 1;
+#endif
 
     if (format == IMAGE_FORMAT_JPG) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        err = decode_read_pico_jpeg_memory(input_data, input_size, &rgb_buffer, &width, &height,
+                                          &jpeg_orientation);
+#else
         err = decode_jpg_buffer(input_data, input_size, &rgb_buffer, &width, &height);
+#endif
     } else if (format == IMAGE_FORMAT_PNG) {
         err = decode_png_buffer(input_data, input_size, &rgb_buffer, &width, &height);
     } else {
@@ -1759,8 +1885,14 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     // Stream processed rows straight into the display buffer, then refresh
     err = display_manager_begin_rgb_stream();
     if (err == ESP_OK) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        if (format == IMAGE_FORMAT_JPG)
+            err = process_oriented_rgb(rgb_buffer, width, height, jpeg_orientation, dither_algorithm,
+                                       display_row_sink, &sink_ctx, true, sink_ctx.rotated);
+        else
+#endif
         err = process_rgb_stream(rgb_buffer, width, height, dither_algorithm, display_row_sink,
-                                 &sink_ctx, true, sink_ctx.rotated);
+                                 &sink_ctx, true, sink_ctx.rotated, &options);
 
         // Every row has been painted; release the decoded source before end
         // runs the snapshot (its zlib state needs PSRAM a near-full decode
@@ -1832,6 +1964,17 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
         ESP_LOGE(TAG, "Unsupported image format for processing");
         return ESP_FAIL;
     }
+    processing_options_t options = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Reject unavailable geometry before an output file can be created.
+    if (format == IMAGE_FORMAT_PNG) {
+        esp_err_t options_error = processing_settings_copy_options(&options);
+        if (options_error != ESP_OK) {
+            set_last_error("Processing options unavailable or invalid");
+            return options_error;
+        }
+    }
+#endif
 
 #if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
     if (format == IMAGE_FORMAT_JPG) {
@@ -1919,7 +2062,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
                                   BOARD_HAL_DISPLAY_HEIGHT);
             if (err == ESP_OK) {
                 err = png_stream_run(&stream, dither_algorithm, png_writer_row_sink, &writer, false,
-                                     rotated);
+                                     rotated, &options);
                 esp_err_t close_err = png_writer_close(&writer, err == ESP_OK);
                 if (err == ESP_OK) {
                     err = close_err;
@@ -1966,7 +2109,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
     err = png_writer_open(&writer, output_path, BOARD_HAL_DISPLAY_WIDTH, BOARD_HAL_DISPLAY_HEIGHT);
     if (err == ESP_OK) {
         err = process_rgb_stream(rgb_buffer, width, height, dither_algorithm, png_writer_row_sink,
-                                 &writer, false, rotated);
+                                 &writer, false, rotated, &options);
         // Keep the processing error (e.g. ESP_ERR_NO_MEM, which callers map
         // to a specific response); only a failed finalize of an otherwise
         // successful write becomes the result.

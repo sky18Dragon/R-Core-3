@@ -1,0 +1,9 @@
+#pragma once
+typedef struct { char version[32]; } esp_app_desc_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
+const esp_app_desc_t *esp_app_get_description(void);
+#ifdef __cplusplus
+}
+#endif

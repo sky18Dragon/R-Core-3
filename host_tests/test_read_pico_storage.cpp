@@ -1,4 +1,10 @@
 #include <gtest/gtest.h>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
 
 extern "C" {
 #include "read_pico_sd.h"
@@ -10,7 +16,21 @@ namespace
 int mount_calls, unmount_calls, fallback_calls, device_name_calls;
 esp_err_t mount_result, unmount_result, status_result;
 read_pico_sd_status_t status;
+bool close_failed, fail_close, lose_on_close;
+int close_calls;
 }  // namespace
+
+extern "C" int wifi_storage_test_fclose(FILE *file)
+{
+    ++close_calls;
+    int result = fclose(file);
+    if (lose_on_close) status.media_valid = false;
+    return fail_close ? EOF : result;
+}
+extern "C" void read_pico_sd_note_file_close_failure(void)
+{
+    close_failed = true; status.exit_failed = true; status.media_valid = false;
+}
 
 extern "C" esp_err_t read_pico_sd_mount(void)
 {
@@ -43,6 +63,7 @@ extern "C" const char *esp_err_to_name(esp_err_t)
 
 class ReadPicoStorage : public testing::Test
 {
+    std::filesystem::path previous_dir, scratch_dir;
    protected:
     void SetUp() override
     {
@@ -51,11 +72,22 @@ class ReadPicoStorage : public testing::Test
         mount_calls = unmount_calls = fallback_calls = device_name_calls = 0;
         mount_result = status_result = ESP_OK;
         status = {true, true, true, false};
+        fail_close = lose_on_close = close_failed = false; close_calls = 0;
+        previous_dir = std::filesystem::current_path();
+        char path[] = "/tmp/read-pico-wifi-file-XXXXXX";
+        ASSERT_NE(mkdtemp(path), nullptr); scratch_dir = path;
+        std::filesystem::current_path(scratch_dir);
+        std::filesystem::create_directories("pf_wifi_storage/config");
     }
     void TearDown() override
     {
         unmount_result = ESP_OK;
         EXPECT_EQ(storage_unmount_checked(), ESP_OK);
+        std::filesystem::current_path(previous_dir);
+        std::filesystem::remove_all(scratch_dir);
+    }
+    void write(const char *path, const std::string &bytes) {
+        std::ofstream f(path, std::ios::binary); f.write(bytes.data(), bytes.size());
     }
 };
 
@@ -126,11 +158,64 @@ TEST_F(ReadPicoStorage, FormatDisabledEvenWithValidOwnedMedia)
 TEST_F(ReadPicoStorage, InvalidMediaNeverReadsWifiFileOrChangesDeviceName)
 {
     char ssid[32] = "preserved", password[64] = "preserved";
-    EXPECT_EQ(storage_read_wifi_credentials(ssid, password), ESP_ERR_NOT_FOUND);
+    EXPECT_EQ(storage_read_wifi_credentials(ssid, password), ESP_ERR_INVALID_STATE);
     ASSERT_EQ(storage_init(), ESP_OK);
     status.media_valid = false;
-    EXPECT_EQ(storage_read_wifi_credentials(ssid, password), ESP_ERR_NOT_FOUND);
+    EXPECT_EQ(storage_read_wifi_credentials(ssid, password), ESP_ERR_INVALID_STATE);
     EXPECT_STREQ(ssid, "preserved");
     EXPECT_STREQ(password, "preserved");
     EXPECT_EQ(device_name_calls, 0);
+}
+TEST_F(ReadPicoStorage, CheckedImportReturnsNameAfterCloseWithoutSavingOrDeletingSource) {
+    ASSERT_EQ(storage_init(), ESP_OK);
+    write("pf_wifi_storage/config/wifi.txt", "network\npassword\nFrame\n");
+    wifi_text_t out{}; ASSERT_EQ(storage_read_wifi_config(&out), ESP_OK);
+    EXPECT_STREQ(out.ssid, "network"); EXPECT_STREQ(out.device_name, "Frame");
+    EXPECT_EQ(close_calls, 1); EXPECT_EQ(device_name_calls, 0);
+    EXPECT_TRUE(std::filesystem::exists("pf_wifi_storage/config/wifi.txt"));
+}
+TEST_F(ReadPicoStorage, OnlyAbsentPreferredFileAllowsRootFallback) {
+    ASSERT_EQ(storage_init(), ESP_OK);
+    write("pf_wifi_storage/wifi.txt", "network\npassword");
+    wifi_text_t out{}; ASSERT_EQ(storage_read_wifi_config(&out), ESP_OK);
+    EXPECT_STREQ(out.ssid, "network");
+    write("pf_wifi_storage/config/wifi.txt", "bad file");
+    EXPECT_EQ(storage_read_wifi_config(&out), ESP_ERR_INVALID_ARG);
+    EXPECT_STREQ(out.ssid, "network"); EXPECT_EQ(device_name_calls, 0);
+}
+TEST_F(ReadPicoStorage, PreferredPathDirectoryOrInvalidParentDoesNotHideBehindRootFile) {
+    ASSERT_EQ(storage_init(), ESP_OK); write("pf_wifi_storage/wifi.txt", "network\npassword");
+    std::filesystem::create_directory("pf_wifi_storage/config/wifi.txt");
+    wifi_text_t out{}; EXPECT_NE(storage_read_wifi_config(&out), ESP_OK); EXPECT_EQ(close_calls, 1);
+    std::filesystem::remove_all("pf_wifi_storage/config"); write("pf_wifi_storage/config", "not a directory");
+    EXPECT_EQ(storage_read_wifi_config(&out), ESP_FAIL);
+}
+TEST_F(ReadPicoStorage, EmptyOversizeAndMalformedInputNeverChangeCallerOrName) {
+    ASSERT_EQ(storage_init(), ESP_OK);
+    wifi_text_t out{}; strcpy(out.ssid, "previous");
+    for (const std::string &body : {std::string(""), std::string(1025, 'x'), std::string("ssid\nshort")}) {
+        write("pf_wifi_storage/config/wifi.txt", body);
+        EXPECT_NE(storage_read_wifi_config(&out), ESP_OK); EXPECT_STREQ(out.ssid, "previous");
+    }
+    EXPECT_EQ(device_name_calls, 0); EXPECT_EQ(close_calls, 3);
+}
+TEST_F(ReadPicoStorage, CloseFailureLatchesMediaAndPublishesNoCredentials) {
+    ASSERT_EQ(storage_init(), ESP_OK); write("pf_wifi_storage/wifi.txt", "network\npassword\nFrame");
+    fail_close = true;
+    wifi_text_t out{}; strcpy(out.ssid, "previous");
+    EXPECT_NE(storage_read_wifi_config(&out), ESP_OK);
+    EXPECT_TRUE(close_failed); EXPECT_STREQ(out.ssid, "previous"); EXPECT_EQ(device_name_calls, 0);
+}
+TEST_F(ReadPicoStorage, MediaLossAtCloseRejectsOtherwiseValidImport) {
+    ASSERT_EQ(storage_init(), ESP_OK); write("pf_wifi_storage/wifi.txt", "network\npassword");
+    lose_on_close = true; wifi_text_t out{}; strcpy(out.ssid, "previous");
+    EXPECT_EQ(storage_read_wifi_config(&out), ESP_ERR_INVALID_STATE);
+    EXPECT_FALSE(close_failed); EXPECT_STREQ(out.ssid, "previous");
+}
+TEST_F(ReadPicoStorage, FullWireCredentialCopyUsesDocumentedCapacitiesAndNoNameSideEffect) {
+    ASSERT_EQ(storage_init(), ESP_OK);
+    std::string ssid(32, 's'), psk(64, 'f'); write("pf_wifi_storage/wifi.txt", ssid + "\n" + psk);
+    char s[33], p[65]; ASSERT_EQ(storage_read_wifi_credentials(s, p), ESP_OK);
+    EXPECT_EQ(std::string(s), ssid); EXPECT_EQ(std::string(p), psk); EXPECT_EQ(device_name_calls, 0);
+    EXPECT_EQ(storage_read_wifi_config(nullptr), ESP_ERR_INVALID_ARG);
 }

@@ -73,10 +73,21 @@ static esp_err_t ha_send_notification(const char *state, const char *log_message
         return ESP_FAIL;
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    char device_name[DEVICE_NAME_MAX_LEN];
+    esp_err_t copied = config_manager_copy_device_name(device_name, sizeof(device_name));
+    if (copied != ESP_OK) { cJSON_Delete(root); return copied; }
+    if (!cJSON_AddStringToObject(root, "device_name", device_name) ||
+        !cJSON_AddStringToObject(root, "device_id", get_device_id()) ||
+        !cJSON_AddStringToObject(root, "state", state)) {
+        cJSON_Delete(root); return ESP_ERR_NO_MEM;
+    }
+#else
     const char *device_name = config_manager_get_device_name();
     cJSON_AddStringToObject(root, "device_name", device_name ? device_name : "ESP32-PhotoFrame");
     cJSON_AddStringToObject(root, "device_id", get_device_id());
     cJSON_AddStringToObject(root, "state", state);
+#endif
 
     char *json_str = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

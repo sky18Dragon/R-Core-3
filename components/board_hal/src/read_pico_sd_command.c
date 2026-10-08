@@ -20,6 +20,8 @@ read_pico_sd_command_t read_pico_sd_parser_feed(read_pico_sd_parser_t *parser, u
                 command = READ_PICO_SD_COMMAND_FILE_TEST;
             else if (strcmp(parser->bytes, "file-check") == 0)
                 command = READ_PICO_SD_COMMAND_FILE_CHECK;
+            else if (strcmp(parser->bytes, "upload-test") == 0)
+                command = READ_PICO_SD_COMMAND_UPLOAD_TEST;
             else if (strcmp(parser->bytes, "photo-check") == 0)
                 command = READ_PICO_SD_COMMAND_PHOTO_CHECK;
             else if (strcmp(parser->bytes, "stop") == 0)

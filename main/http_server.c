@@ -41,16 +41,37 @@
 #include "sdcard.h"
 #include "storage.h"
 #include "utils.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include <stdatomic.h>
+#include "config_apply.h"
+#include "config_document.h"
+#include "read_pico_http_service.h"
+#include "read_pico_upload.h"
+#include "upload_stream.h"
+#endif
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
 static const char *TAG = "http_server";
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static atomic_flag s_http_control = ATOMIC_FLAG_INIT;
+#else
 static httpd_handle_t server = NULL;
 static bool system_ready = false;
+#endif
 
 #define HTTPD_503 "503 Service Unavailable"
+
+static bool http_requests_ready(httpd_req_t *req)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return req && read_pico_http_accepts(READ_PICO_HTTP_FRAME, req->handle);
+#else
+    (void)req; return system_ready;
+#endif
+}
 
 /**
  * @brief Validate a user-supplied path component to prevent directory traversal attacks.
@@ -174,6 +195,12 @@ static auth_result_t http_auth_check(httpd_req_t *req, int64_t *retry_after_ms)
 // Dispatch trampoline: the real handler travels in user_ctx (no route used it).
 static esp_err_t auth_gate(httpd_req_t *req)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!http_requests_ready(req)) {
+        httpd_resp_set_status(req, HTTPD_503);
+        return httpd_resp_sendstr(req, "Service not ready");
+    }
+#endif
     int64_t retry_after_ms = 0;
     auth_result_t result = http_auth_check(req, &retry_after_ms);
     if (result == AUTH_LOCKED_OUT) {
@@ -200,11 +227,11 @@ static esp_err_t auth_gate(httpd_req_t *req)
 // Register a route behind the optional auth gate. The real handler rides in
 // user_ctx; every route goes through here so authentication cannot be
 // forgotten when a new endpoint is added.
-static void register_uri(const char *uri, httpd_method_t method, http_handler_fn handler)
+static esp_err_t register_uri(httpd_handle_t handle, const char *uri, httpd_method_t method, http_handler_fn handler)
 {
     httpd_uri_t u = {
         .uri = uri, .method = method, .handler = auth_gate, .user_ctx = (void *) handler};
-    httpd_register_uri_handler(server, &u);
+    return httpd_register_uri_handler(handle, &u);
 }
 
 static esp_err_t index_handler(httpd_req_t *req)
@@ -297,12 +324,114 @@ typedef struct {
     char original_filename[256];  // Original filename from upload
     bool has_image;
     bool has_thumbnail;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    upload_file_t files[2];
+#endif
 } multipart_result_t;
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+enum { READ_PICO_UPLOAD_FILE_LIMIT = 5 * 1024 * 1024,
+       READ_PICO_UPLOAD_BODY_LIMIT = 10 * 1024 * 1024 + 4096 };
+typedef struct {
+    multipart_result_t *result;
+    const char *directory;
+    bool require_png;
+    int current;
+} checked_multipart_context_t;
+
+static bool checked_part_begin(void *context, const char *field, const char *filename)
+{
+    checked_multipart_context_t *c = context;
+    int index = !strcmp(field, "image") ? 0 : 1;
+    const char *ext = strrchr(filename, '.');
+    if (index == 0) {
+        if (c->require_png && (!ext || (strcasecmp(ext, ".png") && strcasecmp(ext, ".epdgz"))))
+            return false;
+        strcpy(c->result->original_filename, filename); // Portable parser bounds this to 119 bytes.
+    } else if (!ext || (strcasecmp(ext, ".jpg") && strcasecmp(ext, ".jpeg"))) {
+        return false;
+    }
+    c->current = index;
+    char *path = index == 0 ? c->result->image_path : c->result->thumbnail_path;
+    return read_pico_upload_begin(&c->result->files[index], c->directory, path, 512,
+                                 READ_PICO_UPLOAD_FILE_LIMIT);
+}
+
+static bool checked_part_write(void *context, const uint8_t *data, size_t size)
+{
+    checked_multipart_context_t *c = context;
+    return c->current >= 0 && upload_file_write(&c->result->files[c->current], data, size);
+}
+
+static bool checked_part_end(void *context)
+{
+    checked_multipart_context_t *c = context;
+    if (c->current < 0 || !upload_file_finish(&c->result->files[c->current], 0)) return false;
+    if (c->current == 0) c->result->has_image = true;
+    else c->result->has_thumbnail = true;
+    c->current = -1;
+    return true;
+}
+
+static esp_err_t parse_multipart_checked(httpd_req_t *req, const char *directory,
+                                          multipart_result_t *result, bool require_png)
+{
+    memset(result, 0, sizeof(*result));
+    result->files[0].fd = result->files[1].fd = -1;
+    char type[128], boundary[UPLOAD_BOUNDARY_MAX + 1];
+    if (!req->content_len || req->content_len > READ_PICO_UPLOAD_BODY_LIMIT ||
+        httpd_req_get_hdr_value_str(req, "Content-Type", type, sizeof(type)) != ESP_OK ||
+        !upload_boundary_from_content_type(type, boundary, sizeof(boundary))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or oversized multipart upload");
+        return ESP_FAIL;
+    }
+    upload_stream_t *parser = malloc(sizeof(*parser));
+    uint8_t *buffer = malloc(4096);
+    if (!parser || !buffer) {
+        free(parser); free(buffer);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    checked_multipart_context_t context = {result, directory, require_png, -1};
+    upload_stream_sink_t sink = {&context, checked_part_begin, checked_part_write, checked_part_end};
+    bool ok = upload_stream_init(parser, boundary, req->content_len, &sink);
+    size_t remaining = req->content_len;
+    unsigned timeouts = 0;
+    int64_t deadline = esp_timer_get_time() + 120000000;
+    while (ok && remaining) {
+        if (esp_timer_get_time() >= deadline) { ok = false; break; }
+        size_t count = MIN(remaining, 4096);
+        int got = httpd_req_recv(req, (char *)buffer, count);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 8) continue;
+        if (got <= 0 || (size_t)got > count) { ok = false; break; }
+        timeouts = 0;
+        remaining -= got;
+        ok = upload_stream_feed(parser, buffer, got);
+    }
+    ok = ok && !remaining && upload_stream_finish(parser);
+    free(parser); free(buffer);
+    if (!ok) {
+        upload_file_abort(&result->files[0]);
+        upload_file_abort(&result->files[1]);
+        // Retain only exclusive, hidden .part files; never unlink by name.
+        result->has_image = result->has_thumbnail = false;
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Upload incomplete or storage failed; temporary files retained");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+#endif
 
 static esp_err_t parse_multipart_upload(httpd_req_t *req, const char *base_dir,
                                         const char *image_filename, const char *thumb_filename,
                                         multipart_result_t *result, bool require_png)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    (void)image_filename;
+    (void)thumb_filename;
+    return parse_multipart_checked(req, base_dir, result, require_png);
+#else
     result->has_image = false;
     result->has_thumbnail = false;
 
@@ -491,6 +620,7 @@ static esp_err_t parse_multipart_upload(httpd_req_t *req, const char *base_dir,
     free(buf);
 
     return ESP_OK;
+#endif
 }
 
 // Read a whole file into a PSRAM buffer (caller frees with heap_caps_free)
@@ -517,7 +647,10 @@ static esp_err_t send_display_success(httpd_req_t *req)
 static void send_process_error(httpd_req_t *req, esp_err_t err)
 {
     ESP_LOGE(TAG, "Failed to process image: %s", esp_err_to_name(err));
-    if (err == ESP_ERR_INVALID_SIZE) {
+    if (err == ESP_ERR_NOT_FINISHED) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                           "Image displayed, but snapshot or metadata save failed. Files retained.");
+    } else if (err == ESP_ERR_INVALID_SIZE) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                             "Image is too large. Please resize and try again.");
     } else if (err == ESP_ERR_NO_MEM) {
@@ -537,8 +670,33 @@ static void send_process_error(httpd_req_t *req, esp_err_t err)
 // original into the .current.* scheme, and answer the request. Consumes
 // both files.
 static esp_err_t display_received_image(httpd_req_t *req, const char *image_path,
-                                        image_format_t format, const char *thumbnail_path)
+                                        image_format_t format, const char *thumbnail_path
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                                        , upload_file_t *image_owner, upload_file_t *thumbnail_owner
+#endif
+                                        )
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    (void)image_path;
+    (void)thumbnail_path;
+    processing_options_t options;
+    esp_err_t err = processing_settings_copy_options(&options);
+    if (err != ESP_OK) {
+        esp_err_t response = httpd_resp_set_status(req, HTTPD_503);
+        if (response == ESP_OK) response = httpd_resp_set_type(req, "text/plain");
+        if (response == ESP_OK) response = httpd_resp_sendstr(req,
+                                                "Processing options unavailable or invalid");
+        return response == ESP_OK ? err : response;
+    }
+    err = display_flow_present_asset(image_owner, thumbnail_owner, format,
+                                    options.dither_algorithm);
+    if (err != ESP_OK) {
+        send_process_error(req, err);
+        return ESP_FAIL; // Completed/partial derived files retained; no current-slot cleanup.
+    }
+    ha_notify_update();
+    return send_display_success(req);
+#else
     bool has_thumbnail = thumbnail_path != NULL;
 
     if (format == IMAGE_FORMAT_EPD_GZ || format == IMAGE_FORMAT_BMP) {
@@ -614,10 +772,52 @@ static esp_err_t display_received_image(httpd_req_t *req, const char *image_path
 
     ha_notify_update();
     return send_display_success(req);
+#endif
 }
 
 // Receive a raw request body into dest_path (the error response is sent
 // here on failure)
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t receive_raw_checked(httpd_req_t *req, char *path, size_t capacity,
+                                     upload_file_t *owner)
+{
+    if (!req->content_len || req->content_len > READ_PICO_UPLOAD_FILE_LIMIT) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty or oversized upload");
+        return ESP_FAIL;
+    }
+    uint8_t *buffer = malloc(4096);
+    if (!buffer) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    upload_file_t file = {.fd = -1};
+    bool ok = read_pico_upload_begin(&file, FS_MOUNT_POINT, path, capacity,
+                                     READ_PICO_UPLOAD_FILE_LIMIT);
+    size_t remaining = req->content_len;
+    unsigned timeouts = 0;
+    int64_t deadline = esp_timer_get_time() + 120000000;
+    while (ok && remaining) {
+        if (esp_timer_get_time() >= deadline) { ok = false; break; }
+        size_t count = MIN(remaining, 4096);
+        int got = httpd_req_recv(req, (char *)buffer, count);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 8) continue;
+        if (got <= 0 || (size_t)got > count) { ok = false; break; }
+        timeouts = 0;
+        remaining -= got;
+        ok = upload_file_write(&file, buffer, got);
+    }
+    free(buffer);
+    ok = ok && !remaining && upload_file_finish(&file, req->content_len);
+    if (!ok) {
+        upload_file_abort(&file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Upload incomplete or storage failed; temporary file retained");
+        return ESP_FAIL;
+    }
+    *owner = file; // Transfer only the finished/closed exclusive-create proof.
+    return ESP_OK;
+}
+#else
 static esp_err_t receive_raw_body(httpd_req_t *req, const char *dest_path)
 {
     size_t content_len = req->content_len;
@@ -687,10 +887,11 @@ static esp_err_t receive_raw_body(httpd_req_t *req, const char *dest_path)
     ESP_LOGI(TAG, "Image received successfully");
     return ESP_OK;
 }
+#endif
 
 static esp_err_t display_image_direct_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -738,15 +939,21 @@ static esp_err_t display_image_direct_handler(httpd_req_t *req)
 
         image_format_t format = image_processor_detect_format(result.image_path);
         if (format == IMAGE_FORMAT_UNKNOWN) {
+#if !CONFIG_BOARD_DRIVER_READ_PICO
             unlink(result.image_path);
             if (result.has_thumbnail)
                 unlink(result.thumbnail_path);
+#endif
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unsupported image format");
             return ESP_FAIL;
         }
 
         return display_received_image(req, result.image_path, format,
-                                      result.has_thumbnail ? result.thumbnail_path : NULL);
+                                      result.has_thumbnail ? result.thumbnail_path : NULL
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                                      , &result.files[0], result.has_thumbnail ? &result.files[1] : NULL
+#endif
+                                      );
     }
 
     // Raw body upload: the format comes from the content type, or from the
@@ -760,21 +967,34 @@ static esp_err_t display_image_direct_handler(httpd_req_t *req)
         format = IMAGE_FORMAT_JPG;
     }
 
-    if (receive_raw_body(req, CURRENT_UPLOAD_PATH) != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    char raw_path[512];
+    upload_file_t raw_owner = {.fd = -1};
+    if (receive_raw_checked(req, raw_path, sizeof(raw_path), &raw_owner) != ESP_OK) {
+#else
+    const char *raw_path = CURRENT_UPLOAD_PATH;
+    if (receive_raw_body(req, raw_path) != ESP_OK) {
+#endif
         return ESP_FAIL;
     }
 
     if (format == IMAGE_FORMAT_UNKNOWN) {
-        format = image_processor_detect_format(CURRENT_UPLOAD_PATH);
+        format = image_processor_detect_format(raw_path);
         if (format == IMAGE_FORMAT_UNKNOWN) {
             ESP_LOGE(TAG, "Unsupported image format or format detection failed");
-            unlink(CURRENT_UPLOAD_PATH);
+#if !CONFIG_BOARD_DRIVER_READ_PICO
+            unlink(raw_path);
+#endif
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unsupported image format");
             return ESP_FAIL;
         }
     }
 
-    return display_received_image(req, CURRENT_UPLOAD_PATH, format, NULL);
+    return display_received_image(req, raw_path, format, NULL
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                                  , &raw_owner, NULL
+#endif
+                                  );
 }
 
 // URL decode helper function to handle encoded characters like %20 for space
@@ -800,7 +1020,7 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
 
 static esp_err_t upload_image_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -822,12 +1042,24 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     }
 
     ESP_LOGI(TAG, "Uploading to album: %s", album_name);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!upload_leaf_safe(album_name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid album name");
+        return ESP_FAIL;
+    }
+#endif
     char album_path[256];
 
     // Get album path and ensure directory exists
     album_manager_get_album_path(album_name, album_path, sizeof(album_path));
     struct stat st;
     if (stat(album_path, &st) != 0) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (errno != ENOENT) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Album storage unavailable");
+            return ESP_FAIL;
+        }
+#endif
         ESP_LOGI(TAG, "Creating album directory: %s", album_path);
         if (mkdir(album_path, 0755) != 0) {
             ESP_LOGE(TAG, "Failed to create directory: %s, errno: %d", album_path, errno);
@@ -846,10 +1078,12 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     }
 
     if (!result.has_image || !result.has_thumbnail) {
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         if (result.has_image)
             unlink(result.image_path);
         if (result.has_thumbnail)
             unlink(result.thumbnail_path);
+#endif
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                             "Upload incomplete - expected image and thumbnail");
         return ESP_FAIL;
@@ -886,6 +1120,39 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     snprintf(final_dest_path, sizeof(final_dest_path), "%s/%s", album_path, dest_filename);
     snprintf(final_thumb_path, sizeof(final_thumb_path), "%s/%s", album_path, jpg_filename);
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Both parts are closed/synced before any publication. Existing album
+    // originals are never removed. FAT no-replace rename is the final guard,
+    // not this preflight stat (which alone would have a TOCTOU race).
+    image_format_t image_format = image_processor_detect_format(result.image_path);
+    if ((image_format != IMAGE_FORMAT_PNG && image_format != IMAGE_FORMAT_EPD_GZ) ||
+        image_processor_detect_format(result.thumbnail_path) != IMAGE_FORMAT_JPG) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Upload file signature mismatch");
+        return ESP_FAIL;
+    }
+    const char *targets[] = {final_dest_path, final_thumb_path};
+    for (unsigned i = 0; i < 2; ++i) {
+        errno = 0;
+        if (stat(targets[i], &st) == 0) {
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_sendstr(req, "Filename already exists; original retained");
+            return ESP_FAIL;
+        }
+        if (errno != ENOENT) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Album storage unavailable");
+            return ESP_FAIL;
+        }
+    }
+    // Thumbnail first, main image last. Not an atomic two-file transaction:
+    // if the second rename fails, retain the already-published thumbnail and
+    // hidden image, report failure, and do not claim rollback or retry.
+    if (!upload_file_publish(&result.files[1], result.thumbnail_path, final_thumb_path) ||
+        !upload_file_publish(&result.files[0], result.image_path, final_dest_path)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Publication failed; files retained, no overwrite or retry");
+        return ESP_FAIL;
+    }
+#else
     // Remove old files
     unlink(final_dest_path);
     unlink(final_thumb_path);
@@ -905,6 +1172,7 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
         ESP_LOGW(TAG, "Failed to move thumbnail");
         unlink(result.thumbnail_path);
     }
+#endif
 
     ESP_LOGI(TAG, "Image saved successfully: %s (thumbnail: %s)", dest_filename, jpg_filename);
 
@@ -923,7 +1191,7 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
 }
 static esp_err_t serve_image_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1034,7 +1302,7 @@ static esp_err_t serve_image_handler(httpd_req_t *req)
 
 static esp_err_t delete_image_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1124,7 +1392,7 @@ static esp_err_t delete_image_handler(httpd_req_t *req)
 
 static esp_err_t display_image_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1212,7 +1480,7 @@ static esp_err_t display_image_handler(httpd_req_t *req)
 
 static esp_err_t battery_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1237,7 +1505,7 @@ static esp_err_t battery_handler(httpd_req_t *req)
 
 static esp_err_t sensor_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1290,7 +1558,7 @@ static void delayed_sleep_task(void *arg)
 
 static esp_err_t sleep_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1315,7 +1583,7 @@ static esp_err_t sleep_handler(httpd_req_t *req)
 
 static esp_err_t format_storage_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1351,7 +1619,7 @@ static esp_err_t format_storage_handler(httpd_req_t *req)
 
 static esp_err_t rotate_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1402,7 +1670,7 @@ static esp_err_t rotate_handler(httpd_req_t *req)
 
 static esp_err_t current_image_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -1503,34 +1771,151 @@ static esp_err_t crash_clear_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t receive_config_bytes(void *context, char *buffer, size_t capacity, size_t *received)
+{
+    int got = httpd_req_recv(context, buffer, capacity);
+    if (got == HTTPD_SOCK_ERR_TIMEOUT) return ESP_ERR_TIMEOUT;
+    if (got <= 0) return ESP_ERR_INVALID_RESPONSE;
+    *received = (size_t)got;
+    return ESP_OK;
+}
+static esp_err_t receive_config_document(httpd_req_t *req, cJSON **root)
+{
+    if (!req->content_len || req->content_len >= CONFIG_DOCUMENT_CAPACITY) {
+        esp_err_t sent = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid configuration body length");
+        return sent == ESP_OK ? ESP_ERR_INVALID_SIZE : sent;
+    }
+    char *buffer = malloc(req->content_len + 1);
+    if (!buffer) {
+        esp_err_t sent = httpd_resp_send_500(req);
+        return sent == ESP_OK ? ESP_ERR_NO_MEM : sent;
+    }
+    config_document_source_t source = {.context = req, .receive = receive_config_bytes};
+    esp_err_t error = config_document_receive(buffer, req->content_len + 1, req->content_len, &source);
+    if (error == ESP_OK) error = config_document_parse(buffer, req->content_len, root);
+    free(buffer);
+    if (error != ESP_OK) {
+        esp_err_t sent = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete or invalid configuration document");
+        return sent == ESP_OK ? error : sent;
+    }
+    return ESP_OK;
+}
+static esp_err_t send_settings_json(httpd_req_t *req, const char *json)
+{
+    esp_err_t sent = httpd_resp_set_type(req, "application/json");
+    if (sent == ESP_OK) sent = httpd_resp_sendstr(req, json);
+    return sent;
+}
+static esp_err_t send_settings_failure(httpd_req_t *req, esp_err_t error)
+{
+    esp_err_t sent = httpd_resp_send_500(req);
+    return sent == ESP_OK ? error : sent;
+}
+static esp_err_t send_revision_error(httpd_req_t *req, esp_err_t err)
+{
+    esp_err_t sent = httpd_resp_set_status(req, "503 Service Unavailable");
+    if (sent == ESP_OK) sent = httpd_resp_set_type(req, "application/json");
+    if (sent == ESP_OK) sent = httpd_resp_sendstr(req,
+        "{\"status\":\"error\",\"message\":\"Configuration changed, but revision save not confirmed\"}");
+    return sent == ESP_OK ? err : sent;
+}
+#endif
+static esp_err_t touch_config_for_http(httpd_req_t *req)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t err = config_manager_touch_config_checked();
+    return err == ESP_OK ? ESP_OK : send_revision_error(req, err);
+#else
+    (void)req;
+    config_manager_touch_config();
+    return ESP_OK;
+#endif
+}
+
 static esp_err_t config_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
     }
 
     if (req->method == HTTP_GET) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        char ntp_snapshot[NTP_SERVER_MAX_LEN];
+        char timezone_snapshot[TIMEZONE_MAX_LEN];
+        char name_snapshot[DEVICE_NAME_MAX_LEN];
+        wifi_network_t network_snapshot;
+        bool timezone_applied;
+        esp_err_t copied = config_manager_copy_ntp_server(ntp_snapshot, sizeof(ntp_snapshot));
+        if (copied == ESP_OK)
+            copied = config_manager_copy_timezone(timezone_snapshot, sizeof(timezone_snapshot), &timezone_applied);
+        if (copied == ESP_OK) copied = config_manager_copy_device_name(name_snapshot, sizeof(name_snapshot));
+        if (copied == ESP_OK) copied = config_manager_copy_network(&network_snapshot);
+        if (copied != ESP_OK) {
+            esp_err_t status = httpd_resp_set_status(req, HTTPD_503);
+            if (status != ESP_OK) return status;
+            return httpd_resp_sendstr(req, "Configuration snapshot unavailable");
+        }
+#endif
         cJSON *root = cJSON_CreateObject();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!root) return ESP_ERR_NO_MEM;
+#endif
         // General
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!cJSON_AddStringToObject(root, "device_name", name_snapshot)) {
+            cJSON_Delete(root); return ESP_ERR_NO_MEM;
+        }
+#else
         const char *device_name = config_manager_get_device_name();
         cJSON_AddStringToObject(root, "device_name", device_name ? device_name : "PhotoFrame");
+#endif
         // device_id is intentionally omitted here — it's reported by
         // /api/system-info, which is what all clients read.
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!cJSON_AddStringToObject(root, "timezone", timezone_snapshot) ||
+            !cJSON_AddBoolToObject(root, "timezone_applied", timezone_applied)) {
+            cJSON_Delete(root);
+            return ESP_ERR_NO_MEM;
+        }
+#else
         const char *timezone = config_manager_get_timezone();
         cJSON_AddStringToObject(root, "timezone", timezone ? timezone : "UTC0");
+#endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        const char *ntp_server = ntp_snapshot;
+#else
         const char *ntp_server = config_manager_get_ntp_server();
+#endif
         // Advanced network settings (#43): custom NTP, static IP, DNS override
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!cJSON_AddStringToObject(root, "ntp_server", ntp_server)) {
+            cJSON_Delete(root);
+            return ESP_ERR_NO_MEM;
+        }
+#else
         cJSON_AddStringToObject(root, "ntp_server", ntp_server ? ntp_server : DEFAULT_NTP_SERVER);
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!cJSON_AddStringToObject(root, "ip_mode", network_snapshot.static_address ? "static" : "dhcp") ||
+            !cJSON_AddStringToObject(root, "static_ip", network_snapshot.ip) ||
+            !cJSON_AddStringToObject(root, "static_netmask", network_snapshot.netmask) ||
+            !cJSON_AddStringToObject(root, "static_gateway", network_snapshot.gateway) ||
+            !cJSON_AddStringToObject(root, "dns_server", network_snapshot.dns)) {
+            cJSON_Delete(root); return ESP_ERR_NO_MEM;
+        }
+#else
         cJSON_AddStringToObject(root, "ip_mode",
                                 config_manager_get_ip_mode() == IP_MODE_STATIC ? "static" : "dhcp");
         cJSON_AddStringToObject(root, "static_ip", config_manager_get_static_ip());
         cJSON_AddStringToObject(root, "static_netmask", config_manager_get_static_netmask());
         cJSON_AddStringToObject(root, "static_gateway", config_manager_get_static_gateway());
         cJSON_AddStringToObject(root, "dns_server", config_manager_get_dns_server());
+#endif
 
         const char *wifi_ssid = config_manager_get_wifi_ssid();
         cJSON_AddStringToObject(root, "wifi_ssid", wifi_ssid ? wifi_ssid : "");
@@ -1624,6 +2009,11 @@ static esp_err_t config_handler(httpd_req_t *req)
 
         return ESP_OK;
     } else if (req->method == HTTP_POST || req->method == HTTP_PATCH) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        cJSON *root = NULL;
+        esp_err_t received = receive_config_document(req, &root);
+        if (received != ESP_OK) return received;
+#else
         size_t buf_size = req->content_len + 1;
         if (buf_size > 4096) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Request body too large");
@@ -1660,11 +2050,52 @@ static esp_err_t config_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
             return ESP_FAIL;
         }
-
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        local_config_result_t outcome = {0};
+        esp_err_t apply_result = apply_local_config_checked(root, &outcome);
+#else
         esp_err_t apply_result = apply_config_from_json(root, false);
+#endif
         cJSON_Delete(root);
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (apply_result == ESP_ERR_INVALID_STATE && !outcome.state.entered) {
+            // Do not consume the active request's shared error buffers.
+            esp_err_t status = httpd_resp_set_status(req, HTTPD_503);
+            if (status != ESP_OK) return status;
+            return httpd_resp_sendstr(req, "Configuration busy or update unconfirmed; some values may already be changed, retry required");
+        }
+        if (outcome.state.applied && !outcome.state.finished) {
+            return send_revision_error(req, apply_result);
+        }
+#endif
         if (apply_result != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            const char *message = outcome.config_error[0] ? outcome.config_error :
+                "Configuration update not confirmed; partial changes may remain";
+            char cert_message[384];
+            if (!outcome.config_error[0] && outcome.cert_error[0]) {
+                snprintf(cert_message, sizeof(cert_message),
+                         "Failed to pin TLS certificate for image URL: %s", outcome.cert_error);
+                message = cert_message;
+            }
+            cJSON *error_response = cJSON_CreateObject();
+            if (!error_response || !cJSON_AddStringToObject(error_response, "status", "error") ||
+                !cJSON_AddStringToObject(error_response, "message", message)) {
+                cJSON_Delete(error_response);
+                return ESP_ERR_NO_MEM;
+            }
+            char *json_str = cJSON_Print(error_response);
+            cJSON_Delete(error_response);
+            if (!json_str) return ESP_ERR_NO_MEM;
+            esp_err_t sent = httpd_resp_set_type(req, "application/json");
+            if (sent == ESP_OK) sent = httpd_resp_set_status(req,
+                apply_result == ESP_ERR_INVALID_STATE ? HTTPD_503 : "400 Bad Request");
+            if (sent == ESP_OK) sent = httpd_resp_sendstr(req, json_str);
+            free(json_str);
+            return sent == ESP_OK ? apply_result : sent;
+#else
             cJSON *error_response = cJSON_CreateObject();
             cJSON_AddStringToObject(error_response, "status", "error");
 
@@ -1693,11 +2124,20 @@ static esp_err_t config_handler(httpd_req_t *req)
             free(json_str);
             cJSON_Delete(error_response);
             return ESP_FAIL;
+#endif
         }
 
         // Update config timestamp for remote sync
-        config_manager_touch_config();
+#if !CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t revision = touch_config_for_http(req);
+        if (revision != ESP_OK) return revision;
+#endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t sent = httpd_resp_set_type(req, "application/json");
+        if (sent == ESP_OK) sent = httpd_resp_sendstr(req, "{\"status\":\"success\"}");
+        return sent;
+#else
         cJSON *response = cJSON_CreateObject();
         cJSON_AddStringToObject(response, "status", "success");
 
@@ -1709,6 +2149,7 @@ static esp_err_t config_handler(httpd_req_t *req)
         cJSON_Delete(response);
 
         return ESP_OK;
+#endif
     }
 
     httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
@@ -1716,7 +2157,7 @@ static esp_err_t config_handler(httpd_req_t *req)
 }
 static esp_err_t albums_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System not ready");
         return ESP_OK;
@@ -1796,7 +2237,7 @@ static esp_err_t albums_handler(httpd_req_t *req)
 
 static esp_err_t album_delete_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System not ready");
         return ESP_OK;
@@ -1842,7 +2283,7 @@ static esp_err_t album_delete_handler(httpd_req_t *req)
 
 static esp_err_t album_enabled_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System not ready");
         return ESP_OK;
@@ -1915,7 +2356,7 @@ static esp_err_t album_enabled_handler(httpd_req_t *req)
 
 static esp_err_t album_images_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System not ready");
         return ESP_OK;
@@ -2040,10 +2481,26 @@ static void add_last_crash(cJSON *response)
 
 static esp_err_t system_info_handler(httpd_req_t *req)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    char name_snapshot[DEVICE_NAME_MAX_LEN];
+    esp_err_t copied = config_manager_copy_device_name(name_snapshot, sizeof(name_snapshot));
+    if (copied != ESP_OK) {
+        esp_err_t status = httpd_resp_set_status(req, HTTPD_503);
+        if (status != ESP_OK) return status;
+        return httpd_resp_sendstr(req, "Device name snapshot unavailable");
+    }
+#endif
     const esp_app_desc_t *app_desc = esp_app_get_description();
     cJSON *response = cJSON_CreateObject();
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!response) return ESP_ERR_NO_MEM;
+    if (!cJSON_AddStringToObject(response, "device_name", name_snapshot)) {
+        cJSON_Delete(response); return ESP_ERR_NO_MEM;
+    }
+#else
     cJSON_AddStringToObject(response, "device_name", config_manager_get_device_name());
+#endif
     cJSON_AddStringToObject(response, "device_id", get_device_id());
     cJSON_AddNumberToObject(response, "width", BOARD_HAL_DISPLAY_WIDTH);
     cJSON_AddNumberToObject(response, "height", BOARD_HAL_DISPLAY_HEIGHT);
@@ -2211,7 +2668,7 @@ static esp_err_t ota_update_handler(httpd_req_t *req)
 
 static esp_err_t keep_alive_handler(httpd_req_t *req)
 {
-    if (!system_ready) {
+    if (!http_requests_ready(req)) {
         httpd_resp_set_status(req, HTTPD_503);
         httpd_resp_sendstr(req, "System is still initializing");
         return ESP_FAIL;
@@ -2226,12 +2683,14 @@ static esp_err_t keep_alive_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static void restart_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(1000));  // Wait 1 second for response to be sent
     ESP_LOGI(TAG, "Restarting device...");
     esp_restart();
 }
+#endif
 
 static esp_err_t factory_reset_handler(httpd_req_t *req)
 {
@@ -2294,26 +2753,75 @@ static esp_err_t display_calibration_handler(httpd_req_t *req)
     }
 }
 
-static esp_err_t processing_settings_handler(httpd_req_t *req)
+#if CONFIG_BOARD_DRIVER_READ_PICO
+typedef struct {
+    httpd_req_t *request;
+    esp_err_t (*handler)(httpd_req_t *);
+    bool entered;
+} http_config_request_t;
+static esp_err_t run_http_config(void *context)
+{
+    http_config_request_t *request = context;
+    request->entered = true;
+    return request->handler(request->request);
+}
+static esp_err_t run_http_config_guarded(httpd_req_t *req, esp_err_t (*handler)(httpd_req_t *))
+{
+    // These GET snapshots also exclude participating remote mutations. Holding
+    // control through receive/response adds no hard bound on SDK waits.
+    if (req->method != HTTP_GET && req->method != HTTP_POST && req->method != HTTP_DELETE) return handler(req);
+    http_config_request_t request = {.request = req, .handler = handler};
+    esp_err_t error = config_apply_run(run_http_config, &request);
+    if (request.entered) return error; // Never send a second response on body failure.
+    esp_err_t sent = httpd_resp_set_status(req, HTTPD_503);
+    if (sent == ESP_OK) sent = httpd_resp_sendstr(req, "Configuration busy; retry required");
+    return sent;
+}
+#endif
+
+static esp_err_t processing_settings_handler_values(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         processing_settings_t settings;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t loaded = processing_settings_load(&settings);
+        if (loaded != ESP_OK) {
+            esp_err_t sent = httpd_resp_send_500(req);
+            return sent == ESP_OK ? loaded : sent;
+        }
+#else
         if (processing_settings_load(&settings) != ESP_OK) {
             processing_settings_get_defaults(&settings);
         }
+#endif
 
         char *json_str = processing_settings_to_json(&settings);
         if (!json_str) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, ESP_ERR_NO_MEM);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t sent = send_settings_json(req, json_str);
+        free(json_str);
+        return sent;
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, json_str);
         free(json_str);
         return ESP_OK;
+#endif
 
     } else if (req->method == HTTP_POST) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        cJSON *json = NULL;
+        esp_err_t received = receive_config_document(req, &json);
+        if (received != ESP_OK) return received;
+#else
         char *buf = heap_caps_malloc(req->content_len + 1, MALLOC_CAP_SPIRAM);
         if (!buf) {
             httpd_resp_send_500(req);
@@ -2335,26 +2843,44 @@ static esp_err_t processing_settings_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
             return ESP_FAIL;
         }
-
+#endif
         processing_settings_t settings;
         processing_settings_get_defaults(&settings);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t parsed = processing_settings_from_json_checked(json, &settings);
+        cJSON_Delete(json);
+        if (parsed != ESP_OK) {
+            esp_err_t sent = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid processing settings");
+            return sent == ESP_OK ? parsed : sent;
+        }
+#else
         processing_settings_from_json(json, &settings);
         cJSON_Delete(json);
+#endif
 
         esp_err_t err = processing_settings_save(&settings);
         if (err != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, err);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
         // Advance the shared config revision: the remote sync only pulls
         // device state whose timestamp moved forward, so without this a
         // later server-side edit would push the server's stale processing
         // settings back over this change
-        config_manager_touch_config();
+        esp_err_t revision = touch_config_for_http(req);
+        if (revision != ESP_OK) return revision;
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return send_settings_json(req, "{\"success\":true}");
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"success\":true}");
         return ESP_OK;
+#endif
 
     } else if (req->method == HTTP_DELETE) {
         // Reset to firmware defaults
@@ -2364,32 +2890,94 @@ static esp_err_t processing_settings_handler(httpd_req_t *req)
         // Save defaults to NVS
         esp_err_t err = processing_settings_save(&settings);
         if (err != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, err);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
-        config_manager_touch_config();
+        esp_err_t revision = touch_config_for_http(req);
+        if (revision != ESP_OK) return revision;
 
         // Return the full default settings via the shared serializer so the
         // response can never drift from the persisted fields (the previous
         // hand-built list had already fallen behind)
         char *json_str = processing_settings_to_json(&settings);
         if (!json_str) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, ESP_ERR_NO_MEM);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t sent = send_settings_json(req, json_str);
+        free(json_str);
+        return sent;
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, json_str);
         free(json_str);
         return ESP_OK;
+#endif
     }
 
     httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     return ESP_FAIL;
 }
 
+static esp_err_t processing_settings_handler(httpd_req_t *req)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return run_http_config_guarded(req, processing_settings_handler_values);
+#else
+    return processing_settings_handler_values(req);
+#endif
+}
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t send_time_unavailable(httpd_req_t *req)
+{
+    esp_err_t sent = httpd_resp_set_status(req, "503 Service Unavailable");
+    if (sent == ESP_OK) sent = httpd_resp_set_type(req, "application/json");
+    if (sent != ESP_OK) return sent;
+    return httpd_resp_sendstr(req,
+        "{\"status\":\"error\",\"message\":\"Device time or timezone application not confirmed\"}");
+}
+
+static esp_err_t send_current_time_checked(httpd_req_t *req, const char *status)
+{
+    if (!http_requests_ready(req)) return send_time_unavailable(req);
+    time_t now;
+    char timezone[TIMEZONE_MAX_LEN], formatted[64];
+    esp_err_t copied = config_manager_copy_local_time(&now, formatted, sizeof(formatted), timezone, sizeof(timezone));
+    if (copied != ESP_OK) return send_time_unavailable(req);
+    cJSON *response = cJSON_CreateObject();
+    if (!response || (status && !cJSON_AddStringToObject(response, "status", status)) ||
+        !cJSON_AddStringToObject(response, "time", formatted) ||
+        !cJSON_AddNumberToObject(response, "timestamp", (double)now) ||
+        !cJSON_AddStringToObject(response, "timezone", timezone)) {
+        cJSON_Delete(response);
+        return ESP_ERR_NO_MEM;
+    }
+    char *json_str = cJSON_Print(response);
+    cJSON_Delete(response);
+    if (!json_str) return ESP_ERR_NO_MEM;
+    esp_err_t sent = httpd_resp_set_type(req, "application/json");
+    if (sent == ESP_OK) sent = httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    return sent;
+}
+#endif
+
 static esp_err_t time_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return send_current_time_checked(req, NULL);
+#else
         // Return current device time
         time_t now;
         struct tm timeinfo;
@@ -2411,6 +2999,7 @@ static esp_err_t time_handler(httpd_req_t *req)
         free(json_str);
         cJSON_Delete(response);
         return ESP_OK;
+#endif
     }
 
     httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
@@ -2420,7 +3009,22 @@ static esp_err_t time_handler(httpd_req_t *req)
 static esp_err_t time_sync_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_POST) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!http_requests_ready(req)) return send_time_unavailable(req);
+#endif
         ESP_LOGI(TAG, "Manual NTP sync requested");
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t sync = periodic_tasks_run_now(SNTP_TASK_NAME);
+        if (sync != ESP_OK) {
+            esp_err_t response = httpd_resp_set_status(req, "503 Service Unavailable");
+            if (response == ESP_OK) response = httpd_resp_set_type(req, "application/json");
+            if (response != ESP_OK) return response;
+            return httpd_resp_sendstr(req,
+                "{\"status\":\"error\",\"message\":\"NTP sync or timestamp persistence not confirmed\"}");
+        }
+        return send_current_time_checked(req, "success");
+#else
 
         // Force SNTP sync
         esp_err_t err = periodic_tasks_force_run(SNTP_TASK_NAME);
@@ -2440,7 +3044,6 @@ static esp_err_t time_sync_handler(httpd_req_t *req)
 
         // Run the sync immediately
         periodic_tasks_check_and_run();
-
         // Get the new time
         time_t now;
         struct tm timeinfo;
@@ -2463,32 +3066,53 @@ static esp_err_t time_sync_handler(httpd_req_t *req)
         free(json_str);
         cJSON_Delete(response);
         return ESP_OK;
+#endif
     }
 
     httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     return ESP_FAIL;
 }
 
-static esp_err_t color_palette_handler(httpd_req_t *req)
+static esp_err_t color_palette_handler_values(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         color_palette_t palette;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t loaded = color_palette_load(&palette);
+        if (loaded != ESP_OK) return send_settings_failure(req, loaded);
+#else
         if (color_palette_load(&palette) != ESP_OK) {
             color_palette_get_defaults(&palette);
         }
+#endif
 
         char *json_str = color_palette_to_json(&palette);
         if (!json_str) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, ESP_ERR_NO_MEM);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t sent = send_settings_json(req, json_str);
+        free(json_str);
+        return sent;
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, json_str);
         free(json_str);
         return ESP_OK;
+#endif
 
     } else if (req->method == HTTP_POST) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        cJSON *json = NULL;
+        esp_err_t received = receive_config_document(req, &json);
+        if (received != ESP_OK) return received;
+#else
         char *buf = malloc(req->content_len + 1);
         if (!buf) {
             httpd_resp_send_500(req);
@@ -2510,26 +3134,49 @@ static esp_err_t color_palette_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
             return ESP_FAIL;
         }
-
+#endif
         color_palette_t palette;
         color_palette_get_defaults(&palette);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t parsed = color_palette_from_json_checked(json, &palette);
+        cJSON_Delete(json);
+        if (parsed != ESP_OK) {
+            esp_err_t sent = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid color palette");
+            return sent == ESP_OK ? parsed : sent;
+        }
+#else
         color_palette_from_json(json, &palette);
         cJSON_Delete(json);
+#endif
 
         esp_err_t err = color_palette_save(&palette);
         if (err != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, err);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
+        // Reload palette in image processor so subsequent uploads use the new calibration
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t loaded = image_processor_reload_palette();
+        if (loaded != ESP_OK) return send_settings_failure(req, loaded);
+        esp_err_t revision = touch_config_for_http(req);
+        if (revision != ESP_OK) return revision;
+#else
         // Same revision rule as the processing settings above
         config_manager_touch_config();
-
-        // Reload palette in image processor so subsequent uploads use the new calibration
         image_processor_reload_palette();
+#endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return send_settings_json(req, "{\"success\":true}");
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"success\":true}");
         return ESP_OK;
+#endif
     } else if (req->method == HTTP_DELETE) {
         // Reset palette to defaults
         color_palette_t palette;
@@ -2537,145 +3184,225 @@ static esp_err_t color_palette_handler(httpd_req_t *req)
 
         esp_err_t err = color_palette_save(&palette);
         if (err != ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return send_settings_failure(req, err);
+#else
             httpd_resp_send_500(req);
             return ESP_FAIL;
+#endif
         }
-        config_manager_touch_config();
-
         // Reload palette in image processor
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t loaded = image_processor_reload_palette();
+        if (loaded != ESP_OK) return send_settings_failure(req, loaded);
+        esp_err_t revision = touch_config_for_http(req);
+        if (revision != ESP_OK) return revision;
+#else
+        config_manager_touch_config();
         image_processor_reload_palette();
+#endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return send_settings_json(req, "{\"success\":true}");
+#else
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"success\":true}");
         return ESP_OK;
+#endif
     }
 
     httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     return ESP_FAIL;
 }
 
+static esp_err_t color_palette_handler(httpd_req_t *req)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return run_http_config_guarded(req, color_palette_handler_values);
+#else
+    return color_palette_handler_values(req);
+#endif
+}
+
+static esp_err_t register_http_routes(httpd_handle_t handle)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#define HTTP_REGISTER(...) do { esp_err_t error = register_uri(handle, __VA_ARGS__); \
+    if (error != ESP_OK) return error; } while (0)
+#else
+#define HTTP_REGISTER(...) (void)register_uri(handle, __VA_ARGS__)
+#endif
+        HTTP_REGISTER("/", HTTP_GET, index_handler);
+
+        HTTP_REGISTER("/assets/index.css", HTTP_GET, index_css_handler);
+
+        HTTP_REGISTER("/assets/index.js", HTTP_GET, index_js_handler);
+
+        HTTP_REGISTER("/assets/index2.js", HTTP_GET, index2_js_handler);
+
+        HTTP_REGISTER("/assets/exif-reader.js", HTTP_GET, exif_reader_js_handler);
+
+        HTTP_REGISTER("/assets/browser.js", HTTP_GET, browser_js_handler);
+
+        HTTP_REGISTER("/assets/__vite-browser-external.js", HTTP_GET,
+                     vite_browser_external_js_handler);
+
+        HTTP_REGISTER("/icon.svg", HTTP_GET, icon_handler);
+
+        HTTP_REGISTER("/measurement_sample.jpg", HTTP_GET, measurement_sample_handler);
+
+        HTTP_REGISTER("/api/rotate", HTTP_POST, rotate_handler);
+
+        HTTP_REGISTER("/api/current_image", HTTP_GET, current_image_handler);
+
+        HTTP_REGISTER("/api/config", HTTP_GET, config_handler);
+
+        HTTP_REGISTER("/api/config", HTTP_POST, config_handler);
+
+        HTTP_REGISTER("/api/config", HTTP_PATCH, config_handler);
+
+        HTTP_REGISTER("/api/debug/log", HTTP_GET, debug_log_download_handler);
+
+        HTTP_REGISTER("/api/debug/log", HTTP_DELETE, debug_log_clear_handler);
+
+        HTTP_REGISTER("/api/crash/clear", HTTP_POST, crash_clear_handler);
+
+        HTTP_REGISTER("/api/battery", HTTP_GET, battery_handler);
+
+        HTTP_REGISTER("/api/sensor", HTTP_GET, sensor_handler);
+
+        HTTP_REGISTER("/api/sleep", HTTP_POST, sleep_handler);
+
+        HTTP_REGISTER("/api/system-info", HTTP_GET, system_info_handler);
+
+        HTTP_REGISTER("/api/time", HTTP_GET, time_handler);
+
+        HTTP_REGISTER("/api/time/sync", HTTP_POST, time_sync_handler);
+
+        HTTP_REGISTER("/api/ota/status", HTTP_GET, ota_status_handler);
+
+        HTTP_REGISTER("/api/ota/check", HTTP_POST, ota_check_handler);
+
+        HTTP_REGISTER("/api/ota/update", HTTP_POST, ota_update_handler);
+
+        HTTP_REGISTER("/api/keep_alive", HTTP_POST, keep_alive_handler);
+
+        HTTP_REGISTER("/api/format-storage", HTTP_POST, format_storage_handler);
+
+        HTTP_REGISTER("/api/display-image", HTTP_POST, display_image_direct_handler);
+
+        HTTP_REGISTER("/api/albums", HTTP_GET, albums_handler);
+
+        HTTP_REGISTER("/api/albums", HTTP_POST, albums_handler);
+
+        HTTP_REGISTER("/api/albums", HTTP_DELETE, album_delete_handler);
+
+        HTTP_REGISTER("/api/albums/enabled", HTTP_PUT, album_enabled_handler);
+
+        HTTP_REGISTER("/api/images", HTTP_GET, album_images_handler);
+
+        HTTP_REGISTER("/api/upload", HTTP_POST, upload_image_handler);
+
+        HTTP_REGISTER("/api/display", HTTP_POST, display_image_handler);
+
+        HTTP_REGISTER("/api/delete", HTTP_POST, delete_image_handler);
+
+        HTTP_REGISTER("/api/image", HTTP_GET, serve_image_handler);
+
+        HTTP_REGISTER("/api/settings/processing", HTTP_GET, processing_settings_handler);
+
+        HTTP_REGISTER("/api/settings/processing", HTTP_POST, processing_settings_handler);
+
+        HTTP_REGISTER("/api/settings/processing", HTTP_DELETE, processing_settings_handler);
+
+        HTTP_REGISTER("/api/settings/palette", HTTP_GET, color_palette_handler);
+
+        HTTP_REGISTER("/api/settings/palette", HTTP_POST, color_palette_handler);
+
+        HTTP_REGISTER("/api/settings/palette", HTTP_DELETE, color_palette_handler);
+
+        HTTP_REGISTER("/api/factory-reset", HTTP_POST, factory_reset_handler);
+
+        HTTP_REGISTER("/api/calibration/display", HTTP_POST, display_calibration_handler);
+
+    return ESP_OK;
+#undef HTTP_REGISTER
+}
+
 esp_err_t http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 50;
-    config.stack_size = 12288;       // Increased from 8192 to 12KB
-    config.max_open_sockets = 10;    // Limit concurrent connections to prevent memory exhaustion
-    config.lru_purge_enable = true;  // Enable LRU purging of connections
-
+    config.stack_size = 12288;
+    config.max_open_sockets = 10;
+    config.lru_purge_enable = true;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&s_http_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t error = ESP_OK;
+    if (read_pico_http_active(READ_PICO_HTTP_FRAME)) goto finished;
+    error = read_pico_http_claim(READ_PICO_HTTP_FRAME);
+    if (error != ESP_OK) goto finished; // Never release another service's role.
+    error = read_pico_http_start(READ_PICO_HTTP_FRAME, &config, register_http_routes);
+    if (error != ESP_OK) {
+        esp_err_t cleanup = read_pico_http_stop(READ_PICO_HTTP_FRAME);
+        if (cleanup == ESP_OK) cleanup = read_pico_http_release(READ_PICO_HTTP_FRAME);
+        ESP_LOGE(TAG, "HTTP startup failed (%s), cleanup=%s; no automatic restart",
+                 esp_err_to_name(error), esp_err_to_name(cleanup));
+    }
+finished:
+    atomic_flag_clear(&s_http_control);
+    return error;
+#else
     if (httpd_start(&server, &config) == ESP_OK) {
-        register_uri("/", HTTP_GET, index_handler);
-
-        register_uri("/assets/index.css", HTTP_GET, index_css_handler);
-
-        register_uri("/assets/index.js", HTTP_GET, index_js_handler);
-
-        register_uri("/assets/index2.js", HTTP_GET, index2_js_handler);
-
-        register_uri("/assets/exif-reader.js", HTTP_GET, exif_reader_js_handler);
-
-        register_uri("/assets/browser.js", HTTP_GET, browser_js_handler);
-
-        register_uri("/assets/__vite-browser-external.js", HTTP_GET,
-                     vite_browser_external_js_handler);
-
-        register_uri("/icon.svg", HTTP_GET, icon_handler);
-
-        register_uri("/measurement_sample.jpg", HTTP_GET, measurement_sample_handler);
-
-        register_uri("/api/rotate", HTTP_POST, rotate_handler);
-
-        register_uri("/api/current_image", HTTP_GET, current_image_handler);
-
-        register_uri("/api/config", HTTP_GET, config_handler);
-
-        register_uri("/api/config", HTTP_POST, config_handler);
-
-        register_uri("/api/config", HTTP_PATCH, config_handler);
-
-        register_uri("/api/debug/log", HTTP_GET, debug_log_download_handler);
-
-        register_uri("/api/debug/log", HTTP_DELETE, debug_log_clear_handler);
-
-        register_uri("/api/crash/clear", HTTP_POST, crash_clear_handler);
-
-        register_uri("/api/battery", HTTP_GET, battery_handler);
-
-        register_uri("/api/sensor", HTTP_GET, sensor_handler);
-
-        register_uri("/api/sleep", HTTP_POST, sleep_handler);
-
-        register_uri("/api/system-info", HTTP_GET, system_info_handler);
-
-        register_uri("/api/time", HTTP_GET, time_handler);
-
-        register_uri("/api/time/sync", HTTP_POST, time_sync_handler);
-
-        register_uri("/api/ota/status", HTTP_GET, ota_status_handler);
-
-        register_uri("/api/ota/check", HTTP_POST, ota_check_handler);
-
-        register_uri("/api/ota/update", HTTP_POST, ota_update_handler);
-
-        register_uri("/api/keep_alive", HTTP_POST, keep_alive_handler);
-
-        register_uri("/api/format-storage", HTTP_POST, format_storage_handler);
-
-        register_uri("/api/display-image", HTTP_POST, display_image_direct_handler);
-
-        register_uri("/api/albums", HTTP_GET, albums_handler);
-
-        register_uri("/api/albums", HTTP_POST, albums_handler);
-
-        register_uri("/api/albums", HTTP_DELETE, album_delete_handler);
-
-        register_uri("/api/albums/enabled", HTTP_PUT, album_enabled_handler);
-
-        register_uri("/api/images", HTTP_GET, album_images_handler);
-
-        register_uri("/api/upload", HTTP_POST, upload_image_handler);
-
-        register_uri("/api/display", HTTP_POST, display_image_handler);
-
-        register_uri("/api/delete", HTTP_POST, delete_image_handler);
-
-        register_uri("/api/image", HTTP_GET, serve_image_handler);
-
-        register_uri("/api/settings/processing", HTTP_GET, processing_settings_handler);
-
-        register_uri("/api/settings/processing", HTTP_POST, processing_settings_handler);
-
-        register_uri("/api/settings/processing", HTTP_DELETE, processing_settings_handler);
-
-        register_uri("/api/settings/palette", HTTP_GET, color_palette_handler);
-
-        register_uri("/api/settings/palette", HTTP_POST, color_palette_handler);
-
-        register_uri("/api/settings/palette", HTTP_DELETE, color_palette_handler);
-
-        register_uri("/api/factory-reset", HTTP_POST, factory_reset_handler);
-
-        register_uri("/api/calibration/display", HTTP_POST, display_calibration_handler);
-
+        (void)register_http_routes(server);
         ESP_LOGI(TAG, "HTTP server started");
         return ESP_OK;
     }
-
     ESP_LOGE(TAG, "Failed to start HTTP server");
     return ESP_FAIL;
+#endif
 }
 
 esp_err_t http_server_stop(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (atomic_flag_test_and_set(&s_http_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t error = read_pico_http_stop(READ_PICO_HTTP_FRAME);
+    if (error == ESP_OK) error = read_pico_http_release(READ_PICO_HTTP_FRAME);
+    atomic_flag_clear(&s_http_control);
+    return error;
+#else
     if (server) {
         httpd_stop(server);
         server = NULL;
         ESP_LOGI(TAG, "HTTP server stopped");
     }
     return ESP_OK;
+#endif
+}
+
+esp_err_t http_server_set_ready_checked(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return read_pico_http_mark_ready(READ_PICO_HTTP_FRAME);
+#else
+    system_ready = true;
+    ESP_LOGI(TAG, "System marked as ready for HTTP requests");
+    return ESP_OK;
+#endif
 }
 
 void http_server_set_ready(void)
 {
-    system_ready = true;
-    ESP_LOGI(TAG, "System marked as ready for HTTP requests");
+    esp_err_t error = http_server_set_ready_checked();
+    if (error != ESP_OK) ESP_LOGE(TAG, "HTTP readiness rejected: %s", esp_err_to_name(error));
+}
+
+bool http_server_is_ready(void)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return read_pico_http_ready(READ_PICO_HTTP_FRAME);
+#else
+    return server && system_ready;
+#endif
 }

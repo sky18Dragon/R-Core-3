@@ -1,5 +1,15 @@
 # 新方案验证矩阵与记录
 
+## 2026-10-08 · 提交前完整软件快照复验
+
+按用户要求整理可验证增量提交。此前尚未提交的存储/图像、配置、网络和后台适配共用 CMake、测试替身及调用入口，作为一个完整软件快照保存，不将历史开发轮次反推成可独立构建的中间提交。本轮未修改固件源码。
+
+当前源码重新构建后，普通 CTest **1142/1142、10.61秒**，ASan/UBSan **1142/1142、46.89秒**；Python 构建保护 **68/68**、控制台 **17/17**。固定 SDK v6.1 下重新执行原板及 Read Pico 集成、照片、SD、显示、factory 六配置构建，全部 exit 0；六份应用的长度与 SHA256 均与下方“P3主图/缩略图初始请求头检查”记录一致，集成仍为 **1,923,152字节 / `8e67153054ef4dd400a71e423949e629803c40119c8f304d8c26391dd75697a8`**。
+
+复验日志位于本机忽略目录 `.cache/progress-baseline-*`。Git 待提交集合展开后为196个源码、测试和文档文件，常见私钥、GitHub Token、AWS Access Key 模式扫描未发现匹配；该扫描不代替所有敏感信息审查。构建生成物、私人原片及本机日志均不入库。
+
+烧写/回读：未执行。真机验收：未执行。远端 CI：未执行。产品、OTA 与 PMU 睡眠运行门禁保持。随后文档整理以独立提交记录，不改变本软件快照的运行能力或硬件结论。
+
 当前 PM 时钟锁候选 305,104 字节、SHA256 `6f2a4ea106f7aab2c1d8ff2fd2605f70b0aefafaa5c437b0d688106a12055255` 已仅 factory 部署并全长回读一致，分区表前后不变。候选在显示事务内同时固定 CPU 240 MHz/APB 80 MHz；静态清白获人工确认，官方局部 16 灰阶页 36 相合计 399.327 ms，实拍 16 阶中心亮度严格单调，确认后显示/HAL 正常释放并完整 `STOPPED`。
 
 旧失败样本的 30.5–48.5 ms/相和 05–15 并白，与加锁后的 11.090–11.112 ms/相和 16 阶恢复构成同机、同页面、同波形/VCOM/PCLK 的单变量 A/B。因此“自动 DFS 下 EPDiy 直接 LL RMT 与 CPU feeder 缺少事务 PM 锁”已确认为本轮持续白偏的具体根因。P2 整体仍未完成：单张标准页不替代重复性、其他图案、照片解码链路或长期稳定验收。
@@ -1702,3 +1712,824 @@ PNG输入检查非空普通文件≤32MiB、有界分块读、EOF、关闭及最
 随后显式stop一次：432954ms LCD deinitialized；433457ms Display cleanup=ESP_OK且SD开始卸载；433458ms Unmount=ESP_OK；433459ms HAL cleanup=ESP_OK；433460ms最终STOPPED、operation=cleanup=0；433461ms命令处理结束，433462ms app_main返回。主机EOF结束控制台、exit0，端口占用检查为空。卡仍插入且已卸载，屏幕保留已验收S1，原片保留；未再次清白、显示、重置、烧写、换片或运行完整产品。
 
 当前应用仍为404,336字节/9f6d6f6f…，同一S1单次处理56,161ms较前轮114,252ms缩短约50.8%，软件、部署/回读、单张视觉和正常退出证据分别保留。精确局部内存峰值仍未取得，不补造数据；其他样本、重复性、全文件消费者/并发与NVS/OTA迁移保持未验收。TODO、README、CHANGELOG及照片/部署/架构/集成当前状态已同步。本反馈轮仅验收登记与正常退出，无源码/配置变更、重新测试/编译、提交或推送；私有证据仍为`.cache/p3-buffered-photo-hardware-PAms8H/`。
+
+## 2026-10-07 · P3 内存JPEG与文件入口保护（仅软件）
+
+用户要求继续。先读取TODO/需求/架构/索引及适用AGENTS；fast-context因Windsurf凭据缺失不可用，改用限定main/host_tests本地搜索，未提取或配置凭据。本轮未打开串口、复位、烧录、挂载实体SD、刷新或读取私人原片；最后已知设备应用仍为10月5日404,336字节/9f6d6f6f…、S1人工通过并正常STOPPED。新编译产物不代替设备身份或回读证据。
+
+源码确认旧内存JPEG忽略esp_jpeg_get_image_info返回值，依靠未验证尺寸/长度分配RGB，并且不走文件JPEG的EXIF/预算/Cover契约。Read Pico改用同一便携metadata和固定流式解码器：≤32MiB源、边≤16384且≤64M源像素、baseline/EXIF1–8、最小可用缩放及≤5MiB RGB，实际输出尺寸匹配后才开始显示。内存回调不查询SD、读取按边界限制、约32KiB让出调度；调用方保持压缩字节有效/不可变，不增加压缩副本或旋转RGB。工作区/RGB任一分配或解码失败均释放，不显示；RGB预算不是全部堆/相机原片支持保证。显示发布/快照仍可能访问存储，保留display_manager契约，未证明所有消费者或并发安全。
+
+另确认display_flow_stream_file的旧通用分支会在解码器拒绝格式前依release_source删除源；Read Pico现在只允许JPEG/PNG检查式入口，无效路径/算法及其他格式在文件读/删除前拒绝。其他板不改变，BMP/EPD_GZ的专用入口不增加/取消支持。该修复不处理全部stage/retire/current-slot/HTTP/URL文件所有权或原子发布，因此产品启动门禁不解除。未改固定组件、显示方向、灰阶/gamma、VCOM、频率或波形。
+
+| 检查 | 本轮结果 |
+| --- | --- |
+| 普通CTest | 486/486，29.96秒，`.cache/p3-memory-jpeg-host-tests.log` |
+| ASan/UBSan CTest | 486/486，109.44秒，无报告，`.cache/p3-memory-jpeg-asan-tests.log` |
+| 新增用例 | 9项内存JPEG、2项文件入口原片保护；8种EXIF×横/竖显示与文件JPEG逐帧一致，既有定向PNG对照保留 |
+| 输入/失败保护 | 源字节不变、9MiB输入无额外压缩分配；无卡/SD关闭锁存与内存解码隔离；非法元数据/渐进/超限长度及像素、损坏/截断、RGB与工作区分配失败均不发布；误用release_source不删除源 |
+| Python保护 | build23/23（2.440秒）、console16/16（0.005秒），合计39，均为不接触硬件的替身测试 |
+| 固件编译 | 固定IDF v6.1（fff9895c…）集成/照片/原板三配置成功；最后集成增量编译记录现有http_server.c restart_task未使用警告，未修改该无关代码，无本轮图像代码警告 |
+| 烧写/回读/真机/性能 | 未执行，不转移旧S1/ROM/51%性能或实屏反馈为新增内存路径验收 |
+
+编译输出：完整集成1,979,216字节、SHA256 `9aa41dc045b1005998902d3320c6c028b71cf79161578f19b81af152e9cf6bc7`；照片404,720字节、`bb4e42b7d260807970d3cd48b6230c4b8454ebf6a9db1d3278a1a97a364ccb66`；原板2,058,976字节、`849535e81c9e92ad993a5fd3c6dc5570c2b5d6593d1521633a63110396716be9`。照片sdkconfig仍为`1055abe1df7e16e9270d1d807529e76514a728dd6420f37e7a993925d31f48ca`，与已验收历史配置相同，不意味新应用已部署。对应编译/SDK/Python日志`.cache/p3-memory-jpeg-*.log`；固定Read Pico子模块保持干净。未复跑私人5样本、Node方向/Web测试、其余诊断固件配置或远端CI，不计这些为本轮通过。
+
+TODO/README/CHANGELOG及照片/架构/集成说明同步。后续继续审查全文件消费者关闭/并发、临时文件所有权和原子发布，再准备受控产品流程及NVS/OTA迁移许可；完整集成固件不得因本轮编译成功直接烧录运行。用户原有内容保留，本轮无提交/推送。
+
+## 2026-10-07 · P3 SD IO占用与快照关闭保护、只读候选（未部署）
+
+上轮完成内存JPEG与文件入口保护，属于真实软件进展。本轮按同一开发目标继续核对现有TODO/主工程；fast-context仍缺Windsurf凭据，使用限定main/board_hal/epaper_src/host_tests的本地搜索。未提取凭据、操作设备、读取私人原片或执行相机功能。
+
+实际源码显示SD卸载原先只有“所有消费者先关闭”的注释契约，没有在打开/关闭过程中保持占用；标准文件消费者散布于图片/GUI、HTTP/URL、相册/目录及日志。新增read_pico_sd_io_begin/end：在同一Board锁内确认挂载/介质并增加原子计数，unmount在有占用时拒绝且不失效正常介质，end仅原子结束，不匹配结束锁存。read_pico_fs在三个SD相关profile链接包装11个标准入口，32槽、无堆分配、登记临界区不IO/日志，fdopen转移已有占用，真实关闭成功后释放；关闭错误保留占用/Board租约，已知不确定句柄不自动重试。元数据操作也在调用期间占用，其他路径/socket/console透传。此保护不等于数据发布原子性、SD硬超时或所有IO别名/所有消费者错误传播已审查。
+
+初次普通503项回归中并发用例出现fclose=-1、结束399/400、残留占用1，暴露libc复用旧FILE键但旧关闭还在记账的窗口；当时ASan503通过不能否定这个竞态。修正过期键识别及live-owner选择，增加SD/非SD复用的确定性用例。旧完整失败日志后来被复跑覆盖；实际工具输出摘录整理为`.cache/p3-fs-lease-initial-race-summary.txt`，不伪称保留原日志。修正后的最终全量及重复测试见表。
+
+display_manager快照在新板改O_CREAT|O_EXCL，只独占创建衍生目标；已有文件/符号链接目标不截断。检查flush/fsync、close和最终介质状态；关闭错误接SD锁存，失败/部分衍生文件保留、不unlink可能由其他消费者替换的路径。显示已完成但保存失败继续返回ESP_ERR_NOT_FINISHED/fallback语义；不是“失败就未显示”。新增完整gzip→提交帧比对、已有文件/链接保留、关闭失败和关闭后介质失效用例。其他板快照行为保留；未完成将部分快照隐藏至最终发布或所有上传/日志关闭错误传播，产品仍禁止运行。
+
+| 检查 | 本轮最终结果 |
+| --- | --- |
+| 新增CTest | 24项：4个SD生命周期、15个标准句柄/元数据/复用、5个快照保护 |
+| 普通CTest | 510/510，28.71秒，`.cache/p3-fs-lease-host-tests.log` |
+| ASan/UBSan | 510/510，112.09秒，无报告，`.cache/p3-fs-lease-asan-tests.log` |
+| 并发重复 | 8线程×50次独立打开/关闭的用例额外100次（40,000次），4.26秒，全部通过，`.cache/p3-fs-lease-concurrency.log`；非实际RTOS/实卡 |
+| Python保护 | build26/26（2.469秒）、console16/16（0.006秒），合计42；新增3项配置/快照/只读观测源码保护，均不触及硬件 |
+| 固件编译 | 固定IDF v6.1：集成、照片、SD、显示、factory、原板六配置成功；新FS最后修正后重编三个SD相关profile，SD只读观测最后更新后再次编译 |
+| 链接检查 | 集成build.ninja含全部11个wrap选项，map将对应__wrap符号绑定到read_pico_fs；storage compile_commands使用ESP_PLATFORM；不替代实际libc/FAT调用/计数验收 |
+| 依赖 | 与`.cache/p3-fs-lease-dependencies.before.lock`比较，dependencies块的版本/source/component_hash逐字相同；生成的manifest_hash和direct_dependencies中idf标记更新，idf依赖条目仍6.1.0，外部SDK commit仍固定 |
+| 设备更新/回读/视觉 | 未执行；最后已知仍10月5日9f6d6f6f…S1通过/正常STOPPED，不转移为新包装的实卡/GC16/性能结论 |
+
+初次配置受沙箱网络及SDK psutil进程枚举限制；经受控主机编译后完成，不禁用组件管理或改SDK绕过。完整重配置编译出现既有中文字体数组和GUI字符比较告警、集成restart_task未使用告警；最终增量未见新FS/SD/快照代码告警。锁文件的生成元数据更新保留，不伪称整份锁完全不变，也不接受组件版本升级。固定厂家子模块仍干净，用户原有编辑保留。
+
+本轮最终编译：集成1,981,600字节/SHA256 `8f0f9c72e81ba5738038148020a8f2fcb333ca21ec2feff0262061642fa20185`；照片406,256字节/`e2b25a4bd574f565344b9c9a1b01368367ef0a5037fc6aee114c5cf5537b6445`；SD328,016字节/`7861965cb49015a35ed254886008ee30a77fb907a40ad4fa14b9abdc6a5b3aa9`；显示305,120、factory275,344、原板2,058,976字节（原板SHA256 `75313357dfbcdaeff0185d0b082a0efdf904fe027d5e29b131d5668bfade8422`）。以上都是编译产物，不是部署证明。
+
+已冻结仅SD候选`.cache/p3-fs-lease-storage-candidate-T7Skvt/`，与最终build/sdkconfig一致；ELF SHA256 `b1e99213b67b85b6e7c5f3f9c89af801969d37c3f3e549af2cd6e2fc3fd27411`、sdkconfig `116fab2bb11b0d29d45b016756fae15289f73a1026609a11912429984c03afe1`。本地image-info确认S3/IDFv6.1/DIO/16MB/80MHz/MMU64KB/secure version0、checksum/hash有效。没有解锁完整产品入口。
+
+新file-check只读能力不变，仍只打开此前专用RC3T0001.BIN、核对4096字节/EOF。隔离入口新增打开active_io=1、关闭0和介质有效的观测条件；不在持有句柄时尝试实卡卸载，不注入故障/热拔，不创建、改写、修复或读取私人照片。基本实卡证据取得前不把共享标准库保护当产品运行已验证；下一步需要用户新的仅factory更新许可及测试卡确认，计划写`[0x10000,0x60150)`/擦除`[0x10000,0x61000)`，先核实设备/安全/分区并保留当前应用，再完整回读/分区保持、status→mount→file-check→status→stop。不清白/显示，不file-test/photo-check，不写bootloader/NVS/PHY/内部storage/PMU校准。
+
+当前仍需上传成功/失败反馈、全部临时文件/原片所有权、发布原子性和NVS/OTA迁移；新基础适配的人工上板关口不代表这些工作完成。TODO/README/CHANGELOG与存储/架构/集成状态同步，本轮无提交/推送。主机/编译/私有候选日志`.cache/p3-fs-lease-*`，新真机证据尚不存在。
+
+## 2026-10-07 · P3 SD句柄保护获准部署与只读实卡核对
+
+用户明确“允许”，随后要求继续。本轮许可仅覆盖固定SD隔离候选factory app-only更新、新启动status→一次mount→一次file-check→status→stop；不继承旧file-test/照片刷新/完整产品许可。没有源码或配置修改、重新编译/主机回归，复用上一软件轮510/510/42及六配置证据，不能计为本轮重新通过。
+
+写前私下比对与此前设备身份一致，ESP32-S3 rev0.2、16MB Flash，Secure Boot/Flash Encryption均Disabled。旧404,336字节应用独立完整回读匹配`9f6d6f6fc329344647f601b976d1869d70bd758b141f4db4f580f389fa2540a5`并保留。写前4096字节分区表与此前相同，前3072字节匹配本配置。仅写328,016字节`[0x10000,0x60150)`，实际擦除`[0x10000,0x61000)`，工具hash verified；另行独立全长回读逐字节/SHA256匹配固定输入`7861965cb49015a35ed254886008ee30a77fb907a40ad4fa14b9abdc6a5b3aa9`。写后4096字节分区表与写前逐字节相同，SHA256 `f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。未写bootloader/分区/NVS/PHY/内部storage/PMU校准；未全量核对这些数据分区，也不是完整Flash备份。
+
+新隔离控制台显式ESP reset一次，启动ELF前缀b1e99213b…、固定IDF v6.1、8MB/80MHz PSRAM自检正常、CPU240MHz。初始595ms SD present=1、mounted=media_valid=exit_failed=active_io=0，开机不挂载/文件IO/显示。此SD启动没有新的PMU/VCOM GET数值日志，不套用历史值为本轮观测。
+
+| 本启动日志时间 | 实际结果 |
+| --- | --- |
+| 120178ms | 显式status：present=1、未挂载、active_io=0 |
+| 242360–242420ms | 唯一mount；1-bit、40MHz，ESP_OK；present/mounted/media_valid=1、exit_failed=active_io=0 |
+| 1338561ms | 唯一file-check打开：lease observation=ESP_OK、active_io=1、expected=1、valid=1 |
+| 1338583ms | 成功关闭：lease observation=ESP_OK、active_io=0、expected=0、valid=1 |
+| 1338585–1338588ms | File check=OK、verified=4096、created=written=0、close_failed=errno=close_errno=0；固定内容/EOF通过，卡仍有效、active_io=0 |
+| 1441412ms | 显式最终status：present/mounted/media_valid=1、exit_failed=active_io=0 |
+| 1553961–1553965ms | 唯一stop：Unmount=ESP_OK、HAL cleanup=ESP_OK、STOPPED、app_main返回 |
+
+最终status及stop已完成，SD卸载/HAL清理ESP_OK、STOPPED；主机EOF关闭控制台exit0，授权主机lsof检查无输出/exit1（串口无占用）。卡仍插入且卸载，本轮未刷新屏幕。操作证据`.cache/p3-fs-lease-storage-hardware-ed4twS/`，固定输入`.cache/p3-fs-lease-storage-candidate-T7Skvt/`。主机授权调用延迟期间未重复发送命令。未file-test/photo-check、创建/改写/修复/删除、读取私人照片、启产品/网络/相机或改校准；FAT挂载不是硬件写保护，不宣称所有元数据零变化。
+
+实际libc/FAT打开/关闭占用的单次只读路径通过，不等于真实关闭故障、热拔、RTOS并发、照片/快照/上传各调用入口或完整产品生命周期全部验收。产品/NVS/OTA门禁保持关闭，后续仍需上传错误传播、临时文件/原片所有权及原子发布审查。
+
+TODO/README/CHANGELOG及SD/部署/照片/架构/集成页已同步当前设备与历史照片镜像边界。本轮只增加证据和文档，不提交/推送；固定厂家子模块及原有源码改动保留。基本SD实卡关口已关闭，后续软件审查不自动授予下一轮部署、显示或产品运行许可。
+
+## 2026-10-07 · P3 有界上传、FAT非覆盖发布与合成探针（仅软件）
+
+按“继续开发，直到需要人工介入”为止继续软件审查。fast-context因缺少Windsurf凭据不可用，改限定目录搜索，未获取凭据。沿用PhotoFrame HTTP/相册目录与契约，不改固定厂家源码，不执行相机功能。此轮没有打开串口、更新设备、刷新屏幕或读私人原片；设备最后已知仍为上一节7861965c…只读诊断/STOPPED。
+
+新增便携upload_stream/upload_file和板级read_pico_upload。Read Pico multipart采用有界二进制流：boundary≤70、header≤1024、filename≤119字节，跨块分隔符/零字节保持，重复或未知字段、危险名称、截断与尾部垃圾失败。每文件≤5MiB、multipart≤10MiB+4096；连续8次接收超时或120秒接收阶段预算失败，但同步SDK调用本身没有硬取消，不承诺严格实时上限。独占新建隐藏暂存，短写/零写、fsync、一次close和介质检查均决定成功；关闭不确定锁存、不重试或删除，事务绑定创建时源路径。
+
+相册PNG/EPDGZ主图及JPEG缩略图完整接收/同步/关闭后，缩略图先、主图后发布；同名不预删除，不宣称两文件原子性或FAT掉电安全，部分发布失败保留结果并报告。魔数检查仅识别格式。直接显示后处理/current-slot回收、URL下载及其余消费者/迁移仍待审查，完整产品门禁不解除。详见[上传保护](READ-PICO-UPLOAD.md)。
+
+核对固定IDF v6.1 `fff9895c82d744c7237be8847347bdd1b07c6643`实际源码：vfs_fat.c:979在FAT锁内调用f_rename，ff.c:5305起的不同既存对象冲突返回FR_EXIST，vfs_fat.c:348映射EEXIST。只在Read Pico拥有的/storage FAT路径使用；不能以主机POSIX rename覆盖语义替代。主机适配测试使用FAT式非覆盖替身，不是实卡FatFS验收。
+
+新upload-test只在SD隔离profile精确命令下每启动一次，开机不执行；控制台不在display/photo转发。独占创建固定4096字节图样并发布RC3U0001.BIN，两次完整读取/EOF；另创建16字节0xA5暂存，向同名发布必须EEXIST且BIN内容不变。预存目标/暂存或任何失败停止，不换名、删除、修复或重跑。使用256字节块及复用已关闭事务，降低现有6144字节主任务栈占用；未测真机栈峰值。合成探针不是HTTP/Wi-Fi/照片/完整产品验证。
+
+| 检查 | 本轮最终结果 |
+| --- | --- |
+| 新增CTest | 40项：11流解析、15文件事务、14实际适配替身/合成探针；二进制分块/截断、短写、关闭、介质、源绑定、同名保留与错误覆盖检测 |
+| 普通CTest | 550/550，33.47秒，`.cache/p3-upload-host-tests.log` |
+| ASan/UBSan | 550/550，122.91秒，无报告，`.cache/p3-upload-asan-tests.log` |
+| Python保护 | build28/28（2.620秒）、console17/17（0.007秒），合计45；新增3项保护，不触及硬件 |
+| 固件编译 | 固定SDK六配置成功：SD、集成、照片、显示、factory、原WaveShare；最终源绑定/栈调整后重编SD/集成 |
+| 来源/工作树 | 固定Read Pico gitlink28cde682…且子模块干净，git diff --check通过；原有用户改动保留，无提交/推送 |
+| 依赖 | 最终dependencies.lock相对HEAD仅manifest_hash/direct_dependencies的idf标记生成差异，dependencies版本/source/component_hash未变；保留生成元数据，不称整份锁不变 |
+| 烧写/回读/实卡/视觉 | 未执行，不把旧file-check或S1验收当作新上传/发布证据 |
+
+初次SDK环境路径指向基线目录导致constraints缺失，改用已有安装工具与固定Python环境后成功，未安装/修改SDK。首次适配主机链接缺C接口extern C保护，修复后最终全量通过。构建曾出现既有http_server.c restart_task未使用警告；最后SD/集成增量无新增上传代码警告。中间较少用例的回归不代替上表最终550项；未复跑私人5照片、Node/Web或远端CI。日志`.cache/p3-upload-*.log`，不保留/提交私人样本及构建生成物。
+
+| 最终固件 | 大小（字节） | SHA256（已核对项） |
+| --- | ---: | --- |
+| SD合成探针 | 332304 | c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3 |
+| 完整集成（禁止运行） | 1984496 | 727ffed23f9658cd4c7fe95513d9e23fdcfadadeda540d8909f78b6b4caf8bc4 |
+| 照片诊断 | 406256 | 本轮仅编译，不部署 |
+| 显示诊断 | 305120 | 本轮仅编译，不部署 |
+| factory只读 | 275344 | 本轮仅编译，不部署 |
+| 原WaveShare | 2058976 | e398b6a16853c303e717d5cb1292235e7445e02d390101b3c72e2756c0227cd6 |
+
+SD候选固定副本`.cache/p3-upload-storage-candidate-EuBiLz/`：ELF SHA256 `21d0f9b5ed5707ff1c07886d1c7bb4c90e29ee47528957ff49c5c82900650d67`；sdkconfig `116fab2bb11b0d29d45b016756fae15289f73a1026609a11912429984c03afe1`，与此前SD配置一致；编译分区产物 `205e21ddff471bce79c29a846bd04a48854cb42d406c784405d4c8e3ec1e6061`。本地image-info确认S3/IDFv6.1/DIO/16MB/80MHz/MMU64KB/secure version0及checksum/hash有效，未连接设备。
+
+现在停在新的人工关口：确认仍是已备份测试卡，并允许仅factory app-only更新及一次合成文件写入/发布测试。计划写`[0x10000,0x61210)`、擦除`[0x10000,0x62000)`，授权后仍需核实设备/安全/分区、保存当前完整应用，独立全长回读与4096字节分区保持，再status→mount一次→upload-test一次→status→stop。成功应created=2、written=4112、published=1、verified=8192、conflict_rejected=1、close_failed=0、打开/关闭占用1→0及正常退出；成功保留4096字节BIN和16字节PART，失败保留可能的部分文件。未获新许可前不执行；不附带旧file-test/file-check/photo-check、显示、热拔/故障注入或完整产品/NVS/OTA/校准操作。TODO及架构/部署/存储/集成说明同步。
+
+## 2026-10-07 · P3 合成文件非覆盖发布获准部署与单次实卡通过
+
+用户回复“仍使用测试卡，并允许更新”，对应上一轮明确提出的仅factory诊断更新及一次合成文件创建/发布测试。本轮复用固定332,304字节SD候选，不修改固件源码/配置、不重新编译或运行主机测试；550普通/550ASan、45Python及六配置仅属上一软件轮证据。fast-context仍缺凭据，限定本地源码核对，无凭据提取、照片/相机操作或完整产品运行。
+
+写前授权主机检查串口无占用；私下设备身份与此前一致，ESP32-S3 rev0.2、Flash 5e4018/16MB，Secure Boot/Flash Encryption均Disabled。4096字节实板分区与此前逐字节/SHA相同，前3072字节匹配编译布局。首次主机cmp -n比较较短编译文件报告EOF，受控脚本在读取旧应用/唯一写指令之前exit1；改用head -c3072截取后逐字节比较exit0，复用已读分区并复核全部前置条件，不跳过分区门禁、不重复烧写。
+
+旧328,016字节应用独立完整回读匹配`7861965cb49015a35ed254886008ee30a77fb907a40ad4fa14b9abdc6a5b3aa9`并保留。唯一写332,304字节`[0x10000,0x61210)`，实际擦除`[0x10000,0x62000)`，工具hash verified；另行独立全长回读逐字节/SHA匹配`c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`。写后4096字节分区表与写前逐字节一致，SHA均`f078383d1525d206e6f7eb4aea29af811fc36a89e195d222d9256fffe6892d20`。ROM核对身份/安全，实际Flash读写使用RAM flasher stub；未写bootloader/分区/NVS/PHY/内部storage或PMU校准，也未全量校验这些数据区域，不是完整Flash备份。
+
+控制台仅一次显式--reset调用。捕获先有一段到esp_image segment3的USB_UART_CHIP_RESET启动，再有完整同原因启动；前段未到app_main，不写成两次app测试，也不猜第二段原因。后一完整启动ELF21d0f9b5e…、IDFv6.1、8MB/80MHz PSRAM自检正常、CPU240MHz，596ms卡存在但未挂载/无占用，597msREADY，无启动自动文件IO。未增加额外复位；本启动没有新的PMU/VCOM GET数值日志，不套用旧值为本轮观测。
+
+| 本启动日志时间 | 实际结果 |
+| --- | --- |
+| 123188ms | 显式status：present=1、mounted/media_valid/exit_failed/active_io=0 |
+| 237230–237290ms | 唯一mount：1-bit、40MHz、ESP_OK；present/mounted/media_valid=1，exit_failed/active_io=0 |
+| 338398→338447ms | 独占新建第一份4096字节合成文件，create占用1/valid1，sync/close成功后占用0/valid1 |
+| 338458→338481ms | 发布后第一次只读打开BIN占用1、关闭0，介质均有效；4096字节/EOF正确 |
+| 338489→338504ms | 独占新建第二份16字节合成PART，sync/close成功，占用1→0/valid1 |
+| 338512→338535ms | 同名发布拒绝后第二次只读打开BIN、4096字节/EOF及内容不变，占用1→0/valid1 |
+| 338537–338541ms | Upload probe=OK、stage=complete、created2/written4112/published1/verified8192/conflict_rejected1/close_failed0；卡有效、占用0 |
+| 445576ms | 显式最终status：present/mounted/media_valid=1，exit_failed/active_io=0 |
+| 549940–549944ms | 唯一stop：Unmount=ESP_OK、HAL cleanup=ESP_OK、STOPPED、app_main返回 |
+
+完整probe成功要求FAT实际rename同名冲突为EEXIST、没有发布第二份，且两次复读逐字节/EOF正确；不是仅stat预检查或主机替身结果。本轮只新建两份合成文件，第一份`.RC3U0001.PART`发布为`RC3U0001.BIN`4096字节，第二份`.RC3U0002.PART`16字节因冲突保留；不删除、覆盖、修复、换名或重跑，不打开旧RC3T0001.BIN或私人照片。文件同步/关闭和同一挂载内重开核对通过，不计卡断电/ESP重启后持久性、写中异常掉电、真实关闭故障/热拔或并发/任意卡长期稳定。
+
+最终SD卸载/HAL退出正常、STOPPED；主机EOF结束控制台exit0，授权主机lsof检查无输出/exit1（串口无占用）。测试卡仍插入且卸载，屏幕未刷新；没有file-test/file-check/photo-check/清白/显示、网络/HTTP/产品、数据分区/校准或相机指令。本轮新FAT子路径通过不解锁完整PhotoFrame入口，直接显示后处理/current-slot回收、URL/其余消费者、暂存清理与NVS/OTA继续软件审查。
+
+固定输入`.cache/p3-upload-storage-candidate-EuBiLz/`，私有硬件/完整旧新应用/分区/控制台证据`.cache/p3-upload-storage-hardware-fAeGCh/`。授权主机调用等待期间未重复发送命令；首次前置比较失败及修正见本目录SESSION.md，不伪造原完整日志。TODO/README/CHANGELOG与上传/部署/存储/架构/集成/照片页已同步；原有用户修改、固定厂家子模块保持，无提交/推送，证据/标识/构建生成物不入库。
+
+### 2026-10-07 · P3直接显示、URL下载与隐藏快照发布保护（仅软件）
+
+在上节实卡退出后继续安全软件开发，未继承为新设备操作许可。当前仍332,304字节/c876599f…SD隔离应用、STOPPED、测试卡已卸载；未开串口、复位、烧录、读写测试卡、读取原片、刷新或运行业务网络/完整产品。源码探索的fast-context因缺Windsurf Key不可用，使用限定文件rg及完整相关函数核对，不提取凭据。
+
+直接显示raw/multipart保持完整接收的`upload_file_t`，新增便携`upload_asset`对闭合所有权/隐藏名/格式/预览检查，先预览后主图发布为独立格式文件，不再删除固定current图片。所有失败产物保留；魔数验证不等于解码通过。URL复用独占事务，非200正文隔离、已知长度/SDK完整接收/阶段预算/写入/同步/关闭/最终介质检查，304关闭空暂存并跳过刷新。固定SDK ON_DATA忽略事件回调返回值的源码已核对，因此另有owner失败锁存；完成时即使perform成功也拒绝失败文件。
+
+重定向元数据按请求清空、Location有界，在安排下一请求前处理跨站源凭据，去除失败则不跳转；跨站缩略图不携带源认证/配置自定义头，缩略图采用配置CA。Downloads仍用标准可见相册名、JPEG预览和EPDGZ快照，不重新引入自建相册/状态系统；复制长度/EOF/关闭/同步受检查，32KiB调度让出，原输入保留。快照独占隐藏暂存完成/关闭后FAT非覆盖发布，失败不留下半写入的最终EPDGZ。
+
+当前图片复制复用显示锁，记录写入/flush/fsync/关闭/介质及匿名记录清除失败传播，HTTP/URL明确已经显示而保存未完成。不把ESP_ERR_NOT_FINISHED转换为普通成功，也不假称屏幕回滚。持久`.current.lnk`仍原位写入，不保证元数据掉电原子性或重启恢复；旧记录/NVS/OTA继续审查，完整产品门禁保持关闭。
+
+新增27项CTest：12项所有权/预览/碰撞/部分发布/介质/边界，5项下载正文/状态/截断/超时/304，2项复制长度/EOF/关闭与失败保留，2项源站/相对跳转/端口/用户信息及超长URL，2项真实显示管理器记录关闭故障/受锁复制，4项实际固定JPEG解码器的独占发布→显示替身/对应预览/魔数不符/关闭故障/坏图保留。主机发布IO模拟FAT非覆盖语义，不能拿POSIX默认rename替代；显示替身不计实屏。
+
+最终普通CTest **577/577，30.13秒**；ASan/UBSan **577/577，119.03秒**。Python构建保护29项（新增1项）及控制台17项，合计**46/46**；git diff --check通过。第一次Python回归因旧快照静态断言仍要求在最终路径O_EXCL失败，随后改为检查共享适配的独占/sync/关闭锁存及隐藏暂存finish/publish，重跑29项成功；不是删掉保护或抹去失败。第一次集成编译因受限网络无法查组件清单，在源码编译前失败；主机授权环境继续固定SDK/组件后最终通过，不更换SDK/依赖版本。
+
+最终六配置均编译成功：
+
+| 配置 | 应用字节 | 证据范围 |
+| --- | ---: | --- |
+| Read Pico完整集成 | 1,985,056 | 真实HTTP/URL业务已编译链接，入口仍禁止运行 |
+| Read Pico照片诊断 | 406,256 | 仅编译，不转移旧S1实屏结果 |
+| Read Pico SD诊断 | 332,304 | SHA仍c876599f…，未重新部署/执行探针 |
+| Read Pico显示诊断 | 305,120 | 仅编译，未清白/刷新 |
+| Read Pico只读工厂诊断 | 275,344 | 仅编译，未运行 |
+| 原PhotoPainter板 | 2,059,248 | 保留原文件策略，仅编译 |
+
+完整集成SHA256 `947458be9720c7349c567e6ed142a38e6ac502a5e33fc93993f95fa276bc241f`；SD SHA256 `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`。本次增量编译改动源无warning/error；其他固定组件历史告警边界不扩大。依赖锁只保持已存在的manifest/direct-idf标记差异，组件版本未变；未覆盖用户修改、固定厂家代码、提交/推送或纳入私有资料/构建生成物。
+
+本机日志`.cache/p3-asset-{host,asan}-{build,tests}.log`、`p3-asset-python-{build,console}.log`及`p3-asset-idf-{integration,photo,storage,display,factory,legacy}.log`均忽略。下一安全开发项为其余消费者/并发、旧持久元数据/NVS/OTA和暂存空间策略。真实浏览器HTTP/URL/重定向/TLS、BMP/EPDGZ完整失败路径、重启恢复、满卡/热拔/掉电/长稳与完整产品验收仍待完成；本轮软件成功不替代这些结果，也不触发自动删除/再烧录/再显示。
+
+### 2026-10-07 · P3只读严格配置加载和OTA门禁（仅软件）
+
+继续完整目标的软件开发，上一上传/URL轮为实际进展而非等待/阻塞。本轮重新读取TODO、需求/架构/文件索引、真实main/config/OTA和对应测试；fast-context仍缺密钥，用限定rg及相关函数核对，不提取Keychain/Windsurf凭据。未操作设备、串口、测试卡、原片、显示、业务网络/NVS/分区或相机；最后验收会话是c876599f…SD诊断/STOPPED，本轮不作新的在线状态轮询。
+
+定位到旧配置加载将密码读取错误当认证关闭、证书读取/分配错误当无证书，并自动持久化legacy cron迁移/删除quiet-hours键；OTA初始化还自动查询/保存状态/注册检查和PENDING_VERIFY启动即确认，资产匹配仅按文件名。当前核验factory布局没有otadata/OTA槽，不可据此启产品或上游升级。
+
+新板启动先不擦除恢复的NVS init，再真实`config_manager_init`只读加载；失败在board/storage/display/network前返回，不panic/重试/自动修复。便携`config_read`锁存第一个非缺失错误，检查字符串报告长度/完整NUL、标量范围和已知枚举；密码/证书类型/长度/IO/分配故障拒绝启动，CA≤4096、两次读长度一致，证书第二读消失也拒绝。默认值完整复位，不复用前次合成启动的密码/CA，未挂载的新板仍默认必需SD，不误用上游MemFS/URL默认。有效0/180角度不改写，不证明语义已迁移；旧cron只在RAM预览、旧键保留，存储cron解析失败/超条数/过长拒绝加载。
+
+新板OTA只初始化构建/不可用状态和状态锁，检查/更新NOT_SUPPORTED、daily=false、不做任务/网络/NVS/分区/确认回滚/重启。原板完整实现和加载迁移/密码读错误策略保持。临时门禁不等于OTA功能实现或迁移完成，不降低第一阶段最终要求；真实integration入口仍不调用`photoframe_app_main`。
+
+新增23项CTest：便携读取保护5项、真实Read Pico配置管理源码13项（包含全已读字符串错误循环、标量/类型/cron/证书/内存故障、缺失/重复合成启动、旧键保留、挂载前默认），原板真实配置管理2项，真实OTA门禁3项。OTA主机目标无NVS/网络/分区/periodic/task/restart替身符号，误链接任何相关操作会失败；NVS测试通过替身计数核对Read Pico无RW打开/写/erase/commit与正确关闭。并非读取设备上的真实设置或真实NVS闪存故障注入，也不证明运行时并发重载、所有配置消费者或多键持久原子性。
+
+最终普通CTest **600/600，29.69秒**；ASan/UBSan **600/600，111.52秒**。Python构建保护31项（新增2项）和控制台17项，共**48/48**；git diff --check通过。初次主机编译暴露config_manager依赖SDK传递包含stdlib的缺陷，补显式stdlib后通过，不用放宽编译标准掩盖；第一版启动错误后检查卸载/清理，最终前移加载至板级/SD之前，新断言核对更早门禁，旧板仍保持存储→配置顺序。最终又强化NVS_RW打开计数断言并完整重跑主机/ASan/Python成功；测试修改不改固件输入，六配置/ELF证据对应同一最终生产源码。
+
+六配置最终均编译通过，修改源无新增warning/error，固定SDK的既有Kconfig NOTE边界保留。Read Pico完整集成1,893,808字节，SHA256 `fa2a3f94cabc13bfe8bb02ec6c1a36a2bdc730f3f6afa83b582fc4236fffbffa`，仅编译、未部署；照片406,256、SD332,304、显示305,120、工厂只读275,344、原板2,059,248字节。SD SHA仍`c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`，没有重写或重跑探针。集成变小主要由于新板未验收OTA实现不再链接，不作为内存/功能完成或实机性能指标。
+
+最终ELF存在真实产品、config_manager及ota_manager/check/start API；Read Pico无`ota_check_task`、`ota_update_task`、`esp_https_ota_begin/perform/finish`或`esp_ota_mark_app_valid_cancel_rollback`符号，原板均保留。此检查只证明本ELF选定路径/符号的链接保护，不扩大为SDK全部Flash写能力已移除。现有本机构建rollback配置关闭，设备旧bootloader本轮未读取，不能宣称已确认其回滚能力。
+
+新增[迁移审查](READ-PICO-MIGRATION.md)：列出旧NVS/PHY/factory/FAT与上游默认布局冲突、未实际读取的配置组、方向覆盖/旧链接边界及OTA镜像身份/备份/回滚条件。没有生成/选择/接入新活动分区、擦数据、写厂校准或启业务。用户原修改/固定厂家组件保留，SDK/组件版本未变，依赖锁维持既有manifest/direct-idf标记差异；无提交/推送或私有材料/生成物入库。
+
+本机日志为`.cache/p3-config-{host,asan}-{build,tests}.log`、`p3-config-focused-tests.log`、`p3-config-python-{build,console}.log`、`p3-config-idf-{integration,photo,storage,display,factory,legacy}.log`及两个ELF符号日志，均忽略。下一安全开发项是其他NVS/文件消费者、Wi-Fi失败/导入、元数据与空间回收策略；实际配置/分区迁移、重启/TLS/HTTP/SD/显示/PMU和OTA恢复仍需后续明确权限及验收，本轮不是新的部署或产品运行许可。
+
+### 2026-10-07 · P3 Wi-Fi完整导入、表单和保留凭据重配（仅软件）
+
+上一配置/OTA轮是实际进展。本轮重新检查TODO和真实storage/wifi_manager/provisioning/main/HTTP停止代码；fast-context仍缺Windsurf Key，限定rg定位并读取相应函数，不提取凭据。没有串口、复位、设备NVS/卡/原片/显示/实际网络或相机操作；最后实卡会话仍c876599f…SD诊断/STOPPED，本轮不做新的实时状态确认。
+
+旧文本读取会截断SSID/密码、在读完/关闭前保存设备名，未检查文件结尾/关闭；表单也只单次接收并接受错误百分号/截断字段。新板新增便携wifi_text：位置文本≤1024字节、LF/CRLF、两字段及可选名称，空/注释语义保留、开放密码用明确双引号标记，字节长度/密码形态及整份NUL/控制/额外字段拒绝，输出只在完整解析成功后变化。Read Pico C容量33/65支持32字节SSID/64位十六进制PSK，原板32/64不变；SSID/密码首字符#的文本表示、WEP/企业认证等限制见Wi-Fi说明，不宣称任意格式/网络均支持。
+
+真实storage只读按优先目录打开，仅ENOENT允许根路径后备；有效SD、普通非空≤1KiB、长度/EOF/ferror/关闭/最终介质核对之后才复制值，关闭错误锁存SD。读入不写名字/NVS、不删文件；主机临时文件包括优先坏文件、目录/错误父路径、过长/坏格式、关闭故障/关闭时失介质及完整wire字段。此处SD状态/关闭故障为替身，不计实卡读wifi.txt、热拔或真实关闭失败验收。
+
+新板main对非缺失读取错误/凭据或名称保存错误停止此分支，不当作无配置AP/重启/成功；名称新增检查式set→commit→RAM提交。已成功的凭据键或名称set可能留在NVS，不伪称多键回滚。完整配置组、网络参数上游void保存、所有错误退出资源收敛仍待审查，源码return不等于整机已正常停止。
+
+新板配网表单≤511字节完整接收，连续8次超时失败，先检查已知字段重复/容量及正确百分号编码/控制字符，再沿用字段提取；没有全程硬取消/严格总时限保证。连接/保存前验证凭据，station按全长复制，开放网络用OPEN；原板解析/容量/连接规则保留。实际SDK连接事件/测试候选/网络配置及并发尚未完整验证，不能把字符串测试当无线/TLS验收。
+
+连接失败分支新板不擦SSID/password，停止当前重连并检查原HTTP停止，进入原AP恢复，等待本次新保存/名称/响应完成后重启；失败不立即擦除/重启或重复创建服务。正常OOBE也不以旧SSID/中间NVS写入判完成。易失性原子provisioning_session ticket只在当前完整成功后commit，旧ticket/重复/未完成不认成功，完成后不再发新保存ticket。不是第二套产品状态/相册系统，也不替代NVS事务、客户端确认或已开始写入回滚。新板AP模式/配置/启动/IP/DHCP/HTTP注册/路由/DNS检查并清理，HTTP停止错误保留所有权；实际AP开放、后台任务和SDK完整失败/退出仍待验收，产品入口继续禁止运行。
+
+新增26项CTest：wifi_text/凭据9项、表单3项、真实storage/主机文件7项、完成ticket4项、真实config_manager名称保存3项；首次针对文本/storage的26项集合含原7项，不能当新增26项，最终新增数由全量600→626核对。最终普通CTest **626/626，30.73秒**，ASan/UBSan **626/626，126.98秒**；Python构建33项（新增2）与控制台17项，共**50/50**；git diff --check通过。
+
+六配置最终编译均成功。第一次扩展公共SSID/密码C容量使原板原snprintf触发format-truncation编译错误，改为仅Read Pico扩展、原板保留32/64后重跑全部配置；没有禁用-Werror或修改原板截断规则来掩盖。新wifi/storage/session代码无编译告警；集成日志仍有既有crash_log未使用TAG/save_record和Read Pico禁用factory-reset后未使用restart_task告警，未隐去或当作全工程零告警。
+
+| 最终配置 | 应用字节 | 部署范围 |
+| --- | ---: | --- |
+| Read Pico完整集成 | 1,896,816 | 仅编译，门禁不启动真实main |
+| Read Pico照片 | 406,256 | 仅编译，旧S1结果不转移 |
+| Read Pico SD | 332,304 | SHA仍c876599f…，未重写/重跑 |
+| Read Pico显示 | 305,120 | 仅编译，未刷新 |
+| Read Pico只读工厂 | 275,344 | 仅编译，未运行 |
+| 原PhotoPainter | 2,059,280 | 仅编译，原策略保持 |
+
+集成SHA256 `e42ca71083918e9d65a0bcda8587fd1ce8e483d773dc9bd2ded35feac2cd3c1c`，SD仍`c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`。SDK/组件版本、固定厂家代码、实际分区/波形/VCOM和现存用户修改保持；无提交/推送、真实凭据/私人照片或构建生成物入库。测试所有文件/配置值为合成数据，临时目录为主机测试自建范围。
+
+源码、TODO、README、CHANGELOG、架构/存储/集成/迁移与[Wi-Fi说明](READ-PICO-WIFI.md)已同步；日志`.cache/p3-wifi-{host,asan}-{build,tests}.log`、`p3-wifi-focused-tests.log`、`p3-wifi-python-{build,console}.log`和六个`p3-wifi-idf-*.log`忽略。下一安全开发项为连接事件/其他Wi-Fi与NVS消费者、后台任务/错误退出、完整多键保存及元数据/空间策略；真实AP/NVS/重启/热拔/失败恢复和完整产品仍需后续明确权限，测试卡factory更新许可不授权广播OPEN AP、改设备配置或新的显示。
+
+### 2026-10-07 · P3成对凭据、候选/当前连接与SDK错误核对（仅软件）
+
+上一轮确有软件进展；本轮核对当前文件与已完成的运行句柄/日志，完成连接消费者审查。fast-context缺Windsurf Key，改用限定本地rg及读取实际函数，不提取密钥。没有串口/复位/烧录、设备凭据、卡/原片/显示/业务网络或相机操作。最后已知设备仍为c876599f…SD诊断/STOPPED，本轮没有新的设备状态采样。
+
+新`wifi_credentials`抽出既有两键NVS契约，Read Pico先局部成对只读：类型、报告长度、唯一末尾NUL及凭据格式均检查，句柄关闭后才同时输出；两键均缺失/均空为未配置，部分缺失或异常为损坏，不发布半份凭据。main硬件启动前检查该对，普通/唤醒入口读错不走网络拒绝/自动修复，配网状态也区别缺失与错误；旧板原读取顺序/容量保留。明确保存仍是既有set/set/commit，不能推导为两键/名称/其他网络参数原子性。
+
+Read Pico driver初始化关闭其NVS配置缓存并检查RAM模式；失败候选不继续。真实manager单连接锁、先停止旧station（候选保留AP）、默认事件队列私有固定大小消息栅栏、设置目标并在start/connect前清位，避免快速新事件被后续清零。关联事件核对目标SSID/BSSID及驱动现场；IP须匹配station接口、当前非零地址和当前关联。丢IP/stop/断线取消旧就绪，查询也复核现场，不靠旧bit。便携wifi_link不是新产品状态系统；SDK无应用尝试ID，这组保护不证明所有延迟、同目标快速重连或真实任务竞态均已消除。
+
+DHCP停/地址清零/静态设置/启动错误传播，即使ALREADY_STOPPED也覆盖保留旧地址。DNS覆盖或静态网关默认DNS失败不发布成功，候选返回原SDK错误并尝试恢复AP；后台/启动connect失败设置失败位。新板性能设置检查每次驱动返回，避免跨重连的缓存假成功；完整地址查询失链/读取/容量错不修改输出，真实在线启动先检查该返回值才日志/NVS/在线通知。普通非认证超时保留后台继续契约；失败清理若SDK再错只日志，不假称无线或资源已退出。
+
+新增33项CTest：真实凭据源码6、便携关联5、真实manager+合成SDK/事件队列22；manager目标不提供NVS保存/擦除符号，误链接会失败。覆盖旧成功位/排队旧IP、错误SSID/BSSID/接口/地址/长度、快速回调、候选AP保留/恢复、栅栏丢失及SDK模式/设置/启动/连接/DHCP/DNS/省电故障、认证有限重试、stop/丢IP、完整32/64wire字段、过期/容量不足地址与继续重连失败。NVS/无线都为替身，等待即时推进队列；不是实际FreeRTOS调度、无线时间测量、掉电/NVS实机故障或并发整栈验收。新增3项Python核对候选/driver RAM门禁、main读错分支及在线地址返回检查；不能以词法断言代替运行证据。
+
+最终普通CTest **659/659，30.77秒**，ASan/UBSan **659/659，124.21秒**；Python构建36、控制台17，共 **53/53**；git diff --check通过。中途背景重连新用例只注入一次断线却断言已耗尽重试，真实实现未耗尽而测试失败；改为明确注入六次断线后全量通过，不改生产重试策略迎合测试。651/657为中间轮次，最终659包含DNS/地址/省电扩展。
+
+六配置编译均成功；最后地址调用方修改后，又使用同一固定SDK环境的现有Ninja构建重编集成及原板，并核对对象时间晚于源码，不复用先前main对象。四个隔离profile不链接改动的业务main/Wi-Fi源，产物身份保持。最终应用：集成 **1,898,896** 字节/SHA256 `8adbdec6e0fb86c2c7cadd4f468d05a440c731e17dd234e2e900ee4cc2a40b7f`；照片406,256、SD332,304、显示305,120、工厂275,344、原板2,059,264字节。SD SHA仍`c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`。修改源最终编译无新增warning/error，固定SDK既有Kconfig NOTE仍存在，不宣称全部工程/历史构建零告警。
+
+固定厂家子模块`28cde682a4468a581c278761922724f57d976418`工作树无修改；SDK/组件、分区、波形/VCOM、现存用户修改保留。集成仍只保留真实产品入口的链接，不调用它；没有OTA/产品启动许可、提交/推送或私有资料/生成物入库。日志`.cache/p3-connection-{host,asan}-{build,tests}.log`、`p3-connection-focused-tests.log`（中间目标集合）、`p3-connection-python-{build,console}.log`、六个`p3-connection-idf-*.log`及集成/原板`-final.log`忽略。
+
+本轮未解决静态IP/DNS在配网测试前通过void多键保存的问题，不宣称失败候选NVS完全不变；部分初始化清理/ESP_ERROR_CHECK、全配置保存、后台生命周期及真实无线/AP/重启/断网恢复继续审查。下一安全开发项为临时候选网络参数与检查式保存及其消费者；完整产品/NVS/分区迁移、硬件与网络验收仍需明确范围和人工条件。
+
+### 2026-10-07 · P3临时候选网络、显式组保存与过期清理（仅软件）
+
+上一轮实际完成659项回归和连接检查。本轮复核TODO与真实provisioning/config_manager/wifi_manager接口，fast-context仍缺Key，使用限定rg读取，不提取凭据。没有串口、复位、烧录、卡/原片/设备NVS/显示/业务网络或相机操作；设备最后已知仍为c876599f…SD诊断/STOPPED，不做新的实时状态确认。
+
+Read Pico AP不再在候选连接测试前调用网络参数void持久setter。新增便携wifi_network，验证IP模式/有界四段IPv4，DHCP保留此前未使用静态字段；没有发明子网/网关连通或Internet可达验收。manager将候选复制为本次IP/DNS快照，测试不改config_manager缓存/应用NVS；配置getter改变或调用方修改原请求也不改变随后DNS与保存的候选。SDK实际转换及driver RAM门禁保留，旧板仍使用原提前保存和连接分支。
+
+便携provisioning_apply只是既有同步HTTP处理器的顺序帮助函数：复制请求，当前ticket→测试→当前ticket→保存→当前ticket→响应→完成。测试错误/测试中会话过期不进入保存；保存错误不发成功页或完成，保存中ticket变更单独报告“已保存但未完成”，不假称未保存。响应失败不重复已完成保存，最后原子ticket commit失败不自动重启；客户端收到成功页后仍可能会话变化，无法收回响应，不把发送成功当客户端确认。函数不拥有新的产品配置、状态或相册系统。
+
+新板config_manager_save_provisioning_checked复制SSID/密码/名称/网络输入；一个NVS句柄检查七个字符串set及模式set，共八键，再一次commit与关闭，全部成功才逐字段更新RAM。错误保留旧RAM值并如实报可能的NVS部分持久化，不擦除或自动修复；输入别名/IO替身修改原输入不会变更所存快照。不是NVS多键/掉电事务，也不是多任务RAM原子发布。普通Web setter和其他配置消费者还未统一此契约；旧板新API为NOT_SUPPORTED，原路径保持。
+
+manager成功候选返回本次不复用的应用连接所有权ID。后续保存/响应/会话失败只尝试取消匹配ID的候选station并保持AP；晚到旧处理器不能关闭后来同SSID新候选。模式恢复失败返回/记录未确认，不以逻辑取消宣称station真已关，也不反复尝试或自动重启。该ID用于清理所有权，不伪造SDK事件尝试ID；无线RF/服务并发和生命周期仍须真机验证。
+
+新增 **32项CTest**：wifi_network语法/容量/不发布输出6；阶段顺序10（每阶段失败、测试/保存中会话过期、请求改变和保存后不重试/回滚）；真实新板config_manager组保存7（完整组/完整wire字段、打开/逐个八键/commit错误、RAM不提前发布、输入快照与别名）、旧板无操作1；真实manager临时候选/配置快照/失败恢复AP5及所有权取消/过期清理/清理SDK错误3。合成SDK事件、NVS立即在set落入主机map及故障注入不是实体Flash/FAT或FreeRTOS/RF并发证明；HTTP阶段的socket/全服务整栈未运行。新增1项Python检查生产接线/无提前setter/保存返回与清理所有权；词法检查不是实际处理器运行证据。
+
+最终普通CTest **691/691，31.70秒**，ASan/UBSan **691/691，128.83秒**；Python构建37/控制台17共 **54/54**；git diff --check通过。64项聚焦集合是增加阶段帮助函数前的中间证据，不当最终新增数；689为增加保存输入快照和保存中过期门禁之前的全量，中间值不覆盖691。
+
+首次受限环境Ninja因CMake源码列表变化重新生成，组件索引连接失败；进程已终止后在主机环境使用相同锁定SDK/配置编译六种profile成功，不更换或绕过依赖版本。第一次六配置构建与最后会话门禁源码修改时间相差数秒，随后补编集成和原板，用对象时间核对最终输入；未复用旧provisioning_apply/handler对象。集成日志仍显示既有Read Pico禁止reset后restart_task未使用告警和固定SDK Kconfig NOTE，不掩盖或宣称全工程零告警；新增网络/保存帮助代码编译无新增告警。
+
+| 最终配置 | 应用字节 | 本轮范围 |
+| --- | ---: | --- |
+| Read Pico集成 | 1,901,120 | 仅编译，真实main启动仍被门禁拦住 |
+| Read Pico照片 | 406,256 | 仅编译，未刷新/读原片 |
+| Read Pico SD | 332,304 | 仅编译，c876599f…身份保持 |
+| Read Pico显示 | 305,120 | 仅编译，未执行显示 |
+| Read Pico工厂 | 275,344 | 仅编译，未运行 |
+| 原PhotoPainter | 2,059,264 | 仅编译，原保存/连接分支保留 |
+
+最终集成SHA256 `8ab2513d646ac21aed479af8ad080f477da37b199c24f218a13a1a144ecd1b2f`；SD仍`c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3`。固定厂家子模块28cde682…无修改，SDK/组件版本、实际分区、波形/VCOM及现存用户修改保持。依赖锁只保留此前manifest_hash/direct-idf标记差异，未改变组件解析版本；无提交/推送、凭据/私人照片或构建生成物入库。
+
+日志为`.cache/p3-network-{host,asan}-{build,tests}.log`、`p3-network-focused-tests.log`、`p3-network-python-{build,console}.log`、六个`p3-network-idf-*.log`及集成/原板`-final.log`，均忽略。TODO/README/CHANGELOG/架构/索引和[Wi-Fi说明](READ-PICO-WIFI.md)已同步；下一安全工作为其他Web配置setter与消费者、部分初始化/扫描/后台生命周期及元数据空间策略。完整产品/NVS/分区迁移、真实AP/NVS保存/异常断线/重启、HTTP/显示/PMU仍需后续明确权限和人工条件，不扩大测试卡factory许可。
+
+### 2026-10-07 · P3检查式AP扫描、响应与测试资源互斥（仅软件）
+
+按TODO继续审查真实wifi_manager/provisioning扫描。fast-context仍缺服务Key，使用本地限定搜索；不提取凭据。固定SDK esp_wifi.h核对：成功get_ap_records释放整个扫描列表，读取失败需要clear_ap_list；既有cJSON实际API及失败所有权也已核对，没有猜测接口。没有串口/复位/烧录/SD/原片/NVS/射频/AP或相机操作；最后已知设备仍为c876599f…SD诊断/STOPPED，非本轮实时观察。
+
+新板scan_checked仅允许空闲AP，容量1–20项，连接锁拒绝扫描/候选重入和活动连接。检查模式/切换/扫描启动/数量/记录，局部结果完整NUL及数量检查；清理自己的列表并恢复AP成功后才发布记录和count，失败两份输出不变。拒绝的scan_start没有取得列表所有权，不clear别人的列表；成功get_records按SDK契约不重复释放。零热点也需列表清理/恢复成功，不能将SDK错误当空列表。清理失败保留首错、记录不确定并关闭原子driver就绪门禁、取消目标；后续检查式扫描/候选拒绝复用，不自动重试/重启或声称射频已关。
+
+HTTP新板分支传播扫描错误；热点名改用已依赖cJSON构建/转义，检查分配、字段/数组加入、打印以及类型/响应发送，正确释放所有权。移除固定80字节/项和未检查snprintf累加路径。旧板扫描/响应保留，新检查式API旧板返回NOT_SUPPORTED。仅C字段完整/JSON转义保护，不宣称任意二进制SSID、浏览器或实际HTTP/RF已验收；manager锁不覆盖所有直接SDK调用、AP/HTTP启停、后台休眠或部分/重复初始化。
+
+新增12项真实manager+合成SDK测试：上限/成功恢复、空结果、非法参数、活动候选/STA拒绝、扫描/连接重入、模式/启动/数量/记录故障、未终止SSID/超量返回、恢复/清理失败阻止复用。SDK替身即时返回、事件按合成队列推进，不是实际阻塞扫描耗时、FreeRTOS调度或无线验收。新增1项Python仅核对检查式调用、cJSON/返回和测试资源锁，非HTTP运行证明。
+
+第一次普通-j8、ASan-j4并行全量各有1/2项旧DisplayFlowTest失败：同一构建目录pf_storage被多个case的SetUp/TearDown删除/重建，出现mkdir=-1与应保留文件消失；失败日志保留。串行重跑普通 **703/703、31.00秒**，ASan/UBSan **703/703、139.32秒**通过。未改产品显示行为；在该fixture的gtest_discover_tests添加CTest RESOURCE_LOCK，防止同目录用例互相清理。加锁后普通-j8 **703/703、9.93秒**，ASan/UBSan-j4 **703/703、35.45秒**通过。其他套件/独立构建目录仍可并行，不宣称任意外部进程共享工作目录的全局锁。
+
+Python构建38/控制台17，共 **55/55**通过。六配置使用固定IDF v6.1/fff9895c…和既有依赖完成编译，未新增组件解析或更改SDK/组件版本；最终集成/原板wifi_manager和provisioning对象时间均晚于最终源码。集成 **1,901,552字节**、SHA256 `3c2bf6dfd5946036b4c077d5e4339647150df133a3c7b52503a85774daff6bc3`；原板 **2,059,264字节**、`3cef497902e3bdf94f48998554729a61ae87e1eeccda55600a24057424b1d82c`。照片406,256、SD332,304、显示305,120、工厂275,344字节保持；SD SHA仍c876599f…，四个隔离profile不链接改动业务源。最终本轮编译日志无新增warning/error；中间C label声明扩展警告已移除，不把整个历史工程称为零告警。
+
+固定厂家子模块28cde682a4468a581c278761922724f57d976418干净；实际分区、波形/gamma/VCOM、产品入口门禁和用户修改保持，无提交/推送或私有材料/生成物入库。日志`.cache/p3-scan-{host,asan}-{build,tests}.log`、focused、`*-serial-tests.log`、`*-locked-{build,tests}.log`、Python与六配置idf日志忽略。TODO/README/CHANGELOG/架构/索引和Wi-Fi说明同步；下一安全开发为部分/重复初始化/错误退出、后台与其他配置消费者，不以本轮扫描保护代替完整产品或迁移验收。
+
+### 2026-10-07 · P3检查式Wi-Fi初始化与发布前失败退出（仅软件）
+
+上一轮703项扫描软件验证已完成。本轮按TODO继续真实manager/main调用方；fast-context仍缺Key，限定本地读取，不提取凭据。核对固定SDK wifi_default.c/esp_wifi_default.h：默认创建器含assert/ESP_ERROR_CHECK；attach先保存静态netif并可能创建未发布driver，错误后适配层无法证明释放；clear接口API可能已毁driver后返回错误；SDK默认回调清理、driver销毁内部也有忽略错误的调用。固定SDK protocol_examples_common/wifi_connect.c退出范例确认为deinit→clear driver/handlers→netif destroy，沿用其顺序，不修改SDK/厂家来源。
+
+新板初始化原子互斥，首次同步句柄按需创建且稳定保留；部分分配失败显式重试补缺失，不反复替换/增长对象。共享netif核心/默认事件循环应用生命周期保留，不删除其他消费者的基础设施；已有默认循环可借用，已有默认STA/AP拒绝接管。成功重复init不分配/注册、不重置已连接目标；运行态扫描清理关闭ready后，重复init不能绕过锁存。
+
+新板驱动init禁用NVS缓存，RAM存储成功后以检查式new/attach创建接口，不使用abort默认创建器；检查默认回调、hostname、五个本模块回调和初始模式，完整后才发布ready，不start射频/AP/连接。发布前失败保留首错，反序注销成功注册的回调，再退出确认自有驱动并检查接口解绑/销毁；公开API返回成功的路径允许显式重试，不自动循环。driver init错误未取得可靠所有权，不deinit可能属于别人或未知部分状态的driver；attach错误保留其静态指针/接口/driver，任何注销/deinit/clear错误也锁存，不重复释放或声称零泄漏。回调在ready未发布时忽略，预初始化stop/keep/disconnect不碰空锁或射频。
+
+main普通启动和唤醒入口检查初始化返回，错误不进入之后配网/在线分支，也不因ESP_ERROR_CHECK触发panic重启；旧板分支保留。这不是此前板级/SD/周期任务/全部业务对象的退出或运行态deinit；默认SDK帮助函数内部忽略错误的细节也不以公开API成功推断为每个内部资源均已故障注入验收。稳定RTOS句柄/共享核心是有界应用生命周期选择，不是假称所有失败资源归零。产品启动门禁保持。
+
+新增 **28项CTest**，真实manager配合合成SDK/事件/RTOS替身，覆盖成功重复且保留已连接目标、借用默认循环/拒绝外部接口、三处分配/两处netif/五个回调逐点错误、core/loop/driver/RAM/STA/AP attach/默认回调/hostname/模式、注销/driver/接口清理错误、重入、预初始化调用及运行态锁存不可通过init清除。原RAM失败用例改为真正第一次初始化失败，不用先成功再假设第二次init重置；原省电失败仍独立保留。CTest每项新进程模拟设备新启动，不把不可恢复锁存在人为重置同进程后假称产品可恢复。对象标记/调用计数和即时替身不是真实SDK堆、射频、FreeRTOS并发/故障验收。新增1项Python源码接入断言，不能代替实际main启动。
+
+针对性 **70/70、0.48秒**；最终普通CTest-j8 **731/731、11.25秒**，ASan/UBSan-j4 **731/731、38.05秒**；Python构建39、控制台17，共 **56/56**。保留上一轮显示fixture资源锁，并行全量本轮没有失败。源码diff检查通过，本轮最终host/固件日志未出现新增warning/error。
+
+固定IDF v6.1/fff9895c…及既有依赖下六配置编译通过；首次编译后删除旧板分支内失效的Read Pico条件，再完整跑现有六配置Ninja构建。最终集成/原板manager与main对象时间晚于最终源码；集成map的wifi_manager_init实际段0x3c3及初始化状态符号、对象中的新失败日志确认新路径编入，不只凭bin大小推断。最终集成 **1,901,520字节**/SHA256 `dfcf1fc0d0fd4aa1ecd7f17b6cd127fdca86c764a304ebc8df58c0243e3cc4db`；原板 **2,059,264字节**/`5dc6fbab004b5fb943b4ae112fb804314f0dfeaea6740516b21f0df2d9788ffb`。照片406,256、SD332,304、显示305,120、工厂275,344字节保持；隔离profile不链接改动业务源，SD仍c876599f…。
+
+没有串口/复位/烧录/SD/原片/设备配置/NVS/射频/AP/相机操作，无提交/推送；最后已知设备c876599f…SD诊断/STOPPED不是本轮实时确认。固定厂家28cde682a4468a581c278761922724f57d976418干净，分区/波形/gamma/VCOM/SDK组件版本及用户修改保持。日志`.cache/p3-init-{host,asan}-{build,tests}.log`、focused、Python、首次idf及六配置`-final.log`忽略，文档索引/状态同步。下一安全开发为AP/HTTP/后台启动失败和退出、其他SDK/配置消费者；真实初始化/无线/HTTP/NVS/重启和完整产品仍需具体权限及人工验收，不扩大测试卡factory许可。
+
+### 2026-10-07 · P3配网DNS报文边界与端口所有权（仅软件）
+
+按TODO继续检查配网服务。fast-context不可用后限定本地源码搜索；原DNS在异步bind之前返回成功，且将最多512字节原输入复制到512字节输出后再追加16字节答案，存在越界；跨任务close与100毫秒等待没有端口退出确认。只为Read Pico增加分支，旧板保持旧实现，不宣称旧板缺陷本轮已修复。核对固定SDK lwipopts.h确认收发超时支持，FreeRTOS tasks.c确认xTaskCreate允许NULL输出句柄。协议布局/限制参考[RFC1035](https://www.rfc-editor.org/rfc/rfc1035)和[RFC6891](https://www.rfc-editor.org/rfc/rfc6891.html)，受限实现边界明确如下。
+
+便携captive_dns有界解析单问题IN、非压缩标签/≤255字节wire名称、头部计数/标记和可选单个EDNS OPT，失败输出不变。A返回固定IPv4，其他IN类型零答案；响应不冒充递归/认证。OPT校验完整长度和选项边界、不回显未知选项，声明512字节、保留DO，未知版本返回BADVERS。不是通用DNS或全RFC符合性：压缩/多问题/非IN/畸形报文忽略，不实现全部标准错误响应、TCP、DNSSEC或缓存。512字节合法EDNS输入可缩短构造响应而非原长度追加；513及更大输入拒绝。
+
+真实新板适配同步检查socket/250毫秒收发超时/仅AP地址192.168.4.1:53的bind/任务创建，再报告成功；512+1接收缓冲检测超大报文，每次重置客户端地址长度。任务创建前调用方拥有端口，之后仅后台关闭；临时收发错误丢当前报文/继续，致命或短发送结束后台。停止原子控制请求、等待2秒完成位并检查close结果；超时仍持有资源、禁止start，后续显式stop可等真正完成，关闭不确定锁存且不双重关闭/强删。完成位是端口关闭尝试和最后共享状态的确认，不是idle已回收任务堆的证明；稳定事件组按应用生命周期保留。AP停止先检查DNS，再HTTP和射频停止错误，不假称完整退出。AP自身初始radio/DHCP停止及服务互斥仍未处理。
+
+新增 **29项CTest**：便携报文12、真实DNS源码/合成RTOS/socket17。覆盖精确响应、ROOT/非A、255/256名称、所有截断前缀/错误计数/标签/类型、EDNS/BADVERS/512上限及10,000组确定性随机输入；端口/超时设置/任务创建错误、同步提前后台故障、停止超时后确认、关闭失败锁存、临时/致命/短发送、地址长度复位与重入。不创建真实主机UDP socket；替身等待即时执行后台，不能当实际2秒时间测量、FreeRTOS并发或无线验收。每项CTest新进程运行锁存用例。新增1项Python源码接入/调用顺序断言，不能代替实际AP运行。
+
+针对性 **29/29、0.27秒**；最终普通CTest-j8 **760/760、10.41秒**，ASan/UBSan-j4 **760/760、35.25秒**；Python构建40、控制台17，共 **57/57**。首次主机link缺少替身esp_err_to_name，补齐后通过；初次沙箱固件CMake重配无法读取组件注册信息，未算成功，随后授权主机环境固定SDK六配置编译成功，不使用失败缓存日志冒充完成。最终构建日志无新增warning/error，diff检查通过。
+
+最终集成 **1,902,752字节**/SHA256 `66245d1f920b61a398af3b015e141cda4b2dbc20c1ec801bebcc44c7f1874982`；原板 **2,059,264字节**/`0a898e1795b9bc174e656cf4e6677a76cc287fe626c7655c534b7e4ab7406c0d`（重编后身份变化，不用大小不变推断hash保持）。照片406,256/fc202285…、SD332,304/c876599f…、显示305,120/44f691bd…、工厂275,344/1541861d…保持。集成map含真实dns_server_stop_checked/captive_dns_response实际段及调用引用，三个改动业务对象时间晚于源码；原板DNS对象也新编译。固定IDF v6.1/fff9895c…、组件版本、厂家28cde682a4468a581c278761922724f57d976418干净状态保持；依赖锁既有manifest/direct依赖差异未新增版本变动。源码索引/README/TODO/架构/变更/Wi-Fi说明同步，忽略日志为`.cache/p3-dns-*`。
+
+本轮没有串口、复位、烧写回读、显示/SD/原片、设备NVS/真实配置、射频/AP、相机或提交推送操作；最后已知设备c876599f…SD诊断/STOPPED不是实时核查。完整产品/OTA/分区门禁保持。下一安全软件工作为AP/HTTP自身启动失败/退出与后台资源、其他SDK/Web配置消费者和元数据空间策略；真实DNS/端口占用/HTTP/无线/重启/NVS与完整产品验收需另定范围，不扩大测试卡诊断许可。
+
+### 2026-10-07 · P3配网服务所有权、取消与重启前退出（仅软件）
+
+上一轮760项DNS验证为实际软件进展。本轮先读TODO/需求/架构/索引，fast-context仍缺Key，限定本地源码搜索、不提取凭据。检查发现AP初始radio stop及DHCP stop未检查，关闭后旧保存ticket未取消，start/stop可重入并替换服务，main保存完成直接重启不经过AP退出。读取固定IDF httpd_main.c：httpd_start仅成功才写输出handle；httpd_stop失败位于释放之前，成功等待THREAD_STOPPED后删除对象，但其信号量portMAX_DELAY和等待循环没有整体时限。核对esp_netif DHCP接口异常码，不修改SDK或厂家来源。
+
+保留PhotoFrame原配网入口、15个路由和404处理器，提取Read Pico SDK生命周期到wifi_provisioning_ap，不引入另一个产品/相册系统。原板抽出共享路由注册函数，但仍忽略注册错误、保留原ESP_ERROR_CHECK/HTTP失败继续/DNS void启动与停止行为，不宣称旧板本轮已获得新保护。新板控制入口原子重入门禁、活动或失败状态不重复建服务；SSID1–32字节先复制快照。manager只在检查式ready时返回稳定自有AP接口，未准备或已故障不按ifkey接管/停止其他driver；这个getter不预留所有无线操作的锁。
+
+同步检查初始radio stop（仅OK/NOT_STARTED接受）、模式/配置/启动、DHCP stop（仅OK/ALREADY_STOPPED接受）、静态IP/DHCP start、HTTP句柄/所有路由/404、DNS启动。全部成功才begin本次ticket、发布活动状态；此前HTTP资产可响应，扫描/保存受门禁拒绝。初始stop出错未取得AP所有权，不自动第二次stop；HTTP异常发布句柄或成功空句柄视为SDK契约不确定，不盲目释放，锁存到受控恢复。正常启动失败保留首错并按已取得所有权退出，不以清理成功覆盖原错误。
+
+便携provisioning_session增加取消态，generation保持不复用（两位状态，最多0x3fffffff代）；stop/失败使活动/已完成旧ticket失效，下一start生成新ticket。退出检查DNS→HTTP→radio，确认释放才清对象，不跨任务强删或丢弃未确认句柄；空闲stop不调用radio API，避免停止后来独立station。DNS超时允许显式再次等实际关闭确认；DNS close失败锁存不靠重试清除。HTTPstop失败保留相同句柄供后续显式stop检查，不自动循环；radio失败不重复已确认关闭的DNS/HTTP。取消不回滚已开始的NVS保存或响应，不是全栈/多键/掉电原子或客户端ACK证明。
+
+main恢复配网及首次配置两个等待点在AP取消后返回，不永远等待旧保存；保存成功后保留3秒响应延时，实际调用APstop、检查成功才esp_restart，退出失败返回、不自动重启。首次配置setup-complete仍沿用原NVS写法，未在本轮修复所有setter或元数据事务。SDK HTTPstop仍可能无界等待，既有manager/普通HTTP/其他直接SDK消费者尚未与AP控制门禁形成整体互斥；后台任务和整栈退出继续审查，不把本轮作为第一阶段完成。
+
+新增 **24项CTest**：真实AP适配+合成SDK20、真实manager接口准备1、便携session取消3。覆盖完整SDK调用顺序/固定IP及OPEN AP参数、32字节SSID/SDK调用期间原缓冲改变、未初始化拒绝、各radio/DHCP/HTTP/路由/DNS启动错误、初始/SDK契约不确定、清理首错、DNS超时/close失败、HTTP同句柄重试/radio重试、关闭顺序、重入/重复、空闲stop不触radio、已完成ticket取消。取消/commit竞争用真实主机线程1000次核对，不能推广为FreeRTOS/无线并发验收。SDK/HTTP/DNS/延时为替身，无实际端口/网络；不可恢复锁存用例按CTest新进程运行，不人为清除产品状态。路由处理器及真实main只由Python接入/顺序和固件编译验证，未在主机运行HTTP或main业务。
+
+针对性最终 **88/88、0.14秒**（过滤为AP/session/非参数化manager名称，全部参数化用例仍纳入全量）；普通CTest-j8 **784/784、10.19秒**，ASan/UBSan-j4 **784/784、36.69秒**；Python构建41、控制台17，共 **58/58**。收紧DNS close故障测试，不把现实中不可清除的锁存替身改成下一次成功；最终全量重跑通过。Python确认全部15个URI及注册门禁、两个main退出调用和取消等待，不能把源码断言当真实响应/重启验收。diff检查通过，最终host/固件日志无新增warning/error。
+
+固定IDF v6.1/commit `fff9895c82d744c7237be8847347bdd1b07c6643`主机环境六配置编译成功；接入main退出调用后使用同一环境缓存Ninja重新编译集成/原板，相关对象时间晚于最终源码。首次集成map显示公开APstop只在discarded列表，不能假称其实际保留；接入main后最终map实际.text含wifi_provisioning_stop_ap、wifi_provisioning_ap_stop、stop_owned、cancel、manager getter及真实photoframe_app_main，证明调用链进入集成链接，不证明已运行。最终集成 **1,903,392字节**/SHA256 `b3a89b263f17a12c537f7dd9952d05703b0c683209b44da85a3af286ec4a07bb`；原板 **2,059,216字节**/`91594deef1c8536b9ec158e22985b0344fe71e719cd76c8c3234a13d4654c5b8`。共享路由提取使原板产物身份/大小改变，不推断字节保持或网络行为实机回归。
+
+四个隔离配置不链接本轮业务源，身份保持：照片406,256/fc202285…、SD332,304/c876599f…、显示305,120/44f691bd…、工厂275,344/1541861d…；Read Pico integration app_main仍仅保留业务指针、拒绝调用，产品/OTA/迁移门禁不变。固定厂家28cde682a4468a581c278761922724f57d976418干净，组件版本/分区/波形/gamma/VCOM及用户修改保持，dependencies.lock仅既有manifest/direct依赖差异。日志`.cache/p3-ap-{host,asan}-{build,tests}.log`、focused、Python、六配置`-host.log`与集成/原板`-final.log`忽略，TODO/README/索引/架构/变更/Wi-Fi说明同步。
+
+无串口/复位/烧录回读/设备网络/AP/NVS/SD/原片/显示/相机/提交推送操作；最后已知c876599f…SD诊断/STOPPED不是本轮实时核查。下一安全工作为manager/AP/普通HTTP与其他SDK消费者的共享无线生命周期、后台任务/Web setter/元数据空间策略；真实HTTP/DNS/无线/重启和整栈验收另定范围，不扩大测试卡诊断许可。
+
+### 2026-10-07 · P3配网与manager共享无线控制（仅软件）
+
+接续784项生命周期轮次，按TODO审查AP与manager共享无线操作。fast-context缺Key，限定本地源码搜索、不提取凭据；已核对固定FreeRTOS mutex/task API及既有SDK契约。不改固定厂家驱动、SDK、波形/gamma/VCOM、设备分区或产品门禁。
+
+Read Pico复用既有连接mutex，AP begin/quiesce在当前调用取得控制，finish检查owner和当前task并在同任务释放，不跨服务API返回持有mutex。服务保持不复用uint32 owner和阶段，溢出拒绝，不引入另一套产品业务状态。普通station连接/断开/停机/IP设置不得接管AP；稳定ACTIVE允许候选/扫描/省电/hostname但仍与其他控制调用串行。候选/扫描保留IDLE直接API兼容，扫描仍查真实AP模式，不宣称所有未知调用者都已纳入服务lease。
+
+退出先取消保存ticket；manager policy锁下取消旧目标/后台重连并设置失败位，再尝试非阻塞连接锁。候选/扫描busy时不关DNS/HTTP/radio、不give别人的锁；故障finish只释放自己持有的控制，保留服务owner和资源。候选结束自身清理后，后续显式stop才可取锁确认退出，无自动循环/强删。旧owner或另一task不能释放正在执行的AP控制调用；正常停止资源全部确认才清服务owner。候选arm前重新检查阶段，扫描在清理/模式恢复后、policy锁内检查阶段再复制结果。app回调沿用policy锁并检查目标/阶段，取消后不重连旧目标，不使回调等待连接mutex而死锁连接等待。已开始SDK调用仍可能完成，不承诺瞬时硬取消。
+
+新增检查式station stop，接受OK/NOT_STARTED，其他SDK错误关闭ready、禁止自动复用/通过init绕过；main恢复、唤醒凭据错误和网络不可用三处检查其返回，错误不继续后续网络/重启工作。旧板保留原void行为，新板旧void wrapper记录错误。重复init/getter仅在ready且IDLE/ACTIVE允许，不把STARTING/STOPPING/FAILED当准备完毕；native AP改用begin授予控制权，不凭getter操作SDK。
+
+新增 **16项CTest**：真实manager+合成SDK/事件/RTOS12，真实AP适配+合成manager协调接口4。覆盖旧回调不重连、启动所有mutator拒绝且不释放锁、活动服务候选/扫描可用与普通接管拒绝、跨task/旧owner/非法outcome、故障lease/新owner、候选busy先取消但不give候选锁、连接wait嵌套操作、fence期间取消不得arm、scan期间取消输出不变且列表退出、station stop失败/NOT_STARTED，以及AP begin忙不触SDK/旧ticket、quiesce忙保留全部对象、READY发布失败清理与释放、启动清理失败释放自身mutex但保留owner。两套分别运行真实实现验证接口契约，不是单次真实AP+manager+SDK端到端或真实RTOS/RF/HTTP测试；task标识/即时等待为替身。故障锁存case按CTest新进程，未人为恢复产品不可恢复状态。
+
+首次主机编译缺新task替身头和AP协调替身链接，补齐后编译通过；首次798项全量有1项失败：故障后再次busy quiesce阶段变STOPPING，但重复init仍返回OK。修正为仅IDLE/ACTIVE允许重复成功，而非放宽测试；继续发现扫描取消后结果发布缺阶段检查，补代码和2项用例后全量 **800/800** 通过。普通CTest-j8 **10.17秒**，ASan/UBSan-j4 **36.71秒**。新增1项Python接入/控制顺序与main三处调用断言，构建42+控制台17，共 **59/59**；源码断言不证明main真实启动/错误退出已运行。diff检查通过，最终host/六配置固件日志未出现新增warning/error（SDK既有Kconfig NOTE仍保留，不宣称整个工程无诊断）。
+
+固定IDF v6.1/commit `fff9895c82d744c7237be8847347bdd1b07c6643`和既有依赖下六配置编译成功，最终带失败即停的六配置Ninja复跑exit0。集成manager/AP/main与原板manager/main对象时间均晚于最终源码及头。集成map实际.text保留provisioning_begin/quiesce/finish、stop_connecting_checked与photoframe_app_main，不把discarded段当链接成功；入口仍只保留业务指针并输出INTEGRATION_ONLY，不调用产品、板级/SD/显示/NVS/网络。
+
+| 配置 | 字节 | 最终应用SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（未运行） | 1,905,472 | `558ce60d6c43de90fa51cc7993321c382cbbcbce5d84a87634ba58b97e03bcac` |
+| 原板 | 2,059,216 | `519e1d8b192dae9b096f560cb340bb5df0461bb021f5d2579cbb54deca82c9db` |
+| 照片隔离诊断 | 406,256 | `fc20228582b2dbd06cc8b0dbbb84d38859dd793b767945c611e9b73dd2338aab` |
+| SD隔离诊断 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离诊断 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| 工厂隔离诊断 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+四个隔离profile不链接本輪业务源且身份保持；原板重编身份变化不以大小不变推断hash保持。固定厂家28cde682a4468a581c278761922724f57d976418工作树干净；dependencies.lock仅既有manifest/direct依赖差异、组件版本保持。普通HTTP生命周期/后台/其他SDK消费者、Web setter和元数据空间策略继续审查。SDK HTTPstop底层仍可无界等待，不宣称整栈互斥/有界退出、SDK内部资源故障覆盖或完整产品验收；取消不回滚已开始SDK/NVS/响应。
+
+烧写/回读：**未执行**；真机验收：**未执行**。没有串口/复位/设备配置/无线AP/业务网络/NVS/测试卡/原片/显示/相机或提交推送；最后已知c876599f…SD诊断/STOPPED不是实时核查。不扩展测试卡更新许可，完整产品/OTA/迁移门禁保持。同步TODO/README/架构/索引/CHANGELOG/Wi-Fi说明；忽略日志`.cache/p3-radio-{host-build,ctest,asan-build,asan,python-build,python-console,sdk-env}.log`和六配置`*-build.log`/`*-final.log`。当前无必须人工介入的软件阻塞，继续上述安全软件审查；真实配网/迁移/整机运行须另定范围和验收。
+
+### 2026-10-08 · P3普通HTTP与配网共用资源、检查式启动（仅软件）
+
+上一轮800项共享无线控制已完成。本轮跨10月7/8日继续普通HTTP与main入口，fast-context仍缺Key，限定本地源码查找，不提取凭据。发现普通HTTP直接覆盖全局句柄、注册返回被忽略、ready停机后未撤销，main HTTP失败仍可能panic或继续报可用。核对固定IDF httpd_main.c：只有成功才输出handle；stop失败在释放之前，成功等待THREAD_STOPPED，但信号量/循环无总时限。未把公开返回成功推导为SDK内部每个socket/线程释放都已被证明。
+
+新增Read Pico HTTP SDK适配，两入口保留原PhotoFrame业务而共享端口80占用和确切自有句柄，显式FRAME/PROVISION角色只供已接入入口，不是业务状态库或认证机制。原子控制拒绝重入；claim先预约，start检查SDK和全部注册，完整才ACTIVE；stop先关闭ready，确切handle关闭成功才清除；仍保留占用至release确认无句柄/无不确定状态。异常失败输出非空/成功输出空锁存，不盲目close未知对象。注册失败保留确切句柄，调用方检查cleanup但保留原错误；stop错误同句柄可显式重试，不自动循环或覆盖start。
+
+普通HTTP入口自身start/stop控制，已ACTIVE重复init不创建/覆盖；新claim失败不清理别人的角色。保留原46个URI/方法、handler和可选Basic认证，Read Pico逐注册检查；原板通过相同注册帮助函数但继续忽略错误、保留原ready/stop语义，不能声称真实原板网络已验收或产物字节保持。Read Pico所有注册路由先检查服务/ready/请求SDK句柄，未就绪503，再进入原认证/handler。旧handler业务ready点也检查本次请求。新start不继承旧ready；退出失败的残留服务不处理新配置/上传。但已经通过检查或正在运行的handler未被撤销，不是SDK/NVS/文件回滚、响应ACK或全程硬取消。
+
+AP在manager begin/改射频之前预约HTTP；FRAME占用时不触无线/manager/原ticket。manager未取得控制则释放自己尚未start的HTTP预约，不凭零owner猜无线控制。仍保留原15路由/404、DNS与本次保存session；退出DNS→HTTP→radio检查，radio未确认之前不release端口，避免普通服务进入未完成退出的AP阶段。idle AP stop不释放FRAME预约，不重复已确认关闭的HTTP；已有不确定SDK对象/失败资源保留。
+
+main普通启动和wake两处检查HTTP init/ready及相关mDNS返回，不panic或报该分支启动成功；HTTP不就绪不进入之后的late Wi-Fi创建或在线通知。mDNS未实现完整失败清理，之前已启动button/periodic/板级/SD等对象不由这些return自动退出，其他SDK消费者、后台创建/生命周期仍待审查。未把main源码return当整机退出成功。Read Pico无调用的legacy restart_task改为仅旧板编译，保留新板factory-reset禁止门禁，消除新编HTTP源码触发的unused告警，不启用擦除。
+
+新增 **13项CTest**：真实共享HTTP适配+合成SDK11，真实AP适配+真实HTTP适配+合成manager/radio/DNS/SDK2；原24项APcase也改用真实HTTP适配。覆盖预约/角色、重入、唯一创建、显式ready及请求句柄、非法参数、注册错误、SDK契约异常、不确定锁存、同句柄停止重试、AP先查HTTP再改radio、radio退出后才release；manager原case补STARTING拒绝init/getter及ACTIVE重复init断言，不新增计数。两项Python核对原46个完整URI/方法及auth指向、就绪顺序、AP/main接入；普通巨大HTTP模块/实际路由及main未在主机运行，不是端到端HTTP/真实FreeRTOS/RF时序验收。
+
+针对性最终 **37/37**；首次普通812项通过，补外部角色不能撤销ready测试后813项通过。一次ASan发现文件解析错误，另一次清单有896登记：同目录两个构建重叠，使GTest生成HTTP清单写入损坏、manager83个case重复登记。它们不是新用例或有效唯一覆盖；未手改生成文件来伪造通过。重编真实测试来源、由构建器重新发现，检查manager清单83条、CTest库存总813，再跑完整唯一用例。最终普通-j8 **813/813、11.59秒**；ASan/UBSan-j4 **813/813、40.09秒**。Python构建 **44**、控制台 **17**，共 **61/61**；diff检查通过。本轮最终验证避免同目录同时构建/生成清单，不宣称防护所有外部进程并发构建。
+
+首次固件因CMake新增源码触发重配，受限环境不能读取组件registry，exit1未计成功；既有运行请求保留、等待主机环境许可返回后，同一固定SDK六配置构建exit0，没有因观察等待重复启动同一主机请求。最终新板/原板相关源及头后再次六配置缓存Ninja、失败即停循环exit0；最终日志无新增warning/error，保留SDK既有Kconfig NOTE。固定IDF v6.1/fff9895c82d744c7237be8847347bdd1b07c6643，组件版本不变；重配规范化dependencies.lock后当前与HEAD一致，未手工改版本/替换SDK。固定厂家28cde682a4468a581c278761922724f57d976418工作树干净。
+
+最终集成 **1,907,456字节**/SHA256 `69432b505036b782ce520981ba2871c3774b6c5c640e537aedeef846cb94ba58`；原板 **2,059,376字节**/`858513f015b41b5ef4663c6c83e2203d7abea59f35fdf7d2640a4ca01e4319f3`。四隔离profile身份保持：照片406,256/fc202285…、SD332,304/c876599f…、显示305,120/44f691bd…、工厂275,344/1541861d…。集成HTTP/main/AP/service及原板HTTP/main对象时间晚于相关最终源码；集成map实际.text保留HTTP claim/start/stop/release、accepts/ready、register_http_routes和set_ready_checked，不是只读取discarded列表。Read Pico集成入口仍不调用业务指针，产品/OTA/迁移门禁保持。
+
+烧写/回读：**未执行**；真机验收：**未执行**。无串口/复位/设备网络或配置/AP/NVS/SD/测试卡/原片/显示/相机/提交推送操作，最后已知c876599f…SD诊断/STOPPED非实时核查。HTTP停止仍可能无界等待，已开始业务不回滚，普通页面/AP/断线/重启/真实后台和整机失败退出仍待另定范围及验收。下一安全开发是后台创建/生命周期与就绪发布、其余Web配置/文件/空间策略；不扩大测试卡许可。
+
+同步TODO/README/架构/索引/CHANGELOG，新增HTTP说明、Wi-Fi说明交叉引用。忽略日志`.cache/p3-http-*`保留首次registry失败、ASan清单错误/重复登记、主机六配置、最终唯一CTest/库存、Python和产物编译证据；原有用户修改/私有资料保持，生成物不入库。
+
+## 2026-10-08 · P3四类后台创建/发布门禁与合作退出（仅软件）
+
+本轮继续软件开发，不继承测试卡更新许可为产品或网络运行。开工核对TODO、需求/架构/索引及现有main/power接口；fast-context仍缺Windsurf Key，不提取或配置凭据，改限定rg/源码核对，未把未读接口当事实。固定SDK task.h确认xTaskCreate的pdPASS契约、栈字节单位和vTaskDelete(NULL)/idle回收语义；本轮不改厂家驱动/波形/校准、VCOM或频率参数。
+
+Read Pico新SDK包装`read_pico_background`只管理原四类任务的固定槽，不引入另一个产品/相册系统。原名称、4096/16384/8192/8192栈字节及优先级5保留；逐次检查创建，任务先等待，main所需角色齐备及HTTP ready发布成功后才放行。创建/发布控制拒绝重入，取消锁存，本次启动不复用槽位；创建失败使先前等待任务自行退出，不猜句柄、跨任务强删或自动重建。发布与取消竞争不能重新激活，HTTP就绪由外层检查式清理，不假称取消回滚外部ready。
+
+power睡眠/轮播和button在安全循环边界检查门禁/HTTP，late Wi-Fi改100ms有限event等待、空事件组/当前连接检查；Read Pico业务函数return后由包装层自删除。在线启动入口/延迟OTA前复查门禁；电源及其后OTA/相册/配网初始化检查式返回，原板保留旧创建/自删除/等待分支。main包装启动函数，返回未活动则取消并最多2秒确认其他自有回调返回，确认后才关闭仍ready的FRAME HTTP；退出busy/超时不继续清理。联网恢复同样先取消/有限等待，只豁免确实正在执行的自有调用者，未确认不改变射频/关闭HTTP。
+
+另修正Read Pico睡眠门禁返回的流程：四处条件提前睡眠不再继续轮播；CLEAR和timer/rotate唤醒函数返回不再落入普通冷启动。未启用PMU睡眠、未重做电源策略；wake配置窗口原有HTTP可用行为不是完整四任务启动，窗口/失败返回后只尝试上述检查式退出。已有唤醒工作不回滚，不宣称实机睡醒验收。
+
+新增 **18项CTest**，真实包装C接合成FreeRTOS创建/排队/时间/自删除：非法参数、必需角色/重复、创建后等待、取消后不复用、首个/后续创建失败、ready失败、发布中取消、重入、创建/发布中busy取消、不强删/有界超时/显式再确认、当前执行者豁免且不漏其他任务、完成句柄复用及tick回绕。每个CTest独立进程，静态故障状态无测试reset。新增 **3项Python源码断言**核对main/power真实接入、顺序、回调return/旧板分支、恢复/启动返回先等待、睡眠拒绝不继续推进；巨大main/power业务未在主机执行，合成调度不是实RTOS并发/RF/HTTP时序证明。
+
+主机：针对性 **18/18，0.16秒**；完整普通-j8 **831/831，8.92秒**；ASan/UBSan-j4 **831/831，37.85秒**，库存确认831且新组18、无上一轮重复登记问题。最后的sleep/boot-return修改只改main及源码断言，适配C/18项CTest源码未再变；Python最终 **47项，2.715秒**，控制台 **17项**，合计 **64/64**。diff检查通过，各目录不并发重复构建。
+
+固件：首次受限SDK重配不能读取组件索引exit1，未计成功；同一固定SDK在获准主机环境重配后六配置exit0，不烧录。后续main修改后最终再串行六配置Ninja、失败即停循环exit0；最终日志无新增warning/error，固定SDK的Kconfig NOTE不当源码错误。IDF v6.1/`fff9895c82d744c7237be8847347bdd1b07c6643`不变，dependencies.lock与HEAD一致；厂家`28cde682a4468a581c278761922724f57d976418`工作树干净。未改版本或通过凭据变量绕过限制。
+
+最终产物：集成 **1,909,264字节**/SHA256 `8de840e5a154178ff695cbcc638bdcc07cf471be141695bba3ff499f9eade651`；原板 **2,059,376字节**/`2b0479598cd60c400f0ca39bd4ac86b2d8021e9dd0f8132905fc66580808ce39`。四隔离profile身份保持：照片406,256/fc202285…、SD332,304/c876599f…、显示305,120/44f691bd…、工厂275,344/1541861d…。main/power/background对象晚于最终相关源码；集成map实际.text保留background preparing/running/cancel/add/activate/cancel_and_wait、photoframe_boot/photoframe_app_main、button/late和power入口，不是仅discarded项。集成启动仍只保留业务指针并记录INTEGRATION_ONLY，不调用产品，产品/OTA/迁移门禁保持。
+
+烧写与回读：**未执行**。真机验收：**未执行**。没有串口、复位、设备/业务网络或AP、NVS/SD/测试卡/原片/显示/相机/提交推送操作。最后已知c876599f…SD诊断/STOPPED仅历史证据，不是实时核查。
+
+合作等待确认只证明这四类其他回调返回，不证明idle已回收TCB/栈、所有timer/HTTP/SDK退出或整机零泄漏；取消不硬中断或回滚已开始的文件/NVS/HA/显示操作。HTTPstop仍可能无界等待；periodic timer/SNTP未纳入该门禁，mDNS/板级/SD及其他消费者仍未完整清理。下一安全软件审查是periodic_tasks重复init/timer失败所有权、SNTP并发与NVS时间戳错误，其余Web消费者/空间策略；真实恢复/断线/重启和完整产品仍需另定范围与人工验收。
+
+同步TODO/README/架构/索引/CHANGELOG和HTTP交叉说明，新增后台说明。忽略的`.cache/p3-background-*`保留初始registry失败、主机/最终六配置、CTest唯一清单、普通/ASan及Python证据；生成物不入库，用户原有修改和私人材料保留。
+
+## 2026-10-08 · P3周期timer、串行回调与完成时间戳（仅软件）
+
+上一目标回合属于progress：四类后台代码/测试/六配置与文档已修改并验证。本轮从当前TODO及周期任务源码继续，不将历史测试卡授权扩大为网络或产品运行。核对需求/架构/索引、main/power/HTTP/utils/OTA调用方；fast-context仍缺Windsurf Key，未提取/设置凭据，改限定rg和实际源码。固定SDK esp_timer.h/c明确共享TASK派发、stop_blocking用户任务确认及delete异步回收；lwIP sntp.c明确esp_sntp_init/stop为void tcpip_callback入队，未将其当退出ACK或真机证据。
+
+Read Pico保留PhotoFrame periodic接口/日同步业务，CMake只在新板改选`read_pico_periodic.c`；旧板继续原periodic_tasks.c。新板重复成功init不清注册表、不覆盖timer或再创建worker；逐步检查timer创建/每小时启动/受管worker创建，失败保留主错误并检查确切自有timer退出。成功空句柄或错误带句柄的SDK异常锁存不确定，不猜close；stop/delete错误保留句柄、不用init绕过，后续可显式stop确认。
+
+共享timer回调仅原子接纳检查/合并due，无业务/NVS/网络/日志/等待。新增第五后台角色PERIODIC，8192字节/优先级5，普通启动把它加入必需角色；worker等HTTP发布后运行。批次忙时保留due再尝试，不直接阻塞共享timer；原18后台用例只把非法mask改为按COUNT计算，未减少覆盖或重置静态故障状态。
+
+注册/批次/force/run_now/时间戳读写用零等待控制串行，回调中重入报错不改表或双跑；15字节NVS键/16槽校验，满表可更新已有任务、interval0禁用保持。只NOT_FOUND当缺失，IO/类型/无效记录不触发业务；clock有效性、回退/未来及安全差值检查，输出成功且接纳仍有效才发布。force为本次启动易失请求，不erase/commit；run_now一次控制强制并执行指定任务，不把别人的消费或无关批次当本请求成功。批次失败不继续下一个任务。
+
+回调错误传播、不写完成时间；成功后检查有效时钟及NVS open/set/commit，记录未确认则本任务锁存，不由重复init/register/force重跑已发生外部操作。真实NVS失败可能已部分保存，不保证旧记录未变/掉电原子，取消不回滚已改系统时钟、RTC、NVS或网络。main在注册后再请求RTC缺失的强制同步，三处批次与power漂移检查结果；恢复/启动返回先关闭周期接纳、取消/有限等待受管回调，再确认timer退出，未确认不继续射频/HTTP清理。手动HTTP批次仍忙时stop保护保留资源。
+
+Read Pico SNTP通知标记改atomic，执行循环复查接纳/连接，取消或断线不必等满10秒；结束会尝试SDK异步stop，但无ACK，不宣称服务已关闭，通知仍没有应用请求号。有效时钟和RTC更新失败不确认本次任务。手动Web时间同步检查run_now失败，503 JSON不发送成功时间；成功路径检查clock/localtime/格式化、JSON各分配及发送。配置消费方检查同步结果，但NTP setter旧void保存/可变RAM仍未完成检查式持久化/并发；日志只说明配置可能已变化、不假称回滚。
+
+新增 **36项CTest**：真实周期适配C+真实后台包装C接合成timer/FreeRTOS/NVS/time，覆盖重复/失败所有权、SDK异常输出、唯一worker、timer只排队、取消/重入、停止/删除失败与确切重试、键名/满表、缺失/IO/类型/无效记录、输出不变、无效clock/强制bootstrap/回退/极值、易失force/单任务、回调及open/set/commit失败、故障不能重复init/注册/force绕过、回调/读取中取消与批次失败不继续。每CTest独立进程，SDK对象/调度为替身，无假称实FreeRTOS/RF/浏览器/NVS/掉电验收。
+
+新增 **3项Python**源码断言核对CMake新板选择、timer无重业务、main/power/HTTP/utils接入、恢复/启动返回关闭顺序与原子通知；同时防止把request_stop误接在普通connect。开发中一次大patch临时误接该位置，源码检查时发现并移到恢复入口，未编译部署该错误版本，最终断言证明connect无该调用。巨大main/HTTP/真实SNTP回调未在主机运行，JSON/RTC/SDK服务仅源码与固件编译证据，不将这些断言当行为测试。
+
+主机：最终针对性 **54/54、0.38秒**（36周期+18后台）；完整普通-j8 **867/867、10.53秒**；ASan/UBSan-j4 **867/867、38.78秒**。ASan库存总867，新组36，未重复登记；目录各自单构建，无上一轮重叠发现问题。最后修改只涉及HTTP/配置消费者的错误/响应检查和Python断言，适配C/Cpp已测来源未再改。Python最终构建 **50、2.550秒**、控制台 **17**，共 **67/67**；diff检查通过。
+
+固件：首次受限CMake重配因组件索引不可达exit1，未计成功；保留同一主机授权请求并等待活句柄，不因观察等待重启请求。获准主机环境后同一固定SDK六配置、失败即停循环exit0；最终相关源/头在编译前完成，无新增warning/error。IDF v6.1/`fff9895c82d744c7237be8847347bdd1b07c6643`、厂家`28cde682a4468a581c278761922724f57d976418`不变且厂家工作树干净，dependencies.lock重配暂有manifest规范化差异，最终与HEAD一致，组件版本不改、未手动覆盖锁。
+
+最终集成 **1,910,864字节**/SHA256 `090c43e2f7942edfa77281b2b1411c1c3bc132891883ab9bbdb7ca36cfde5504`；原板 **2,059,376字节**/`9542a6dcbfbde2a6cd1f319a98fd87103c999a79834e34a37a29c2189cec2282`。四隔离profile保持：照片406,256/fc202285…、SD332,304/c876599f…、显示305,120/44f691bd…、工厂275,344/1541861d…。main/power/utils/HTTP/periodic/background对象晚于最终相关源/头；map实际.text保留timer_callback/periodic_worker、is_active/request_stop/init/stop/register/force/run_now/check_and_run及SNTP/main/time_sync入口，未把discarded的未用查询API当实际业务链接。集成启动仍INTEGRATION_ONLY、不调用业务指针，产品/OTA/迁移门禁保持。
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/真实网络/AP、NVS/SD/测试卡/原片/显示/相机/提交推送操作，不改频率参数/固定驱动/波形/VCOM校准。最后已知设备c876599f…SD诊断/STOPPED仅此前证据，不是实时观察。
+
+未闭环：SDK SNTP所有权、void入队失败/异步关闭确认、无请求号的延迟回复关联、NTP及其他配置setter保存/RAM并发、其他Web/文件消费者/长期空间策略和整机资源退出。合作回调确认/timer关闭不保证idle已回收全部内存，HTTPstop仍可能无界等待；完整产品/RF/恢复/重启/PMU睡醒需要另定范围与人工验收。下一步优先SNTP SDK服务与配置消费者的软件审查，保留完整开发目标，不将本适配通过标成P3/P5完成。
+
+同步TODO/README/架构/索引/CHANGELOG，新增周期说明并标明后台说明四类/831为历史。忽略日志`.cache/p3-periodic-*`保留首次registry失败、获准六配置、最终Python、唯一库存和普通/ASan证据；生成物不入库，原有用户修改和私人材料保留。
+
+## 2026-10-08 · P3检查式NTP保存、独立副本与SDK审查（仅软件）
+
+上一回合为progress，本轮按TODO继续检查NTP保存/SDK退出，不将旧测试卡许可扩大到联网或产品运行。先读需求/架构/索引；fast-context缺Key，未提取或设置凭据，改限定rg与实际源码。固定SDK esp_netif_sntp.h/c及lwIP sntp.c只读核对：setservername借用指针，异步stop没有ACK；stop不取消DNS，晚到DNS回调忽略hostname/arg并使用全局当前服务器。netif deinit为void且不检查TCPIP停止返回，释放存储，不能直接当作完整退出保证。本轮未改SDK/厂家驱动或实际联网复现。
+
+新板NTP检查式setter在非阻塞控制内校验/复制完整请求，检查NVS open/set/commit，关闭后仅成功才发布RAM。拒绝超长截断、空白/控制/非ASCII，空串仍保存为默认回退；不宣称完整域名/IP语法、可达性/信任验证。失败RAM保留，但NVS set/commit可能已经生效，测试刻意保留此模型而不假造回滚；后续显式保存可再次核对。void兼容入口在新板记录未确认，旧板原行为保留。
+
+新板副本读取返回调用方拥有的值，容量/忙错误不改输出且无NVS IO；检查式读写及启动加载共用原子控制，加载失败不发布部分NTP值。此控制不覆盖其他配置/旧借用getter，init仍是启动专用，不是全配置在线reload。utils先确认本字段保存再触发同步，失败立即返回；已保存而同步失败明确配置已变化、不假称多字段回滚。GET先获取NTP副本，忙响应503、检查JSON对象/NTP字段分配；没有主机执行巨大HTTP/utils/main或证明所有字段分配/请求路径已安全。
+
+新增 **17项CTest**（16新板、1旧板）：真实config_manager C与合成NVS，覆盖默认无IO副本、成功保存单commit/关闭、open/set/commit失败不发RAM、已部分持久化、输入在存储调用中被修改、保存/加载重入、真实双线程忙拒绝、独立副本/精确容量/输出不变、空串/最大长度/超长/null/文本字符、失败reload保留最后确认NTP、畸形持久值与void兼容；旧板检查原截断/RAM先写行为未改变。实际并发用例只验证这些检查式入口，不用未保护getter参加测试或宣称全局竞争已解决；ASan/UBSan不是TSan。
+
+主机最终：17项针对性各重复20次，**17/17唯一、340次执行通过，3.37秒**；完整普通-j8 **884/884、10.43秒**；ASan/UBSan-j4 **884/884、39.18秒**。库存884无重复登记。新增2项Python源码断言，构建 **52/52、2.620秒**、控制台 **17/17**，共 **69/69**。两主机目录分别完整构建后运行，没有同目录重叠构建；日志没有新增编译warning/error。
+
+固件最终：固定IDF v6.1六配置失败即停循环exit0；均为最终C/header源码后编译，无新增warning/error；dependencies.lock与HEAD一致、厂家子模块干净。无需新的主机网络授权（本轮增量构建成功）。集成map实际.text保留config_manager_init/set_ntp_server_checked/copy_ntp_server及config_handler，非仅discarded条目；集成启动仍INTEGRATION_ONLY，不调用业务入口。
+
+| 配置 | 字节 | 最终SHA256 |
+| --- | ---: | --- |
+| 集成 | 1,911,520 | `b68e48b54f9bdf008b9bdf8c17bcaab42de0d5b196b03f245558c8998ce67d5e` |
+| 原板 | 2,059,392 | `417a2d1ed94f65bf5ee38e15cb27ba54070c149253874e222414575f0bb62f4b` |
+| 照片 | 406,256 | `ce07b6989408db79741ec261e12099158af3d98f9c707d879f74930e1b867e47` |
+| SD | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| 工厂 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写与回读：**未执行**。真机验收：**未执行**。无串口/复位/设备网络/AP、真实NVS/SD/测试卡/照片/显示/相机/提交推送操作；不改频率、VCOM、波形或固定厂家源码。设备最后已知c876599f…SD诊断/STOPPED为历史，不是本轮实时核查。
+
+剩余重要限制：main/SNTP仍用借用可变缓存，检查式保存不保证SDK读它时无竞争；晚到DNS/回复归属、服务所有权、退出确认均未修复。仅更换async stop或netif deinit不足以解决，需要继续审查应用拥有的解析/服务生命周期及失败保留；时区/其余setter、其他文件/Web消费者/空间策略/整机退出也待完成。产品/OTA/迁移门禁保持，不把这些软件检查记作P3/P5或完整网络验收。
+
+同步TODO/README/架构/索引/CHANGELOG及周期说明；`.cache/p3-ntp-*`保存构建、唯一库存、重复/全量测试与Python记录。所有生成物忽略，不提交凭据/原片或覆盖既有用户修改。
+
+## 2026-10-08 · P3自有DNS身份、回复关联和检查式SNTP服务（仅软件）
+
+上一回合为progress，NTP真实保存/测试/六配置与文档完成。本轮按TODO检查固定SDK DNS/SNTP/core IPC、调用方、需求/架构/索引；fast-context仍缺Key，未提取或设置凭据，改限定rg/实际源码。SDK sntp_setservername借用pointer、stop不取消pending DNS、dns_found无请求身份；netif deinit为void不能作为退出确认。因此未仅替换成该包装或在异步stop后释放临时字符串。
+
+新板沿用PhotoFrame日同步/手动请求/RTC/轮播业务，main先复制NTP，read_pico_sntp再持有完整副本。带不回绕ticket的外层DNS在core解析，使用原SDK默认地址类型，缓存/异步结果均检查；只匹配ticket/PENDING发布。SDK仅设置数字地址，不发内部DNS、不借用活RAM。超时/断线/取消保留pending静态槽，晚到结果不能启动同步，NOT_FINISHED不复用；退出还core栅栏确认已结束派发，不清全局DNS缓存/外来对象。
+
+单服务零等待控制，request_stop永久关闭本启动接纳/时钟应用。拒绝外来已启用/已配置SNTP，不先stop或覆盖。SDK启动前真实分配器预约准确UDP PCB，null返回NO_MEM、尚未配置；当前同步init独占消耗，其他UDP/DNS透传。异常未消费只清自己PCB并锁存。SDK启动后enabled检查、结束先关闭clock接纳，再core停止自有服务、检查disabled后清引用；IPC返回+callback执行ACK均需确认。忙/未确认保留，故障不由重复sync/显式stop成功自动消除。
+
+外层CMake仅Read Pico集成给固定lwIP启用SNTP_CHECK_RESPONSE=2/关闭RTT补偿；未改SDK/厂家源码。链接包装SDK取请求时间，本启动严格单调唯一、相同wall-clock或回退不复用；SDK原编码并核对来源地址/端口/Originate。synthetic timestamp只是回声关联，不作为clock/RTT校时；无效/耗尽锁存。SDK通过关联后自有强apply hook检查首次接纳、非阻塞周期gate、2020–2099/微秒和settimeofday返回；退出及连接/接纳复查后才输出confirmed time，main再检查RTC/轮播前门禁。已发生clock/RTC/NVS不可回滚。
+
+main恢复/启动返回先请求SNTP和周期停机、等受管回调、检查周期timer和SNTP退出，然后才无线/HTTP；pending/busy/fault不继续。旧板原同步/通知路径保留，SDK编译没有新关联宏。强hook是新板唯一客户端契约：不接管/停止外来服务，但外来hook不会更新clock，不能当多客户端共享支持。
+
+新增 **54项CTest**：5便携时间戳、40真实服务C接合成DNS/core/RTOS/clock、9真实服务C与**固定SDK原始lwIP sntp.c**接合成UDP/pbuf/timeout。覆盖副本/参数/默认地址类型、DNS缓存/异步/失败/错误地址/ticket、未完成不复用、晚到结果不启动、core nominal success却无ACK、启动/资源不足/自有关闭失败保留、外来不覆盖、timeout/断线/取消/late-hook/clock失败/无效时间/重复/票据时间戳耗尽与tick回绕。实际SDK报文用例直接运行原parser，验证正确/旧Originate(含clock回退)、错误来源/端口/长度/模式/KoD、重复/取消回复、OOM预约避实际null断言、PCB/timer退出，不是模型重写报文处理。
+
+两主机目录显式READ_PICO_TEST_IDF_PATH指固定SDK；CMake校验原文件SHA256 `8695155c80c807d7ac949801b023d4e2f27db7975f78bcbba726bcdc012020e7`，不下载/复制SDK。没有此参数默认主机构建**不含9项SDK测试**，不是相同覆盖。替身startup延迟100ms/地址模型简化/内存与IO非真实，ASan不是TSan，也未主机执行巨大main/HTTP/RTC及完整SDK网络时序。
+
+最终主机：普通-j8 **938/938、11.58秒**；ASan/UBSan-j4 **938/938、43.35秒**；库存938无重复。54项针对性每项重复20次，**1,080次执行/54唯一，8.39秒**。新增2项Python核对main服务/退出顺序、配置副本、root/main CMake/clock/包装/失败接入，保留原测试覆盖并调整此前旧通知断言；最终Python构建 **54/54、3.059秒**、控制台 **17/17、0.007秒**，总 **71**。主机两个目录各自构建后测试，无同目录重复构建。开发初次macOS timeval窄化错误及缺少SDK替身声明已修正，不能计首次失败为通过。
+
+固件：首次受限重配组件索引失败exit1，未计成功；同一主机授权handle继续等待至确认SDK会话，未因观察timeout重启。主机授权固定SDK集成/六配置失败即停循环exit0。最后DNS完成栅栏及默认地址类型/RTC门禁发生在其中一次集成编译之后，按对象时间发现旧源，已等原循环完整退出，再逐配置增量复编；最终source 11:27:06/07，对象11:27:13，六配置exit0、无新增warning/error。
+
+编译命令实含SNTP_CHECK_RESPONSE=2/COMP_ROUNDTRIP=0；SDK对象有last_timestamp_sent/last_server_address，最终ELF SDK send_request调用__wrap_sntp_get_system_time，init调用__wrap_udp_new_ip_type。实际.text的read_pico_sntp_sync/stop/request_stop、包装及强sntp_sync_time均来自main适配；SDK弱apply在discarded，不把discarded条目当接入。原板compile_commands无这两个宏。固定IDF `fff9895c82d744c7237be8847347bdd1b07c6643`、厂家`28cde682a4468a581c278761922724f57d976418`均干净；锁重配临时manifest hash变化，最终dependencies.lock与HEAD一致，版本不改、没有手动覆盖锁。集成入口仍INTEGRATION_ONLY，不调用产品。
+
+| 配置 | 字节 | 最终SHA256 |
+| --- | ---: | --- |
+| 集成 | 1,913,968 | `126a5b7a700330e58ec4a5295a9f1b19678b3a3f20419e7814318197ed300c55` |
+| 原板 | 2,059,392 | `aa04afaba467bf1bd1cb28fd7cadc2e31696463644c472ed9d6c2351a737ef0c` |
+| 照片 | 406,256 | `ce07b6989408db79741ec261e12099158af3d98f9c707d879f74930e1b867e47` |
+| SD | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| 工厂 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/真实RF/DNS/AP/NVS/SD/测试卡/照片/显示/相机/提交推送操作；不改频率、VCOM、波形或固定厂家源码。最后已知c876599f…/STOPPED只是历史，不是实时检查。
+
+重要边界：10秒预算只约束应用等待，SDK IPC/连接检查/clock IO仍可能阻塞；回复关联不是NTS/可信时间或完整NTP规则，SDK级3/4注释中LI/版本/stratum/Root Dispersion尚未全部检查。门禁不回滚最后检查后已开始clock/RTC/NVS；不是双栈/RF/真实SDK调度或全局DNS/整个网络/整机资源退出验收。产品/OTA/迁移门禁保持，不计P3/P5完成。下一安全开发为时区/其他setter、JSON/远端结果传播、多字段配置、其他文件/空间策略和全栈生命周期；真实同步/恢复/PMU睡醒/触摸/完整产品需另定人工范围。
+
+同步TODO/README/架构/索引/CHANGELOG/周期说明及DEVELOPMENT，新增SNTP说明。`.cache/p3-sntp-*`保留首次失败、获准构建、最终六配置、对象/链接检查、普通/ASan/重复/唯一清单与Python记录，生成物不入库、保留用户修改与私人材料。
+
+## 2026-10-08 · P3时区保存、部分应用结果与独立时间响应（仅软件）
+
+上一目标回合为progress，SNTP真实适配/固定SDK报文测试/编译和文档完成。本轮按TODO继续核对时区保存、环境安装、HTTP配置/时间/手动同步消费者；需求/架构/索引作为基线，fast-context仍缺Key、不提取凭据，改限定rg/实际源码。没有继承测试卡许可为产品/真实配置或网络操作。
+
+新板config_manager_set_timezone检查NVS open/set/commit，候选先复制，关闭后才发布保存确认的RAM并应用。空串/超长/控制/非ASCII拒绝，不截断；保留上游仅形状检查和可打印空格，不引入新POSIX解析器。保存错误不改RAM/环境，NVS可能已部分生效、不假称持久值原样。commit已确认后setenv失败/读回不一致返回NOT_FINISHED，保留已保存配置和false应用标记，调用方明确部分完成；后续显式请求可再保存/应用，无自动写入或清理。
+
+tzset是void，无语法结果；应用true只证明setenv/读回一致且tzset调用返回，不证明完整规则/DST被正确解释，非法语法仍可能库回退UTC。启动也检查文本/环境应用，错误拒绝；失败保留先前确认时区/NTP RAM，若应用已尝试失败保持false，未尝试则保留旧应用状态，不回滚全局环境或全部缓存。init仍启动专用，不是全配置并发reload/原子事务。
+
+此前ntp_control扩成time_config_control，保护新板时区、NTP检查式读写、加载与副本。重入/忙无额外IO/输出；不覆盖其他setter、libc全局所有消费者或借用getter。配置GET新增timezone_applied，时区与应用标记复制后才加入JSON；NTP/时区各自副本不等于整配置原子快照。新板时间GET/手动同步成功响应在同一控制内检查有效time/localtime_r/strftime/容量，再一次发布时间戳、格式化文本和时区独立字符串。不把带库指针的tm留到解锁后格式化；错误保持全部输出。
+
+HTTP忙/未应用/无效clock不发送成功时间，JSON对象/各时间字段/Print/类型及发送返回均检查；手动同步触发前检查HTTP就绪。已执行同步不会因响应失败回滚。utils仅新板依赖setter检查式应用，不二次setenv/tzset，NOT_FINISHED明确已保存但未应用，停止本次后续字段；此前字段可能已改，不承诺多字段事务。旧板原保存/RAM先写及调用方应用环境行为保持。
+
+新增 **25项CTest**（24新板、1旧板）：真实config_manager C接合成NVS、setenv/时钟/格式化错误；正常环境/格式化使用主机libc并由fixture恢复本进程环境。覆盖默认副本/未应用、commit关闭先于应用、open/set/commit失败、部分NVS、应用失败/读回不一致及显式重做、输入在IO中变化、null/空/形状/最长/超长、容量/输出不变、NTP/时区/加载重入、环境应用持锁、实际双线程busy、无效time/localtime/strftime、失败加载保留缓存/应用状态、缺失默认不写、独立非UTC时间文本与旧板原契约。未改变本机系统clock；宏只作用真实config_manager测试源，不作用设备或主机其他进程。
+
+开发中先实现tm输出，随后发现库指针不适合跨保护范围作为独立响应副本，改为保护内格式化字符串并补strftime失败测试；962项/24针对性是中间证据，不作为最终身份。本轮巨大HTTP/utils/main未在主机执行，新增2项Python为源码接入/失败路径断言，原手动时间响应检查随帮助函数重构移动、未删除原JSON/发送错误覆盖；非真实浏览器或ESP newlib/DST验收，ASan不是TSan。
+
+最终主机：普通-j8 **963/963、11.57秒**；ASan/UBSan-j4 **963/963、40.52秒**；唯一库存963、无重复。25针对性各重复20次，**500次执行/25唯一、5.40秒**。Python构建 **56/56、3.510秒**、控制台 **17/17、0.010秒**，共 **73**。主机各目录单独构建后运行，无同目录重叠构建；diff检查通过。
+
+固件：固定SDK六配置失败即停循环最终exit0，无新增warning/error。本轮增量重配/编译受限环境成功，无新的主机网络授权请求。最后C/header 11:48:02，集成config_manager/HTTP对象11:48:58，最终源后编译；map实际.text保留set_timezone/copy_timezone/copy_local_time/send_current_time_checked，非仅discarded。固定IDF `fff9895c82d744c7237be8847347bdd1b07c6643`、厂家`28cde682a4468a581c278761922724f57d976418`不变，厂家干净、dependencies.lock与HEAD一致，未手动覆盖锁或改版本。集成入口仍INTEGRATION_ONLY、不调用产品。
+
+| 配置 | 字节 | 最终SHA256 |
+| --- | ---: | --- |
+| 集成 | 1,914,928 | `f797b0bc3287fb3f57994bbeaa743d0c533e721a790b46629f07008c00d40223` |
+| 原板 | 2,059,392 | `70a99491dd61865388d6f688ed3994a6e03a3e0999cd087c609fe43fbccf543b` |
+| 照片 | 406,256 | `a0de8972328d18bedbe6b023094df4208258682a450360fb626f2f8497f3a8c1` |
+| SD | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| 工厂 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/真实TZ/NVS/RF/AP/SD/测试卡/原片/显示/相机/提交推送；不改频率、VCOM、波形或固定厂家源码。最后已知c876599f…/STOPPED是此前设备证据，不是本轮实时检查。
+
+未闭环：全TZ/DST语义、其他RTC/cron/电源调度和libc消费者、全部配置/远端结果/多字段保存、文件/空间策略/全栈生命周期、真实网络/恢复/睡醒/触摸与产品验收。部分失败不回滚已变NVS/环境/clock；门禁保持，不计P3/P5完成。下一安全软件先处理其余setter/JSON与远端错误传播，再评估真实调度消费者；不把安全适配通过替代完整目标。
+
+同步TODO/README/架构/索引/CHANGELOG及周期/SNTP交叉说明，新增时区说明；`.cache/p3-timezone-*`保留中间/最终主机、完整/重复/唯一清单、Python和六配置编译记录。生成物不入库，用户修改/私人资料保留。
+
+## 2026-10-08 · P3远端步骤错误、真实保存与版本确认（仅软件）
+
+上一目标回合为progress，时区实际代码/主机/六配置与文档完成。本轮按TODO及需求/架构/索引核对图片服务器响应头、远端三组配置、转换/保存/重载、版本及五个HTTP消费者。fast-context仍缺Key、不提取凭据，改限定rg/实际源码；研究/旧卡授权不作为新产品/联网权限。
+
+新板remote_config便携协调器沿用三个组及general→processing→palette顺序。配置头容量2048含NUL，完整复制、不截断、不重复覆盖；seen每响应重置，异常锁存download owner，不能仅靠SDK事件返回值。解析前16层/NUL转义保护，真实cJSON严格单文档、object组、重复/大小写等价键及非有限数检查，全部结构通过后才回调。未知根metadata沿用忽略，空/未知-only不触发版本；没有把SDK C字符串接口当原始HTTP NUL后字节完整验证，也不是所有组内字段语义/枚举/range验证。
+
+general应用/processing保存/palette保存及reload的已报告错误停止后续回调，记录失败阶段与已完成mask，不touch版本/继续显示/确认本次下载ETag。304保留payload并检查后才发布not_modified成功。完成衍生文件保留、不删原片；general此前可能已改变URL/清旧ETag或其他字段，不宣称整个缓存/配置没变。配置/版本在图像显示前确认，后续图像失败不回滚配置。
+
+processing真实C新板逐项检查13个set，第一个失败不继续、不commit，有限float/字符串终止保护；defaults清零固定槽以保证旧转换器截断边界有NUL。palette save错误/重载传播，load仅NOT_FOUND允许默认，IO/类型/精确长度/非有限record拒绝、不改输出。没有更改默认数值、灰阶gamma、VCOM、频率或厂家源码；这些是保存/错误边界，不是实屏调参。
+
+检查式revision在既有time_config_control内检查clock/int64溢出、NVS open/set/commit/close，只确认后发布RAM。逻辑秒token取max(now,previous+1)，同秒/clock回退不倒退；不是严格实时戳、跨客户端CAS或配置事务。直接void setter新板也检查、拒回退；下载版本头改受保护副本，失败不开始下载且有明确UI错误；加载失败保留最后确认revision。NVS set/commit失败可能已改存储，不假称回滚。五个HTTP配置/处理/调色板更新检查版本，未确认503部分成功而非成功JSON；palette先reload确认再版本。旧板原顺序/void/RAM先写保持。
+
+重要未闭环：general内部仍有void setter/未检查字段，callback返回ESP_OK并不证明所有内部持久化/语义都成功。协调器成功仅证明已接入回调返回与版本确认；整体应用互斥、多字段原子性、重复请求副作用、其余JSON/发送/认证/文件与真实调度消费者仍待逐项处理。本轮不把这一增量称为完整可靠远端配置或P3/P5完成。
+
+新增 **44项CTest**：20便携协调器+真实cJSON（回调/finish错误、先验结构、完整/尾随/重复/NUL/深度/有限值、全部解析分配点故障、header边界），11真实processing/palette C+合成NVS（13个set逐一失败、open/commit、float溢出/字符串、缺失/读取错误/精确blob/输出不变），13真实revision C（12新板/1旧板，clock/同秒/回退、open/set/commit部分结果、忙/跨时区/实际双线程、溢出/直接setter及加载失败）。协调器业务callbacks为替身，utils/HTTP/main未host执行；真实保存代码与parser分别执行，但不声称整链/真实NVS/掉电/网络/浏览器验收，ASan非TSan。
+
+最终主机：完整普通-j8 **1007/1007、9.80秒**；ASan/UBSan-j4 **1007/1007、39.35秒**。唯一库存1007，适配四位CTest编号空白解析、无重复，新增20+11+13=44；针对性各重复20次，**880次执行/44唯一、6.43秒**。Python新增3项，最终构建 **59/59、2.445秒**、控制台 **17/17、0.008秒**，共 **76**。之后只改主机依赖获取/SHA断言及utils早期错误说明；native C来源/现有1007测试保持，重新配置构建成功、最终Python与固件复跑。
+
+干净host依赖验证：原来managed_components忽略，host CI先于SDK解析，不能只依赖本机缓存。首次按普通cJSON v1.7.19标签拉取被双SHA校验拒绝；实际tag `c859b25da02955fef659d658b8f324b5cde87be3`缺SDK补丁（SetNumberHelper null及两处print深度保护）。当次随后shell仍执行构建/CTest得到No tests found，**不计通过**。根据SDK SBOM锁定上游`b2890c8d76bbb64e710585ebc0a917196b9c67e7`，同目录生成依赖改checkout后，以失败即停重跑；SOURCE_SUBDIR阻止执行供应方tests/install工程。
+
+独立`/private/tmp/rc3-remote-clean.nF65pk`最终配置/构建成功，**31/31、0.17秒**（20协调+11真实settings），实际Git HEAD等于b289，C/H双SHA与SDK完全一致：`607e756460fa0de37d20a7a9181f2de29c97bfb7ce5a0e6c2f548243836cd852` / `25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee`。复用已在本机的GoogleTest源码，不计全部依赖离线/空机或远端CI运行；CMake<3.18获取兼容分支未跑。已读取MIT LICENSE/SBOM，源码目录无AGENTS、不改供应方文件，版本1.7.19~2不变。首次ASan编译真实cJSON的macOS sprintf弃用12条告警保留，不抹去或改第三方源码；无自有代码错误，最终增量构建没有新增告警。
+
+固件：首次受限CMake重配组件索引失败exit1未计成功；同一主机授权handle等待到实际SDK session，再完整六配置失败即停exit0，没有因观察timeout另开同目录构建。后续utils早期revision错误说明发生在其中一次之后，已等循环完成再六配置增量确认；最终utils 12:27:06→对象12:28:36，config_manager 12:16:48→对象12:18:23，其他相关源在首次通过前完成。最终六配置无新增warning/error，固定IDF/厂家commit不变且厂家干净，dependencies.lock最终与HEAD一致，无手动覆盖/升级。
+
+map实际.text保留remote_config_apply/capture、apply_remote_group/fetch_apply_remote_config、store_config_revision/touch_config_checked和touch_config_for_http，非仅discarded条目；集成入口仍INTEGRATION_ONLY，不调用产品。照片隔离产物也有新身份、未转移旧S1验收；其defaults诊断不读真实配置/自动联网，既有启动门禁断言保持。
+
+| 配置 | 字节 | 最终SHA256 |
+| --- | ---: | --- |
+| 集成 | 1,916,720 | `e248c2c7f958ae4886469c7e0f576a407b424c75148f4dc56e5c5905f5c911f2` |
+| 原板 | 2,059,456 | `76676b458e2351f12309f3c38b7c3613b89de5f3552c510b8934f5ef90e4322b` |
+| 照片 | 406,176 | `2e0380f52529d756f4c8dfd7b71991c75b15974ae60e77a4b6fbac02ecaf661b` |
+| SD | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| 工厂 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/设备业务网络/AP/真实NVS/SD/测试卡/原片/显示/相机/提交推送；仅公开构建依赖网络获取，不更改设备或私人数据。最后已知c876599f…/STOPPED仍是历史、非实时核查。
+
+下一安全软件仍为general其余setter/全部JSON、多字段/整体应用并发及重试副作用、RTC/cron/电源/文件/空间策略与全栈退出；真实服务器/RF/恢复/睡醒/触摸/完整产品另定人工范围。产品/OTA/迁移门禁保持，完整开发目标继续。
+
+同步TODO/README/架构/索引/CHANGELOG、第三方/开发说明，新增远端说明；`.cache/p3-remote-*`及独立生成目录保留首次失败、依赖/SHA、最终主机/唯一/重复/Python/六配置证据，生成物不入库，用户修改和私人资料保留。
+
+## 2026-10-08 · P3名称/网络组检查保存与副本（仅软件）
+
+继续当前开发目标，先读TODO/需求/架构/索引并核对真实配置、utils、Wi-Fi/AP、HTTP、mDNS、HA及main。fast-context缺Windsurf Key，不提取/设置凭据，限定rg补查；只读旧报告/历史许可不扩大产品或卡/联网权限。本轮沿用PhotoFrame业务和已有time_config_control，不改厂家/SDK源码。
+
+新板名称保存拒空/超长/ASCII控制与DEL，输入先复制、检查open/set/commit、关闭后发布；void兼容入口失败不更新RAM。名称副本容量/忙输出不变。名称/网络组/配网保存/启动加载及既有time/revision共用非阻塞控制；失败加载保留最后确认名称/网络。不是其他缓存、Wi-Fi凭据void接口或整个配置应用的互斥。
+
+网络JSON便携解析真实cJSON对象，known字段严格字符串/16字节容量、模式dhcp/static、大小写等价重复键检查；无字段不保存。便携patch在保护内当前副本上合并，校验完整静态组/可空DNS，再逐一检查四个字符串及模式set、单commit后一次发布整个RAM组。字段错误不先保存部分网络；NVS仍可能已发生部分效果，不声称回滚或多字段/掉电原子性，nvs_close是void。
+
+固定SDK的esp_netif_str_to_ip4→inet_pton→lwip_inet_pton→ip4addr_aton实际代码会解释前导零为八进制；外层拒绝多位前导零及非四段十进制，避免验证/应用值歧义。DHCP保留未选中静态字符串，新选择非空字段检查IPv4；完整候选可修复旧缓存。仅地址形状，不保证掩码连续、网段/路由/单播或可达。
+
+utils网络更新统一候选/检查返回，名称保存失败不触发mDNS/Wi-Fi更新；已保存而hostname更新返回错误则报告部分效果。Wi-Fi忙副本返回不改已有连接、hostname忙不调用SDK且释放无线控制；AP保留值先复制。HTTP config/system-info、HA和在线main取名称副本，GET网络组同次副本，新增字段分配检查。各copy独立取得控制，非整GET一致快照；utils/HTTP/HA/main没有host整链执行。
+
+mDNS先复制再init/free，同一次注册名称来自同一副本，读取忙不释放服务。已读固定mDNS1.14.0真实mdns_responder.c：hostname/instance/TXT复制字符串，hostname等待动作，instance排队返回；这些返回不证明实际发现/广播或整栈退出。保持上游photoframe可选服务失败非致命，生命周期所有权/互斥未完成。
+
+明确剩余：名称已保存而SDK失败后，同值请求仍可能被原比较逻辑跳过hostname更新，优先后续处理重试/部分状态；整个应用并发、其他general setter/JSON/凭据、RTC/cron/文件/空间及全栈退出继续。不宣称本轮完成完整可靠配置、P3/P5、真实HTTP/NVS/射频或整机运行。
+
+新增**38项唯一CTest**：5便携patch、7真实cJSON解析、16真实config_manager C+合成NVS（逐5次set故障、open/commit部分存储、容量/输入改变、重入/实际双线程、配网共用控制及加载保留）、2真实Wi-Fi C+SDK替身、8真实mDNS C+SDK替身（copy忙无SDK、同一副本、失败顺序/可选契约）。不把替身SDK当RF或内部mDNS调度验收，ASan非TSan。
+
+主机最终普通-j8 **1045/1045、9.42秒**；ASan/UBSan-j4 **1045/1045、41.03秒**。CTest库存1045唯一、无重复，新增38；针对性38项各20次，**760执行/38唯一、0.75秒**。Python新增2项：构建接入**61/61、2.440秒**，控制台**17/17、0.007秒**，合计**78**。首次Python受旧错误文本断言影响59项中1项失败，不计通过；更新文本并保留保护断言后最终复跑成功。
+
+独立`/private/tmp/rc3-remote-clean.nF65pk`固定依赖目录重新配置、构建新增解析/mDNS目标成功，**35/35、0.20秒**（20原remote+7网络JSON+8mDNS）。复用前轮固定cJSON/GoogleTest获取源码，不计新空机下载或远端CI。主机最终与六固件本轮日志无新增自有编译告警/错误；此前第三方弃用告警历史不抹去。
+
+固件首次受限CMake组件索引连接失败exit1，不计通过。主机授权仅访问构建依赖，六配置最终连续构建exit0；网络C源15:20:22、集成对象15:20:37，确认产物包括最后前导零修正。ELF/map实际保留wifi_network_json_patch、网络组/名称checked/copy与mDNS注册调用，非只编译未链接的替代验证。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,918,192 | `ebf3a86ad3871c6bddb079ad2d20ca0245ecdc0bd152778445944b3393e30fd5` |
+| 原板 | 2,059,472 | `2032bccdb35d5337f7b4437a258ef2e9053289427fe160403bd3cfff259c1bb9` |
+| 照片隔离 | 406,176 | `d2367bdc12b01e8e802020b5fcad95436d21c08c2b89a9891a7fd3b2ce9f0390` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+固定SDK HEAD `fff9895c82d744c7237be8847347bdd1b07c6643`及厂家`28cde682a4468a581c278761922724f57d976418`均干净，依赖锁最终相对HEAD无差异、无升级。照片/原板SHA变化按实际构建记录，不由相同尺寸推断相同产物。
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/设备业务联网/AP/NVS/SD/测试卡/原片/刷新/相机/提交推送；仅公开构建依赖网络获取。最后已知c876599f…/STOPPED为历史，不是实时核查。产品/OTA/迁移门禁保持，完整目标继续。
+
+同步TODO/README/架构/索引/CHANGELOG及开发/第三方说明，新增[名称与网络说明](READ-PICO-NETWORK-CONFIG.md)。`.cache/p3-network-*`最终命名日志与独立生成目录保留失败、重复/唯一库存、软件与六构建证据；生成物不入库，用户修改、原片和旧测试产物均保留。
+
+## 2026-10-08 · P3名称同值重试与general串行（仅软件）
+
+上一目标轮为progress（名称/网络组保存与38项测试/六配置完成）。本轮从当前TODO/需求/架构/索引核对实际名称比较、保存、两服务及HTTP/远端入口；fast-context缺Key，限定rg补查，不提取凭据。优先关闭上一轮已记录的“名称已存而hostname失败，同值重试被跳过”。
+
+Read Pico真实config_manager新增检查式名称应用，缓存接受与本启动服务返回确认分离，提供SAVE/MDNS/WIFI/COMPLETE阶段。名称先复制，变化才NVS检查保存；保存失败不调用服务，保存成功但服务失败保留缓存和未确认状态。同值重试mDNS→Wi-Fi，不重复NVS写入；两个回调返回成功才确认，后续同值请求不重启两服务。name_accepted包括未变化的已加载/default缓存，不宣称有物理NVS记录。状态不持久化；成功加载/显式setter/配网使其失效，失败加载保留此前确认。
+
+名称控制持有至回调返回，直接保存/配网/加载及检查式NTP/TZ等零等待返回忙，名称不被后续请求替换。回调只能用新named服务适配，不递归checked getter；两服务收到同一独立名称。Wi-Fi仍用既有无线控制，错误释放；mDNS新增原子注册/更新保护，重入不free活动调用、普通失败不锁死。并非mDNS对象所有权/退出ACK或全部SDK并发，SDK内部等待可能无界，持锁期间相关配置副本不可用，不跨任务强删或硬超时。
+
+实际供应方契约核对：固定mDNS hostname/instance/TXT复制输入，instance入队不等实际广播；固定IDF esp_netif_set_hostname_api通过strdup保存hostname，分配失败还可能已经释放旧字符串并回退默认。外层返回错误/保留待重试，不声称SDK失败无效果或回滚；成功返回也不证明下一DHCP协商/路由器展示、可选发现服务或实机网络正确。
+
+便携config_apply_run零等待串行general公共适配，重入/重叠不执行回调，所有普通成功/错误返回释放。utils本地/远端general都走真实wrapper，root非object拒绝；旧板仍原应用策略。HTTP INVALID_STATE返回503、提示可能已有部分值改变，不消费活动请求的共享diagnostic缓冲。不是完整请求级错误隔离：其他失败仍用旧共享缓冲，guard释放后的诊断/版本也可能与新请求交错。
+
+剩余：远端三个组、独立processing/palette端点、revision确认及直接setter未共享完整应用控制；其余general void/NVS/JSON/凭据、RTC/调度/文件/空间及全栈退出继续。不宣称跨组事务、失败回滚、掉电原子性、SDK所有权/超时、真实HTTP或P3/P5完成。名称重试通过仅对应已接入callback返回与缓存保护。
+
+新增**22项CTest**：12真实config_manager C+合成NVS/回调替身（保存失败、同值/加载值、mDNS/Wi-Fi失败重试、输入变化、重入/真实双线程、保存/配网/加载失效与失败加载保留）；4真实便携general控制（成功/错误释放、重入、invalid、真实双线程）；3真实mDNS C及3真实Wi-Fi C+SDK替身（显式副本不读busy配置、invalid无SDK、重入/错误释放重试）。utils/HTTP/main真实host整链未执行，只做接入检查和固件实际链接，ASan非TSan。
+
+最终完整普通-j8 **1067/1067、10.67秒**，ASan/UBSan-j4 **1067/1067、42.50秒**；库存1067唯一、无重复。新增22项每项重复20次，**440执行/22唯一、1.32秒**。Python新增1项，最终构建检查 **62/62、2.443秒**，控制台 **17/17、0.007秒**，合计**79**。此前全量1067/11.65秒和ASan44.30秒是中间结果，不替代本段最终复跑。
+
+独立固定依赖目录`/private/tmp/rc3-remote-clean.nF65pk`重新配置/构建config_apply/mDNS目标并运行 **15/15、0.09秒**（4general+11mDNS），沿用已核验cJSON/GoogleTest源码，不计新空机或真实SDK联网。最终主机、六配置日志无新增自有编译告警或错误，不删除第三方历史告警。
+
+六配置两次连续构建exit0，主机授权仅固定依赖访问；最终源码http_server/utils15:41:17，集成对象分别15:43:49/15:43:48，config_manager15:36:02→15:43:48。ELF/map实际保留config_apply_run、config_manager_apply_device_name_checked及两个named适配；确认最终错误提示已编入。固定SDK/厂家目录干净，依赖锁最终相对HEAD无差异，无波形/VCOM/gamma/频率或第三方变更。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,919,024 | `aa76894306d47ffc23b9a5c730b4e456e5120b83be605f2afa7c9a03aa3f2cd3` |
+| 原板 | 2,059,520 | `f55c0c0f4ce59678685909843e6e7ec84afcf088f38ba5651cf95eb1bcf06ac5` |
+| 照片隔离 | 406,176 | `7b64f4f73c7c302512967934fecad18f4c4e1420b7a24c612f85aacafdf3062e` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。未操作串口/复位/设备业务网络/AP/NVS/SD/测试卡/原片/显示/相机或提交推送，仅公开软件构建依赖获取。最后已知c876599f…/STOPPED仍为历史、不是实时核查。完整产品/OTA/迁移门禁保持；下一安全软件为全组应用/错误上下文及其余保存与消费者，完整开发目标继续。
+
+同步TODO/README/架构/索引/CHANGELOG/开发/名称网络说明；`.cache/p3-name-retry-*`与独立生成目录保留库存、重复/最终主机/Python/六配置证据。无新人工权限请求，用户修改、旧产物与原片保留，生成物不入库。
+
+后续只读审查曾怀疑固定netif IPC忽略发送返回、消息ret默认零可能导致成功误报，但继续追查条件编译后**不作为当前缺陷**：用真实集成compile_commands将esp_netif_lwip.c仅改为-E/-dM执行，实际`LWIP_MPU_COMPATIBLE=0`、`LWIP_TCPIP_CORE_LOCKING=0`、`API_VAR_ALLOC`为空。固定tcpip_priv.h该分支为栈消息，tcpip_send_msg_wait_sem等待后返回ERR_OK，没有所怀疑的消息池分配失败分支；ERR_MEM仅在未启用MPU分支。`.cache/p3-name-retry-netif-macros.log`保留预处理证据，无SDK/配置变更或新增测试计数。仍不把回调返回当实机广播/下一DHCP协商验收；下一软件轮保持全组应用/请求级诊断优先，未为非当前分支扩张适配。
+
+## 2026-10-08 · P3全组应用控制与请求诊断（仅软件）
+
+按TODO/规格/架构/索引继续上轮名称重试后的全组并发缺口；fast-context缺Key后限定rg补查，不提取凭据。沿用PhotoFrame现有三组、处理/调色板业务及46条HTTP URI方法，不新建产品状态系统。
+
+便携config_apply_transaction在同一应用控制中执行apply及finish，apply错误跳过finish，结果区分未进入繁忙/已进入失败/应用回调成功但版本失败。普通返回释放，不进行回滚、排队或自动重试。utils本地general走该协调，远端一次解析/general/processing/palette/revision整体持有config_apply_run，general走私有值回调避免递归busy。HTTP处理/调色板POST/DELETE从接收到保存/重载/版本/响应都持有同一控制；busy只响应503，已接纳处理器错误不追加第二响应，GET/不支持的方法仍原处理。
+
+本地general仅获得控制后清理旧config/cert诊断，业务返回后在释放前复制到调用方结果；HTTP不再在guard释放后consume共享缓冲。远端不留下其旧诊断供下一本地请求使用。新增general错误JSON分配/打印及响应返回检查；成功用固定JSON，版本失败仍503部分效果说明。旧板保留原值应用、版本和诊断策略。其他general内部void setter错误仍可能未传播，不能据此宣称已完整应用。
+
+范围限制：不覆盖所有直接setter/启动加载/配网的应用级控制、所有SDK或palette图像处理读者，不是整个GET一致快照、多组掉电原子性、CAS或失败撤回。checked配置层仍另行保护其缓存。处理/调色板完整接收、GET读取错误默认化、其他JSON/响应、凭据/字段语义、RTC/调度/文件/空间/整机退出继续。持有控制穿过接收/保存/SDK调用不提供新时限，SDK可能等待无界。当前utils诊断写入调用位于值适配内，但公共set/consume函数不是任意外部调用的自动同步API。
+
+新增**7项唯一CTest**：5真实便携apply/finish控制（两阶段拒重入、失败跳过版本、版本失败释放/重试、invalid输出不改、实际双线程busy无回调且状态可区分）；2固定真实cJSON+远端协调+同一真实应用控制（三组及revision均拒交错、各组/版本错误后释放重试）。HTTP/utils真实host整链未执行，1新增Python仅检查接入/私有回调/结果副本及错误返回，不计行为验收；ASan非TSan。
+
+最终主机普通-j8 **1074/1074、9.84秒**，ASan/UBSan-j4 **1074/1074、42.87秒**。库存1074唯一无重复，新增7；9个配置控制+2个远端协调各重复20次，**220执行/11唯一、0.40秒**（其中4旧控制测试，不算新增）。Python构建接入 **63/63、2.889秒**，控制台 **17/17、0.007秒**，合计**80**。较早11.93/45.00秒为中间结果，最终上述复跑已包含最后HTTP响应检查接入。
+
+独立固定依赖目录`/private/tmp/rc3-remote-clean.nF65pk`重新配置/构建两个目标，**38/38、0.09秒**（9应用控制+22remote+7网络JSON）。复用已校验cJSON/GoogleTest获取源码，不算全新空机/远端CI。主机和六种最终固件日志无新增自有告警或错误。
+
+六配置最终连续构建exit0，仅公开构建依赖/软件编译授权。最终HTTP源码16:09:49，集成对象16:11:47、集成产物16:11:54，确认最后诊断JSON/响应变更已编入。ELF/map实际保留config_apply_transaction、apply_local_config_checked和apply_remote_request，HTTP相应wrapper可能内联，不把缺独立符号误判为未接入。SDK固定fff9895c…/厂家28cde682…均干净，依赖锁相对HEAD无差异，无驱动/波形/VCOM/gamma/频率或第三方变更。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,919,440 | `085b6fce6b960ecd26be6c08c54c7dd728e6816c847c8f4ab06f2da13f7499f4` |
+| 原板 | 2,059,552 | `065079380a2902792b6875e3e4eed44e4b510e49abfb9d28fcd357cf9956dce4` |
+| 照片隔离 | 406,176 | `7b64f4f73c7c302512967934fecad18f4c4e1420b7a24c612f85aacafdf3062e` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/业务网络/AP/NVS/SD/测试卡/原片/屏幕/相机/提交推送；旧c876599f…/STOPPED只为历史，不是实时核查。产品/OTA/迁移运行门禁保持，P3/P5不计完成。同步TODO/README/架构/开发/索引/CHANGELOG/配置说明；`.cache/p3-config-control-*`保留软件库存、重复、独立及最终六构建证据，生成物不入库。下一安全软件继续general其余保存/直接入口与读者、处理/调色板HTTP输入/错误及剩余消费者，完整目标继续，无新人工权限请求。
+
+## 2026-10-08 · P3完整配置文档与两组读取（仅软件）
+
+上一轮完成参与的应用级控制及请求错误副本，属于progress。本轮按当前TODO/规格/架构/索引检查，fast-context缺Key后限定rg定位真实HTTP/处理/调色板/NVS/调用者，不提取凭据。未把旧研究报告或硬件更新许可当本轮操作指令。
+
+新增便携config_document：三个本地更新入口先检查正文1–4095字节再分配，循环完整收声明长度、累计第8次超时结束；EOF/错误/零或超过请求容量返回拒绝，不解析有效前缀。使用固定cJSON解析单一object、深度≤16、拒原始/转义NUL、大小写等价重复/非有限数字/尾随文档。成功才交出tree；OOM沿用无效文档结果，不宣称完整Unicode/RFC校验。远端原安全检查迁至共享模块，保留2048容量/空输入错误/三组阶段和未知metadata/空组契约，现有真实解析回归保留。
+
+processing/palette从默认候选checked转换，选中字段全部通过才输出；原HTTP/远端省略字段默认策略不改成旧记录PATCH。七个processing数值及三个校准数值检查number/有限/float可表示；五个processing文本不截断/实际支持枚举、compress只bool；六颜色组object、RGB各0–255整数不绕回。不是曝光全部范围、校准端点/顺序/gamma物理范围验收或自动调优。原板旧接收/转换策略保留。
+
+真实新板processing load只对namespace/key NOT_FOUND保留默认候选；open/13个get的错误停止、关闭、输出不变，拒非有限float、字符串长度/结尾/嵌入NUL及bool>1。全部成功才输出完整候选。两组HTTP GET也参与共享应用控制，不与参与的更新交错；load失败端点不再fallback。serializer每次cJSON添加/打印及终止/有限性检查，不返回部分JSON；响应type/send、保存/重载及500发送错误传播，不重复响应。新板palette默认全结构清零，只确定存储填充字节，black_y=.009、white_y=.65、gamma=1.42及所有原默认值不变。
+
+仍未完成：utils图片请求头及processing便捷dither/scale/background getter仍可能把读取错误当默认；其余general void保存/凭据/字段语义、直接setter/图像读者共用控制、RTC/调度/文件/空间/全栈退出。不是所有NVS/全GET快照或多键掉电原子性/回滚，已有保存不能撤回。没有新SDK硬超时/绝对请求时间上限，接收调用等待沿用SDK契约；ASan非TSan。详见[配置文档说明](READ-PICO-CONFIG-DOCUMENT.md)。
+
+新增**31项唯一CTest**：14便携接收/真实固定cJSON（全分段尺寸、4095边界/溢出、有效前缀EOF、IO/非法返回、累计超时、原始/转义NUL、16/17深度、重复/尾随/各解析分配点/无输出）；17真实processing/palette C+合成NVS/固定cJSON（缺失默认、完整独立输出、每个get IO/类型/长度错误、七float/五字符串/bool、字段错误与不发布部分候选、非法RGB/float溢出、两serializer全部分配点、默认blob字节稳定）。HTTP/utils整链未在host执行；2新Python仅源码接入检查，不算SDK HTTP/NVS/浏览器行为验收。
+
+首轮主机构建失败于测试变量gets与macOS libc函数同名，Python失败于新增方法间移动时的host作用域引用；保留首轮日志，不计通过。修正为read_calls并恢复原依赖SHA断言后两主机构建、Python及针对性普通/ASan **63/63、0.50/1.06秒**通过；当时尚未加入默认blob第31项，属中间结果。
+
+最终完整普通-j8 **1105/1105、14.08秒**，ASan/UBSan-j4 **1105/1105、48.47秒**；库存1105唯一无重复、新增31。14文档+28设置共42唯一各20次，**840执行/42唯一、3.54秒**，含11旧设置测试不算新增。Python构建接入 **65/65、4.141秒**，控制台 **17/17、0.006秒**，合计**82**。独立固定依赖目录`/private/tmp/rc3-remote-clean.nF65pk`set-e重新配置/构建两个目标，**71/71、0.11秒**（22remote+7网络JSON+14文档+28设置），复用核验过的cJSON/GoogleTest源码，不算新空机/远端CI。
+
+六配置最终连续构建exit0，授权仅固定依赖/软件编译；最终processing/palette源码16:35:57，对象16:38:56、集成产物16:39:03，确认填充清零/容量防护已纳入；HTTP16:23:24/共享文档16:19:04更早已编入。ELF/map实际保留config_document_receive/parse及两checked converter。最终主机/独立/六配置日志无新增自有告警或错误。SDK固定fff9895c…/厂家28cde682…目录干净，依赖锁相对HEAD无差异，无第三方/波形/VCOM/gamma/频率变更。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,920,896 | `e296869c34ac701b02221a6770f903dd237283bad6f2eec834f70a8858af7b7f` |
+| 原板 | 2,059,552 | `970c57b57a2df706ffcf874651f001fe747450b74f9857969678e1b4ebfb5da2` |
+| 照片隔离 | 406,336 | `def2ebcd0bbb013e8d7896672994594e1bfa1f5469d3ee25e1cd5874ddd4ae14` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/业务网络/AP/真实NVS/SD/测试卡/原片/屏幕/相机/提交推送；旧c876599f…/STOPPED仅历史、不是实时核查。产品/OTA/迁移门禁保持，不计P3/P5完成。同步TODO/README/架构/开发/索引/CHANGELOG/配置说明，`.cache/p3-config-document-*`保留首轮失败/库存/重复/独立/最终测试与六构建证据，生成物不入库。下一安全软件继续便捷消费者的读取错误传播及其余配置/全栈工作；完整目标继续，无新人工权限请求。
+
+最终只读契约复核：本机webapp的固定`@aitjcize/epaper-image-convert/src/presets.js`的DITHER_ALGORITHMS只列floyd-steinberg/stucki/burkes/sierra，ProcessingControls.vue的tone/color/scale/background选项与新增checked枚举一致；不因未读第三方接口猜测而扩大枚举。未编辑包或新增测试计数。
+
+## 2026-10-08 · P3图像选项读取与失败前置（仅软件）
+
+上一轮完整配置文档属于progress；本轮按TODO/规格/架构/索引继续。fast-context缺Key，限定rg核对实际settings、HTTP/utils显示消费者、image_processor三geometry调用及主机/隔离诊断桥；不提取凭据，不沿用历史操作授权。未完成的目标继续，不计P3/P5完成。
+
+新板`processing_settings_copy_options`在config_apply零等待共享控制内一次完整load，校验实际支持dither/scale/background，全部成功后发布独立副本；NOT_FOUND保留原默认、其他IO/类型/长度/有限性/未知或空历史枚举/忙失败不改变输出。普通返回释放控制，可重试；仅参与入口互斥、非所有直接NVS writer或全系统事务。旧便捷API仍保留原板/兼容契约。
+
+上传和下载后显示在资产发布/相册派生之前检查副本；上传503逐项检查status/type/send，保留主要或发送错误；下载保留原失败/文件保持/不追认ETag策略。已下载文件、远端配置已有改变不回滚；这不是在发送HTTP下载前的检查，图片请求头load默认化/serializer/SDK header返回及revision一致快照仍未解决。
+
+PNG内存显示/处理到文件在打开显示流或创建输出之前复制布局，流式/缓冲geometry沿用传入副本，不分别重读scale/background。JPEG EXIF/隔离照片固定Cover不读产品布局；RAM-only诊断桥提供明确固定副本，不链接产品NVS/应用控制。原板布局行为保持。调用方显式dither不覆盖；HTTP/utils dither选择与PNG布局读取是两次独立snapshot，palette/方向/其他配置尚未成为整次图像快照，不宣称全图并发安全。无波形、VCOM、gamma或频率调整。
+
+新增**13项唯一CTest**：8真实settings C+合成NVS（缺失默认、4算法×2布局×2背景、逐13get/open失败不发布、非法历史枚举、忙/重入保护/释放及自有副本）；5真实Read Pico image_processor+合成settings/display（PNG错误/忙/非法拒绝与重试、输出前拒绝及原文件保持、单次fit背景副本、此前捕获画面保持、JPEG固定Cover无读取）。共享控制本轮用同步重入探针，不另称新的双线程/TSan证据。实际HTTP/utils整链未在host执行；新增Python仅源码接入检查，不算真实NVS/SDK HTTP/屏幕验收。
+
+首轮11项针对性测试有1项失败：检查当时在writer创建输出后才执行，失败文件按原保留策略仍存在。保留首轮普通/ASan日志，非通过；未通过删除文件绕过，改为入口前置读取后复测，另加fit/旧画面两项。实际固定SDK无HTTPD_503_SERVICE_UNAVAILABLE错误枚举，构建前核对后使用项目既有503状态字符串，检查全部响应返回。
+
+最终针对性普通/ASan **13/13，1.99/4.52秒**；完整普通-j8 **1118/1118、13.25秒**，ASan/UBSan-j4 **1118/1118、48.59秒**，库存1118唯一无重复，较前一轮新增13。13新增各20次，共**260执行/13唯一、38.12秒**。Python构建接入**66/66、2.511秒**，控制台**17/17、0.007秒**，合计**83**。独立目录`/private/tmp/rc3-remote-clean.nF65pk`重新配置/构建真实settings与remote目标（包含新config_apply链接），选定已构建四组**79/79、0.70秒**；复用固定cJSON/GoogleTest源码，不算新空机或远端CI。
+
+六配置连续构建exit0，自有源码最终image_processor16:58:44、processing/utils/桥16:55:06、HTTP16:57:39，对象17:03:24、集成产物17:03:31，最后前置修复已纳入。集成map保留processing_settings_copy_options/config_apply_run；SDK/厂家固定且干净、dependencies.lock相对HEAD无差异。最终主机/六配置日志无新增自有warning/error。日志前缀`.cache/p3-processing-options-*`保留首轮失败、最终测试/库存/重复/独立/六构建，不提交生成物。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,921,424 | `13b43df24f0b500b98bdc3baf556276cdf998d55c1001fb9e3d9eddf90a0c058` |
+| 原板 | 2,059,568 | `bd887392b223e1b067e82cb70bd518be58c1afb06eb12b894a4b28ed9eebc8a5` |
+| 照片隔离 | 406,352 | `84ae3b2f46c666575e38f99bf34f99e61bccfa01c34544a367494389b273e978` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/业务网络/AP/真实NVS/SD/测试卡/原片/屏幕/相机/提交推送；产品/OTA/迁移运行门禁保持。历史已烧写SD诊断c876599f…/STOPPED不是本轮实时核查。同步TODO/README/架构/开发/索引/CHANGELOG/配置说明；下一安全增量为图片请求头读取/序列化/设置返回和一致快照，再继续其余配置/整次图像/全栈工作，无新人工权限请求。
+
+## 2026-10-08 · P3下载的三个配置头副本与确认（仅软件）
+
+上一增量图像选项属于progress，本轮按TODO/规格/架构/索引继续。fast-context缺Key后限定rg核对utils下载整个重试/清理、真实settings/palette serializer、应用控制、固定SDK header/helper/client cleanup，未提取凭据。不把历史设备授权当本轮新操作指令。
+
+新板request_config在共享应用控制内复制revision、load processing/palette、生成两个完整自有JSON；全部成功才发布，失败输出不变并释放已生成字符串，仅缺失记录沿用原默认。下载在响应缓冲/临时文件/HTTP client创建前一次capture，重试复用相同三头；分配失败、304及循环结束释放所有snapshot。参与的三组/版本应用不与捕获交错；不是所有直接setter/NVS writer、完整GET/URL/凭据/方向或整次图像快照。
+
+三头逐remove、get确认不存在、set、get精确确认。SDK原已有item更新分支strdup失败仍ESP_OK并存NULL；外层删除/确认缺失避免该分支，新的item分配返回NO_MEM。未知失败/读回缺失或不一致不perform；清理client/终止自有owner，不按传输失败重试，不追认本次ETag。失败可能已有部分header，仅丢弃client、不假装回滚；新板下载最终保留主要错误返回，原板旧读取默认化/重试保持。
+
+固定SDKcleanup对非NULL client内部忽略close/transport返回、释放后ESP_OK；外层检查返回不等于完整退出ACK。本新header失败分支在perform前，没有新网络连接，但不把它的测试当整栈退出证明。Authorization/custom、分辨率/方向、firmware/ETag/battery、URL/证书/借用凭据及redirect仍待处理；historical字段JSON上报不因本轮成为完整枚举/物理语义验收。原厂数值、波形、VCOM、gamma/频率不改，详见[配置说明](READ-PICO-CONFIG-DOCUMENT.md)。
+
+新增**17项唯一CTest**：8真实processing/palette C+合成NVS/固定cJSON快照（完整字段/版本、版本读取失败先停止、逐13get失败不输出、palette错误不分配、两模式每个JSON分配点释放、忙/重入保护、独立副本）；5便携header协调（已有/缺失替换、逐12操作错误停止、假成功/未删除、非法参数、NULL/缺失读回）；4未改固定SDK http_header.c/http_utils.c及其真实头文件组件（真实复现已有更新分配失败假成功/NULL、已有或缺失记录的9新item分配点、SDK自有副本生命周期、exact compact JSON wire文本）。SDK allocator和esp_check/log适配为合成，没有执行socket、整个esp_http_client/服务器、真实revision配置管理或NVS。共享控制新增同步重入探针，不称新增TSan/全并发证明。1新Python仅接入顺序/释放/SDK SHA门禁源码检查。
+
+四固定SDK源/头SHA256锁在host CMake，READ_PICO_TEST_IDF_PATH启用时直接编译原checkout，不复制或修改第三方：header.c `23056c41505aa38885cf210e22117e1fa57d964080ff537a36a5c9d99d76701e`、utils.c `50bfee8e6ef9d0b74e590f58975c9d35ce32012579994012a6d0717743c6a84b`、header.h `77f7e4faf9f2fe2d3afee3d100a3d642cdd3354d7556147d430ed0fe5e2c8f69`、utils.h `7e4110110767661e60a01d639565f2926ffe30f9d449558a3a5008de5dfeecc2`。SDK宏确实在新item错误设ret，trim对NULL返回；本轮不把新item路径也误报为假成功。
+
+测试准备阶段一次patch因上下文不匹配未应用；随后fake header NULL探针误放remove导致编译失败，未set-e的初轮命令继续误跑旧二进制，旧JSON字段断言发生SEGFAULT；保留初轮日志，不算当前源码证据。修正探针位置、实际camelCase字段/float精度断言后使用set-e明确重建再测试。加入固定SDK后针对性普通/ASan **17/17、0.14/0.83秒**（按原日志校正）；最初只有13非SDK项的0.12/0.59秒属中间结果。
+
+最终普通-j8 **1135/1135、9.05秒**；ASan/UBSan-j4 **1135/1135、42.53秒**，库存1135唯一无重复，较前一轮新增17。17新增各20次共**340执行/17唯一、2.25秒**。Python接入 **67/67、2.325秒**，控制台 **17/17、0.007秒**，合计**84**。独立目录`/private/tmp/rc3-remote-clean.nF65pk`set-e重新配置固定SDK路径并构建remote/settings，四组已构建目标 **96/96、0.63秒**（22remote+7网络JSON+14文档+53settings含17新）；复用固定cJSON/GoogleTest，不算空机或远端CI。重编固定cJSON有macOS sprintf废弃告警，非自有新增错误；未修改第三方消告警。
+
+六配置连续构建exit0，utils/request_config源码17:13:25、集成对象17:24:13/17:24:12、产物17:24:20，确认当前来源已编入。集成map实际保留capture/set_headers，SDK固定fff9895c…/厂家28cde682…目录干净，dependencies.lock相对HEAD无差异。最终六配置无新增自有warning/error。`.cache/p3-request-config-*`保存初轮失败/最终主机/SDK/独立/库存/重复/Python/六编译证据，生成物不入库。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,921,952 | `5a624b949615f420aa781b31119c4a869c15decfd4ea4da89466e2cf7019d7a6` |
+| 原板 | 2,059,568 | `9dfc43350181f2b608ef5e98ed9da29c245b370c2e4ac9e80053eb5d107354d4` |
+| 照片隔离 | 406,352 | `84ae3b2f46c666575e38f99bf34f99e61bccfa01c34544a367494389b273e978` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/业务网络/AP/真实NVS/SD/测试卡/原片/屏幕/相机/参数调整/提交推送；产品/OTA/迁移运行门禁保持。历史SD诊断c876599f…/STOPPED不是实时核查。同步TODO/README/架构/开发/索引/CHANGELOG/配置说明；下一安全开发其余headers/凭据/URL/证书生命周期与redirect，再继续general字段/全图/RTC/调度/文件/空间/全栈退出，完整目标继续，无新人工权限请求，不计P3/P5完成。
+
+## 2026-10-08 · P3主图/缩略图初始请求头检查（仅软件）
+
+上一轮三个配置头属于progress；本轮按TODO/规格/架构/索引和真实header/utils源码继续，fast-context缺Key后限定rg，不提取凭据。修正前一轮专项ASan耗时为原日志0.83秒，不改变17/17或完整1135结果。研究报告/历史设备授权不作本轮操作指令。
+
+将三配置header协调复用成request_header_put_checked：key非空ASCII token，value拒CR/LF/DEL及除HTAB外控制字符，先删除/确认缺失、set、精确readback；已有SDK分配假成功仍由外层保护。SDK首尾trim导致不一致即失败，不自行“修复”凭据/ETag/custom值；内部HTAB、empty value及合法opaque ETag保持。函数调用者仍须提供有效NUL终止文本，不代表所有getter长度/借用并发有保证。
+
+Read Pico主图Authorization/custom、display width/height/orientation、firmware、If-None-Match、battery全用检查，首个header错误保留，后续设置及三配置头跳过；在perform前清理client/终止owner并退出retry，不发不完整请求。缩略图同源认证/custom同保护，失败不perform，终止本次owner返回false，沿用可选预览/已成功主图的旧契约，不把它当全请求失败。原板旧set策略/同源/认证优先级保持。新板不再记录未经校验的custom key，错误日志只有错误名，无新增token/值输出。默认数值/厂家SDK/波形/VCOM/gamma/频率不改。
+
+新增**7项唯一CTest**：5便携真实协调+合成header（全部非法key字节/控制值、token/opaque/empty/interior HTAB、无效参数/callback、每个操作失败停止），2真实未改且SHA锁定SDK header/helper（首尾空白被裁剪后拒绝、内部HTAB/empty exact；认证值自有复制及分配失败）。保留上一轮逐新header分配/假成功回归。新增1项Python只是主图/缩略图接入与停止顺序源码检查；utils整个下载/SDK client/network/真实NVS未在host执行，不以编译证明实际服务器或凭据生命周期。尚未处理borrowed凭据/URL/CA快照、snprintf截断、直接setter/保存/redirect/SDK内部Host/User-Agent/后续认证，全请求/图像/全栈退出仍待审查。
+
+首次set-e主机构建与专项普通/ASan **12/12、0.12/0.60秒**通过，包含5旧RequestHeaders不算新增。最终普通-j8 **1142/1142、9.12秒**，ASan/UBSan-j4 **1142/1142、43.16秒**；库存1142唯一无重复、较前一轮新增7。7新增各20次共**140执行/7唯一、0.91秒**。Python接入 **68/68、2.381秒**，控制台 **17/17、0.007秒**，合计**85**。独立固定SDK目录`/private/tmp/rc3-remote-clean.nF65pk`set-e重建remote/settings四组选定目标 **103/103、0.72秒**（22remote+7网络JSON+14文档+60settings）；不是新空机或远端CI。最终本轮主机/独立/六配置日志无新增自有告警或错误。
+
+六配置连续构建exit0，utils/request_config源码17:46:19、集成对象17:49:33、产物17:49:41；当前修改已纳入，map保留request_header_put_checked。SDK/厂家固定且目录干净，dependencies.lock相对HEAD无差异。证据`.cache/p3-initial-headers-*`含主机/专项/库存/重复/独立/Python/六配置；生成物不入库。
+
+| 配置 | 字节 | SHA256 |
+| --- | ---: | --- |
+| Read Pico集成（禁止运行） | 1,923,152 | `8e67153054ef4dd400a71e423949e629803c40119c8f304d8c26391dd75697a8` |
+| 原板 | 2,059,568 | `0d317c6742aa8a0ce3ff17eb91ccf032665dc6118d025745bd9a51bb9600889d` |
+| 照片隔离 | 406,352 | `84ae3b2f46c666575e38f99bf34f99e61bccfa01c34544a367494389b273e978` |
+| SD隔离 | 332,304 | `c876599f119258c0a59c93419283a3ad97df18d93714b3c2523fdd6548a062e3` |
+| 显示隔离 | 305,120 | `44f691bd484d34d7c603c2ab95562053da670574cdec9c00cfe67c132d91eab2` |
+| factory只读 | 275,344 | `1541861d7b9b407a2623a28801f39c91390d50d51992b7428ddfb5ef87dcbccb` |
+
+烧写/回读：**未执行**。真机验收：**未执行**。无串口/复位/业务网络/AP/真实NVS/SD/测试卡/原片/屏幕/相机/参数/提交推送，产品/OTA/迁移门禁保持；历史SD诊断c876599f…/STOPPED不是本轮实时核查。同步TODO/README/架构/开发/索引/CHANGELOG/配置说明；下一安全开发凭据/URL/证书生命周期、检查式保存及redirect，再继续general/完整图像/RTC/调度/文件/空间/全栈退出。完整目标继续，无新人工权限请求，不计P3/P5完成。

@@ -22,6 +22,7 @@ if(CONFIG_BOARD_DRIVER_READ_PICO AND NOT CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION
     if(CONFIG_READ_PICO_STORAGE_VALIDATION)
         idf_component_register(
             SRCS "read_pico_storage_validation.c" "sd_file_probe.c" "jpeg_stream_probe.c" "jpeg_file_probe.c"
+                 "upload_file.c" "read_pico_upload.c" "upload_probe.c"
             INCLUDE_DIRS "."
             PRIV_REQUIRES board_hal sdcard esp_driver_usb_serial_jtag vfs espressif__esp_jpeg
         )
@@ -55,6 +56,7 @@ set(SOURCES
     "display_flow.c"
     "display_manager.c"
     "dns_server.c"
+    "captive_dns.c"
     "ha_integration.c"
     "http_server.c"
     "image_processor.c"
@@ -73,6 +75,7 @@ set(SOURCES
     "utils.c"
     "http_auth.c"
     "wifi_manager.c"
+    "wifi_credentials.c"
     "wifi_provisioning.c"
 )
 
@@ -88,7 +91,13 @@ endif()
 set(INCLUDE_DIRS ".")
 
 if(CONFIG_BOARD_DRIVER_READ_PICO)
-    list(APPEND SOURCES "jpeg_metadata.c" "jpeg_stream_probe.c" "jpeg_buffered_source.c")
+    list(REMOVE_ITEM SOURCES "periodic_tasks.c")
+    list(APPEND SOURCES "read_pico_periodic.c" "read_pico_sntp.c" "sntp_stamp.c" "remote_config.c" "config_document.c" "wifi_network_json.c" "config_apply.c" "request_config.c")
+    list(APPEND SOURCES "jpeg_metadata.c" "jpeg_stream_probe.c" "jpeg_buffered_source.c"
+                        "upload_stream.c" "upload_file.c" "read_pico_upload.c" "upload_asset.c"
+                        "download_file.c" "upload_copy.c" "config_read.c" "wifi_text.c"
+                        "provisioning_session.c" "provisioning_apply.c" "wifi_link.c" "wifi_network.c"
+                        "wifi_provisioning_ap.c" "read_pico_http_service.c" "read_pico_background.c")
 endif()
 
 set(PRIV_REQUIRES
@@ -135,5 +144,9 @@ idf_component_register(
 )
 
 # Embed splash screen EPDGZ files (generated at build time by generate_splash.py)
+if(CONFIG_BOARD_DRIVER_READ_PICO)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SNTP_CHECK_RESPONSE=2 SNTP_COMP_ROUNDTRIP=0)
+    target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=sntp_get_system_time" "-Wl,--wrap=udp_new_ip_type")
+endif()
 target_add_binary_data(${COMPONENT_LIB} "splash_data/splash.epdgz" BINARY)
 target_add_binary_data(${COMPONENT_LIB} "splash_data/setup_complete.epdgz" BINARY)

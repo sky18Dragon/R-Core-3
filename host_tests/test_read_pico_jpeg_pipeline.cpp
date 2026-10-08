@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <png.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <filesystem>
 
 #include <algorithm>
 #include <cstdio>
@@ -22,6 +24,9 @@ extern int test_board_display_width, test_board_display_height;
 extern const char *test_board_display_type;
 extern display_orientation_t test_display_orientation;
 extern scale_mode_t test_scale_mode;
+extern const char *test_background_color;
+extern esp_err_t test_processing_options_error;
+extern unsigned test_processing_options_reads;
 extern bool test_jpeg_media_present;
 extern size_t test_jpeg_media_calls, test_jpeg_media_fail_at;
 extern size_t test_heap_max_request, test_heap_request_limit;
@@ -163,6 +168,9 @@ class ReadPicoJpegPipeline : public ::testing::Test
         test_board_display_type = "gc16";
         test_display_orientation = DISPLAY_ORIENTATION_LANDSCAPE;
         test_scale_mode = SCALE_MODE_COVER;
+        test_background_color = "white";
+        test_processing_options_error = ESP_OK;
+        test_processing_options_reads = 0;
         test_jpeg_media_present = true;
         test_jpeg_media_calls = 0;
         test_jpeg_media_fail_at = SIZE_MAX;
@@ -177,6 +185,7 @@ class ReadPicoJpegPipeline : public ::testing::Test
     }
     void TearDown() override
     {
+        test_processing_options_error = ESP_OK;
         remove(path.c_str());
         remove(output.c_str());
         fake_display_reset();
@@ -195,6 +204,67 @@ class ReadPicoJpegPipeline : public ::testing::Test
     }
 };
 
+TEST_F(ReadPicoJpegPipeline, PngOptionsReadErrorOrBusyCancelsWithoutShowingAndCanRetry)
+{
+    auto png = oriented_png(fixture(), 1);
+    for (esp_err_t failure : {ESP_FAIL, ESP_ERR_INVALID_STATE, ESP_ERR_INVALID_ARG}) {
+        fake_display_reset(); test_processing_options_reads = 0;
+        test_processing_options_error = failure;
+        EXPECT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+                  DITHER_FLOYD_STEINBERG, nullptr), failure);
+        EXPECT_EQ(test_processing_options_reads, 1u);
+        EXPECT_EQ(fake_display_begin_count(), 0);
+        EXPECT_FALSE(fake_display_was_shown());
+        EXPECT_STREQ(image_processor_get_last_error(), "Processing options unavailable or invalid");
+        test_processing_options_error = ESP_OK;
+        EXPECT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+                  DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+        EXPECT_TRUE(fake_display_was_shown());
+    }
+}
+
+TEST_F(ReadPicoJpegPipeline, PngOptionsFailureDoesNotPublishOutputOrModifySource)
+{
+    auto png = oriented_png(fixture(), 1); write(png);
+    test_processing_options_error = ESP_ERR_INVALID_STATE;
+    EXPECT_EQ(image_processor_process(path.c_str(), output.c_str(), DITHER_FLOYD_STEINBERG),
+              ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(access(output.c_str(), F_OK), -1); EXPECT_EQ(load(path), png);
+    EXPECT_FALSE(fake_display_was_shown()); EXPECT_EQ(test_processing_options_reads, 1u);
+}
+
+TEST_F(ReadPicoJpegPipeline, FixedExifJpegCoverDoesNotReadProductLayoutOptions)
+{
+    write(fixture(6)); test_processing_options_error = ESP_FAIL;
+    EXPECT_EQ(display(), ESP_OK); EXPECT_TRUE(fake_display_was_shown());
+    EXPECT_EQ(test_processing_options_reads, 0u);
+}
+
+TEST_F(ReadPicoJpegPipeline, PngFitUsesOneOwnedLayoutAndBackgroundRead)
+{
+    auto png = oriented_png(fixture(), 1); test_scale_mode = SCALE_MODE_FIT;
+    for (const char *background : {"white", "black"}) {
+        test_background_color = background; test_processing_options_reads = 0;
+        ASSERT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+                  DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+        EXPECT_EQ(test_processing_options_reads, 1u);
+        auto pixels = frame(); ASSERT_FALSE(pixels.empty());
+        EXPECT_EQ(pixels[0], strcmp(background, "black") == 0 ? 0 : 255);
+    }
+}
+
+TEST_F(ReadPicoJpegPipeline, PngOptionsFailurePreservesPreviouslyCapturedDisplay)
+{
+    auto png = oriented_png(fixture(), 1);
+    ASSERT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+              DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    auto previous = frame(); int begins = fake_display_begin_count();
+    test_processing_options_error = ESP_FAIL;
+    EXPECT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+              DITHER_FLOYD_STEINBERG, nullptr), ESP_FAIL);
+    EXPECT_EQ(fake_display_begin_count(), begins); EXPECT_EQ(frame(), previous);
+}
+
 TEST_F(ReadPicoJpegPipeline, FormatDetectionChecksMediaAndNeverConsumesMissingSource)
 {
     write(fixture());
@@ -207,6 +277,82 @@ TEST_F(ReadPicoJpegPipeline, FormatDetectionChecksMediaAndNeverConsumesMissingSo
     EXPECT_EQ(image_processor_detect_format(nullptr), IMAGE_FORMAT_UNKNOWN);
 }
 
+namespace {
+struct OwnedAsset {
+    std::string directory, image, preview, typed, sidecar;
+    OwnedAsset() {
+        char path[] = "/tmp/read-pico-asset-XXXXXX";
+        const char *created = mkdtemp(path);
+        EXPECT_NE(created, nullptr);
+        directory = created ? created : "";
+        image = directory + "/.rc3-upload-12345678-00000001.part";
+        preview = directory + "/.rc3-upload-12345678-00000002.part";
+        typed = directory + "/.rc3-upload-12345678-00000001.jpg";
+        sidecar = directory + "/.rc3-upload-12345678-00000001.preview.jpg";
+    }
+    ~OwnedAsset() { if (!directory.empty()) std::filesystem::remove_all(directory); }
+    static bool ready(void *) { return test_jpeg_media_present && !test_jpeg_close_failed; }
+    static int create(void *, const char *p) { return open(p, O_CREAT | O_EXCL | O_WRONLY, 0600); }
+    static int put(void *, int fd, const uint8_t *p, size_t n) { return (int)::write(fd, p, n); }
+    static int sync(void *, int fd) { return fsync(fd); }
+    static int close(void *, int fd) { return ::close(fd); }
+    static void uncertain(void *) { test_jpeg_close_failed = true; }
+    static int publish(void *, const char *from, const char *to) {
+        if (link(from, to) != 0) return -1; // Host emulates FAT no-replace rename.
+        return unlink(from);
+    }
+    upload_file_t complete(const std::string &path, const std::vector<uint8_t> &data) {
+        upload_file_io_t io = {nullptr, ready, create, put, sync, close, uncertain, publish};
+        upload_file_t owner{};
+        EXPECT_TRUE(upload_file_begin(&owner, &io, path.c_str(), 5u * 1024u * 1024u));
+        EXPECT_TRUE(upload_file_write(&owner, data.data(), data.size()));
+        EXPECT_TRUE(upload_file_finish(&owner, data.size()));
+        return owner;
+    }
+};
+}
+TEST_F(ReadPicoJpegPipeline, OwnedUploadPublishesThenDecodesAndCurrentServesDedicatedPreview) {
+    OwnedAsset files; auto bytes = fixture();
+    auto image = files.complete(files.image, bytes), preview = files.complete(files.preview, bytes);
+    ASSERT_EQ(display_flow_present_asset(&image, &preview, IMAGE_FORMAT_JPG,
+                                         DITHER_FLOYD_STEINBERG), ESP_OK);
+    EXPECT_TRUE(fake_display_was_shown()); EXPECT_TRUE(image.published); EXPECT_TRUE(preview.published);
+    EXPECT_EQ(load(files.typed), bytes); EXPECT_EQ(load(files.sidecar), bytes);
+    EXPECT_STREQ(fake_display_pub_display_name(), files.typed.c_str());
+    const char *content_type = nullptr;
+    FILE *fp = display_flow_open_current(&content_type);
+    ASSERT_NE(fp, nullptr); EXPECT_STREQ(content_type, "image/jpeg");
+    uint8_t magic[2]; EXPECT_EQ(fread(magic, 1, 2, fp), 2u);
+    EXPECT_EQ(magic[0], 0xff); EXPECT_EQ(magic[1], 0xd8); EXPECT_EQ(fclose(fp), 0);
+}
+TEST_F(ReadPicoJpegPipeline, OwnedMagicMismatchDoesNotPublishOrBeginDisplay) {
+    OwnedAsset files; auto bytes = fixture(); auto image = files.complete(files.image, bytes);
+    EXPECT_EQ(display_flow_present_asset(&image, nullptr, IMAGE_FORMAT_PNG,
+                                         DITHER_FLOYD_STEINBERG), ESP_ERR_NOT_SUPPORTED);
+    EXPECT_FALSE(image.published); EXPECT_EQ(load(files.image), bytes);
+    EXPECT_FALSE(std::filesystem::exists(files.typed)); EXPECT_EQ(fake_display_begin_count(), 0);
+}
+TEST_F(ReadPicoJpegPipeline, OwnedMagicCloseFailureKeepsStageAndNeverBeginsDisplay) {
+    OwnedAsset files; auto bytes = fixture(); auto image = files.complete(files.image, bytes);
+    test_image_close_fail_at = 0;
+    EXPECT_NE(display_flow_present_asset(&image, nullptr, IMAGE_FORMAT_JPG,
+                                         DITHER_FLOYD_STEINBERG), ESP_OK);
+    EXPECT_TRUE(test_jpeg_close_failed); EXPECT_FALSE(image.published);
+    EXPECT_EQ(load(files.image), bytes); EXPECT_EQ(fake_display_begin_count(), 0);
+}
+TEST_F(ReadPicoJpegPipeline, OwnedDecodeFailureRetainsPublishedFileAndPreviousCurrent) {
+    OwnedAsset files;
+    auto bytes = fixture(); bytes.resize(40); auto image = files.complete(files.image, bytes);
+    fake_display_set_current_image("previous.jpg");
+    EXPECT_NE(display_flow_present_asset(&image, nullptr, IMAGE_FORMAT_JPG,
+                                         DITHER_FLOYD_STEINBERG), ESP_OK);
+    EXPECT_TRUE(image.published); EXPECT_EQ(load(files.typed), bytes);
+    EXPECT_FALSE(fake_display_was_shown()); EXPECT_EQ(fake_display_begin_count(), 0);
+    char current[512]; bool known;
+    ASSERT_TRUE(display_manager_copy_current_image(current, sizeof(current), &known));
+    EXPECT_TRUE(known); EXPECT_STREQ(current, "previous.jpg");
+}
+
 TEST_F(ReadPicoJpegPipeline, BufferEntryRejectsInvalidAlgorithmBeforeDecodeOrLogIndex)
 {
     auto bytes = fixture();
@@ -215,6 +361,203 @@ TEST_F(ReadPicoJpegPipeline, BufferEntryRejectsInvalidAlgorithmBeforeDecodeOrLog
                          (dither_algorithm_t) value, nullptr), ESP_ERR_INVALID_ARG);
         EXPECT_EQ(fake_display_begin_count(), 0);
     }
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegMatchesFileForEveryExifAndDisplayOrientation)
+{
+    for (auto orientation : {DISPLAY_ORIENTATION_LANDSCAPE, DISPLAY_ORIENTATION_PORTRAIT})
+        for (unsigned exif = 1; exif <= 8; ++exif) {
+            SCOPED_TRACE(std::to_string(exif) + ":" + std::to_string(orientation));
+            test_display_orientation = orientation;
+            auto bytes = fixture(exif);
+            const auto original = bytes;
+            write(bytes);
+            fake_display_reset();
+            ASSERT_EQ(display(), ESP_OK);
+            const auto expected = frame();
+            fake_display_reset();
+            test_jpeg_media_calls = test_image_close_calls = 0;
+            ASSERT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                                        DITHER_FLOYD_STEINBERG, nullptr), ESP_OK)
+                << image_processor_get_last_error();
+            EXPECT_EQ(frame(), expected);
+            EXPECT_TRUE(fake_display_was_shown());
+            EXPECT_EQ(bytes, original);
+            EXPECT_EQ(test_jpeg_media_calls, 0u);
+            EXPECT_EQ(test_image_close_calls, 0u);
+        }
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegDoesNotDependOnMountedOrHealthySd)
+{
+    const auto bytes = fixture(6);
+    test_jpeg_media_present = false;
+    test_jpeg_close_failed = true;
+    ASSERT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                                DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    EXPECT_EQ(test_jpeg_media_calls, 0u);
+    EXPECT_EQ(test_image_close_calls, 0u);
+    EXPECT_TRUE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegForcesCoverAndPreservesPublishContract)
+{
+    const auto bytes = fixture(6);
+    display_publish_t pub{};
+    pub.display_name = "memory-photo";
+    ASSERT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                                DITHER_FLOYD_STEINBERG, &pub), ESP_OK);
+    const auto expected = frame();
+    EXPECT_STREQ(fake_display_pub_display_name(), "memory-photo");
+    fake_display_reset();
+    test_scale_mode = SCALE_MODE_FIT;
+    ASSERT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                                DITHER_FLOYD_STEINBERG, &pub), ESP_OK);
+    EXPECT_EQ(frame(), expected);
+    EXPECT_STREQ(fake_display_pub_display_name(), "memory-photo");
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegRejectsInvalidOrOverLimitInputBeforeAllocation)
+{
+    const auto bytes = fixture();
+    EXPECT_EQ(image_processor_process_to_display(nullptr, bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(image_processor_process_to_display(bytes.data(), 0, IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_ERR_INVALID_ARG);
+    // A deliberately overstated length must be rejected without touching bytes.
+    for (size_t length : {size_t(32u * 1024u * 1024u + 1u), SIZE_MAX})
+        EXPECT_NE(image_processor_process_to_display(bytes.data(), length, IMAGE_FORMAT_JPG,
+                                                   DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    EXPECT_EQ(test_heap_max_request, 0u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+    EXPECT_FALSE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegRejectsUnsupportedOrInvalidMetadataBeforeAllocation)
+{
+    auto bytes = fixture(9);
+    EXPECT_NE(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    bytes = fixture();
+    bool patched = false;
+    for (size_t i = 2; i + 1 < bytes.size(); ++i)
+        if (bytes[i] == 0xff && bytes[i + 1] == 0xc0) {
+            bytes[i + 1] = 0xc2;
+            patched = true;
+            break;
+        }
+    ASSERT_TRUE(patched);
+    EXPECT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_ERR_NOT_SUPPORTED);
+    bytes = fixture();
+    patched = false;
+    for (size_t i = 2; i + 8 < bytes.size(); ++i)
+        if (bytes[i] == 0xff && bytes[i + 1] == 0xc0) {
+            bytes[i + 5] = bytes[i + 7] = 0x40;
+            bytes[i + 6] = bytes[i + 8] = 0; // 16384 squared exceeds 64M pixels.
+            patched = true;
+            break;
+        }
+    ASSERT_TRUE(patched);
+    EXPECT_NE(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    EXPECT_EQ(test_heap_max_request, 0u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+    EXPECT_FALSE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegCorruptAndTruncatedDecodeNeverPublishes)
+{
+    std::vector<uint8_t> invalid{0xff, 0xd8, 0xff, 0xd9};
+    EXPECT_NE(image_processor_process_to_display(invalid.data(), invalid.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    auto bytes = fixture();
+    bytes.resize(bytes.size() / 2);
+    const auto original = bytes;
+    EXPECT_NE(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    EXPECT_EQ(bytes, original);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+    EXPECT_FALSE(fake_display_was_shown());
+    EXPECT_STRNE(image_processor_get_last_error(), "");
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegRgbAllocationFailureNeverBeginsDisplay)
+{
+    auto bytes = fixture();
+    test_heap_request_limit = 1024;
+    EXPECT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_ERR_NO_MEM);
+    EXPECT_LE(test_heap_max_request, 5u * 1024u * 1024u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+    EXPECT_FALSE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegWorkAllocationFailureReleasesAllocatedRgb)
+{
+    auto bytes = fixture();
+    bool patched = false;
+    for (size_t i = 2; i + 8 < bytes.size(); ++i)
+        if (bytes[i] == 0xff && bytes[i + 1] == 0xc0) {
+            bytes[i + 5] = bytes[i + 7] = 0;
+            bytes[i + 6] = bytes[i + 8] = 8;
+            patched = true;
+            break;
+        }
+    ASSERT_TRUE(patched);
+    test_heap_request_limit = 1024; // 8x8x3 RGB succeeds, 3100-byte work fails.
+    EXPECT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                               DITHER_FLOYD_STEINBERG, nullptr), ESP_ERR_NO_MEM);
+    EXPECT_EQ(test_heap_max_request, 3100u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+    EXPECT_FALSE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, MemoryJpegDoesNotCopyLargeCompressedInput)
+{
+    auto bytes = fixture(6);
+    bytes.resize(9u * 1024u * 1024u, 0x5a);
+    const auto original = bytes;
+    test_heap_request_limit = 5u * 1024u * 1024u;
+    ASSERT_EQ(image_processor_process_to_display(bytes.data(), bytes.size(), IMAGE_FORMAT_JPG,
+                                                DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    EXPECT_LE(test_heap_max_request, 5u * 1024u * 1024u);
+    EXPECT_EQ(bytes, original);
+    EXPECT_EQ(test_jpeg_media_calls, 0u);
+    EXPECT_TRUE(fake_display_was_shown());
+}
+
+TEST_F(ReadPicoJpegPipeline, UnsupportedStreamFormatCannotDeletePersistentSource)
+{
+    const auto bytes = fixture();
+    write(bytes);
+    for (auto format : {IMAGE_FORMAT_UNKNOWN, IMAGE_FORMAT_BMP, IMAGE_FORMAT_EPD_GZ,
+                        static_cast<image_format_t>(99)}) {
+        EXPECT_EQ(display_flow_stream_file(path.c_str(), format, DITHER_FLOYD_STEINBERG,
+                                          nullptr, true), ESP_ERR_NOT_SUPPORTED);
+        EXPECT_EQ(load(path), bytes);
+    }
+    EXPECT_EQ(test_image_close_calls, 0u);
+    EXPECT_EQ(test_jpeg_media_calls, 0u);
+    EXPECT_EQ(test_heap_max_request, 0u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
+}
+
+TEST_F(ReadPicoJpegPipeline, InvalidStreamArgumentsCannotDeletePersistentSource)
+{
+    const auto bytes = fixture();
+    write(bytes);
+    EXPECT_EQ(display_flow_stream_file(nullptr, IMAGE_FORMAT_JPG, DITHER_FLOYD_STEINBERG,
+                                      nullptr, true), ESP_ERR_INVALID_ARG);
+    for (int algorithm : {-1, 4, 99})
+        EXPECT_EQ(display_flow_stream_file(path.c_str(), IMAGE_FORMAT_JPG,
+                                          static_cast<dither_algorithm_t>(algorithm), nullptr, true),
+                  ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(load(path), bytes);
+    EXPECT_EQ(test_image_close_calls, 0u);
+    EXPECT_EQ(test_jpeg_media_calls, 0u);
+    EXPECT_EQ(test_heap_max_request, 0u);
+    EXPECT_EQ(fake_display_begin_count(), 0);
 }
 
 TEST_F(ReadPicoJpegPipeline, ExistingJpegOutputIsNotTruncatedOrDeleted)

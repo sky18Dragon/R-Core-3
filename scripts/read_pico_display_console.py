@@ -16,7 +16,7 @@ COMMANDS = frozenset(("clear-white", "white-confirm", "stop", "status",
                       "gc16-parity", "gc16-corners", "gc16-gray16-labeled", "gc16-gray16-vendor", "gc16-gray16-page",
                       "gc16-gray16-labeled-continuous",
                       "pattern-confirm", "pattern-reject"))
-STORAGE_COMMANDS = frozenset(("status", "mount", "file-test", "file-check", "photo-check", "stop"))
+STORAGE_COMMANDS = frozenset(("status", "mount", "file-test", "file-check", "upload-test", "photo-check", "stop"))
 PHOTO_COMMANDS = frozenset(("status", "mount", "clear-white", "white-confirm", "photo-show",
                             "photo-confirm", "photo-reject", "stop"))
 

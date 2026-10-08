@@ -17,6 +17,14 @@ static photo_frame_t frame;
 static bool active, ready;
 
 // Fixed, RAM-only diagnostic settings; the real product implementations are not linked here.
+esp_err_t processing_settings_copy_options(processing_options_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    *out = (processing_options_t){.dither_algorithm = DITHER_FLOYD_STEINBERG,
+                                 .scale_mode = SCALE_MODE_COVER, .background_color = "white"};
+    return ESP_OK;
+}
+
 display_orientation_t config_manager_get_display_orientation(void)
 {
     return DISPLAY_ORIENTATION_PORTRAIT;

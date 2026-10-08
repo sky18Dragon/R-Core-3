@@ -1,5 +1,19 @@
 # 开发与构建
 
+2026-10-08初始headers软件：新增5便携header输入/错误测试、2真实固定SDK副本/trim/分配测试、1源码接入检查；普通/ASan各1142、Python85、六配置与独立103项通过，7新增各20次共140执行/0.91秒。集成8e671530…仅编译，日志`.cache/p3-initial-headers-*`，主机utils整链仍不执行，证据/身份见VALIDATION末节和[说明](READ-PICO-CONFIG-DOCUMENT.md)。无设备操作，凭据/URL/证书快照仍待处理。
+
+2026-10-08请求配置软件：新增13 settings/NVS/serializer+header协调、4真实SHA锁定SDK请求头组件、1源码接入检查。普通/ASan各1135唯一、Python84、六配置与独立96项通过；17新增各20次共340执行/2.25秒。集成5a624b94…仅编译，日志`.cache/p3-request-config-*`保留测试stub编译失败及旧二进制误跑、最终set-e重建与证据；固定cJSON重编有macOS废弃sprintf告警，无自有新增告警。边界/身份见VALIDATION末节和[说明](READ-PICO-CONFIG-DOCUMENT.md)，无设备操作。
+
+2026-10-08图像选项软件：8真实settings C+合成NVS、5真实image_processor+合成settings/display、1源码接入检查新增。普通/ASan各1118唯一、Python83、六配置与独立79项通过；13新增唯一各20次，共260执行/38.12秒。集成13b43df2…未部署，日志`.cache/p3-processing-options-*`，首轮输出文件已创建的失败保留，修复为检查前置后重测。证据/边界见VALIDATION末节及[说明](READ-PICO-CONFIG-DOCUMENT.md)，无设备操作，完整目标继续。
+
+2026-10-08配置文档/读取软件：14便携接收/固定cJSON、17真实processing/palette C+合成NVS/固定cJSON、2源码接入检查新增；普通/ASan各1105、Python82、六配置及独立71项通过。42个相关唯一测试各20次，840执行；含11旧设置测试，不算新增。集成e296869c…仅编译，日志`.cache/p3-config-document-*`，首轮测试命名/断言错误保留、不计通过，最终证据见VALIDATION末节和[说明](READ-PICO-CONFIG-DOCUMENT.md)。未更新设备，原板仍不可用于Read Pico。
+
+2026-10-08全组应用软件：新增5项便携apply/finish协调和2项真实cJSON全组控制测试、1项源码接入检查，普通/ASan各1074、Python80、六配置与独立38项通过。11项配置控制/协调各重复20次。最终集成085b6fce…仅编译，源码最后HTTP修改已纳入；日志`.cache/p3-config-control-*`，完整证据与边界见VALIDATION末节。无设备操作，运行门禁保持。
+
+2026-10-08名称重试后续软件：真实配置管理C/便携应用串行/网络名称适配新增22项，普通/ASan各1067、Python79及六配置通过；独立目录config_apply与mDNS目标15项通过。集成aa768943…未部署，运行门禁保持，见VALIDATION末节和[说明](READ-PICO-NETWORK-CONFIG.md)。
+
+2026-10-08名称/网络软件：普通/ASan各1045唯一、Python78及六配置通过。新增JSON解析与mDNS真实适配的host目标复用固定cJSON，独立目录35项重跑成功；SDK组件注册表受限失败不计通过，授权仅编译依赖访问。集成ebf3a86a…未部署，原板产物仍不可刷入Read Pico；详细SHA与边界见VALIDATION末节和[名称与网络说明](READ-PICO-NETWORK-CONFIG.md)。
+
 P0 已完成源码引入及原版基线验证。当前根目录是 PhotoFrame 主工程；Read Pico只读/显示/SD诊断隔离，完整业务已有编译链接profile但禁止运行，见 [集成说明](READ-PICO-INTEGRATION.md) 和 [P1说明](READ-PICO-BRINGUP.md)。当前 `waveshare_photopainter_73` 产物不可烧入小纸 Pico。
 
 ## 固定版本与目录
@@ -94,7 +108,7 @@ SD新增独立手动profile，构建命令与所有权/退出见 [SD说明](READ
 
 完整业务编译：`python3 build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-photoframe-integration`，独立目录与配置，禁止烧写/自动运行；需已有嵌入资源作为编译输入，不构成新板splash验收，详见集成说明。
 
-最新全量ASan/UBSan为356/356通过；可按以下命令复跑（SD API由主机替身实现，不接触实体卡）：
+此处356项为历史；最新完整证据见VALIDATION末节。以下ASan/UBSan命令不接触实体卡：
 
 ```sh
 cmake -S host_tests -B host_tests/build-asan \
@@ -106,6 +120,16 @@ ctest --test-dir host_tests/build-asan --output-on-failure
 ```
 
 ## CI 与尚未覆盖项
+
+2026-10-08新增远端JSON/实际settings保存测试使用与SDK一致的cJSON C/H；host无managed_components时按SBOM固定提交自动获取，并验双SHA，不需要先安装IDF。可在独立构建目录传`-DREAD_PICO_TEST_FETCH_CJSON=ON`强制走这一分支；已复用现有GoogleTest源码验证其31项，不计全空机/全部依赖离线或远端CI通过。CMake<3.18兼容分支未运行，详见[远端说明](READ-PICO-REMOTE-CONFIG.md)。
+
+时间同步真实SDK测试需显式指定固定SDK；未设置时默认构建不包括这9项。本机普通/ASan最终各938项包含5时间戳、40适配、9真实SDK报文测试，IO/clock/RTOS仍为替身。给上面ASan配置命令加同一参数即可；IDF_PATH需已指向锁定v6.1，不可用未经核对SDK代替。CMake校验原文件SHA，不下载或修改SDK，见[同步说明](READ-PICO-SNTP.md)。
+
+```sh
+cmake -S host_tests -B host_tests/build -DREAD_PICO_TEST_IDF_PATH="$IDF_PATH"
+cmake --build host_tests/build -j8
+ctest --test-dir host_tests/build --output-on-failure
+```
 
 新增 `.github/workflows/port-baseline.yml`：Node 22 完整主机/Web 测试，正式 v6.1 SDK commit 检查、原板及五个Read Pico隔离入口编译；仅 `contents: read`，没有发布/烧写/实屏步骤。远端未运行，本机成功不等于 GitHub Actions 成功。
 
