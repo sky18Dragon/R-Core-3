@@ -10,6 +10,7 @@
 #include "read_pico_sd.h"
 
 #ifdef ESP_PLATFORM
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 static portMUX_TYPE registry_mux = portMUX_INITIALIZER_UNLOCKED;
 static void registry_lock(void) { portENTER_CRITICAL(&registry_mux); }
@@ -60,6 +61,26 @@ static bool begin_io(void)
     errno = err == ESP_ERR_TIMEOUT ? EBUSY : ENODEV;
     return false;
 }
+
+#ifdef ESP_PLATFORM
+// Unexpected open failures (anything but a missing file) must be explainable from the log.
+static void note_open_failure(int error)
+{
+    if (error == ENOENT)
+        return;
+    int count[UNCERTAIN + 1] = {0};
+    registry_lock();
+    for (int i = 0; i < SLOT_COUNT; ++i)
+        ++count[slots[i].state];
+    registry_unlock();
+    ESP_LOGW("read_pico_fs",
+             "fopen failed: errno=%d (%s), slots free=%d reserved=%d open=%d changing=%d uncertain=%d",
+             error, strerror(error), count[FREE], count[RESERVED], count[OPEN], count[CHANGING],
+             count[UNCERTAIN]);
+}
+#else
+static void note_open_failure(int error) { (void) error; }
+#endif
 
 static int reserve(void)
 {
@@ -155,6 +176,20 @@ static int finish_close(int slot, int result)
     return result;
 }
 
+// picolibc implements fopen() as open() + fdopen(). Both are wrapped, so the
+// nested fdopen already published this FILE under the descriptor's lease.
+// Publishing it a second time would leave one slot that no fclose() releases.
+static bool file_already_tracked(int own, FILE *file)
+{
+    bool found = false;
+    registry_lock();
+    for (int i = 0; i < SLOT_COUNT && !found; ++i)
+        found = i != own && slots[i].state == OPEN && slots[i].key_live &&
+                slots[i].kind == FILE_HANDLE && slots[i].key == (uintptr_t) file;
+    registry_unlock();
+    return found;
+}
+
 FILE *__wrap_fopen(const char *path, const char *mode)
 {
     if (!storage_path(path)) {
@@ -164,13 +199,23 @@ FILE *__wrap_fopen(const char *path, const char *mode)
         return file;
     }
     int slot = reserve();
-    if (slot < 0)
+    if (slot < 0) {
+        int reserve_errno = errno;
+        note_open_failure(reserve_errno);
+        errno = reserve_errno;
         return NULL;
+    }
     FILE *file = __real_fopen(path, mode);
-    if (file)
-        publish(slot, FILE_HANDLE, (uintptr_t) file);
-    else
+    int open_errno = errno;
+    if (file && file_already_tracked(slot, file)) {
         release(slot);
+    } else if (file) {
+        publish(slot, FILE_HANDLE, (uintptr_t) file);
+    } else {
+        release(slot);
+        note_open_failure(open_errno);
+        errno = open_errno;
+    }
     return file;
 }
 

@@ -24,6 +24,7 @@ std::atomic<bool> poisoned;
 esp_err_t begin_result;
 bool open_fail, close_fail, fdopen_fail, metadata_fail, observe_pending;
 bool same_handle, reuse_during_close;
+bool picolibc_stdio; // fopen = wrapped open() + fdopen(); fclose closes the fd via wrapped close()
 const char *reuse_path;
 int last_flags, last_mode;
 std::string directory;
@@ -51,9 +52,12 @@ void read_pico_sd_io_end(void)
     ++ends;
 }
 void read_pico_sd_note_file_close_failure(void) { poisoned = true; }
-FILE *__real_fopen(const char *, const char *)
+static FILE *picolibc_fopen(const char *path, const char *mode);
+FILE *__real_fopen(const char *path, const char *mode)
 {
     EXPECT_EQ(registry_depth, 0u);
+    if (picolibc_stdio)
+        return picolibc_fopen(path, mode);
     ++real_opens;
     if (observe_pending)
         EXPECT_GT(users.load(), 0u); // Opening itself pins the mount.
@@ -61,6 +65,17 @@ FILE *__real_fopen(const char *, const char *)
     if (same_handle)
         return reinterpret_cast<FILE *>(uintptr_t(0x1234)); // Opaque test key, never dereferenced.
     return tmpfile();
+}
+// picolibc tinystdio: these calls go back through the wrappers, as on the device.
+static FILE *picolibc_fopen(const char *path, const char *mode)
+{
+    int fd = __wrap_open(path, O_RDONLY);
+    if (fd < 0)
+        return nullptr;
+    FILE *file = __wrap_fdopen(fd, mode);
+    if (!file)
+        __wrap_close(fd);
+    return file;
 }
 FILE *__real_fdopen(int fd, const char *mode)
 {
@@ -71,6 +86,11 @@ FILE *__real_fdopen(int fd, const char *mode)
 int __real_fclose(FILE *file)
 {
     EXPECT_EQ(registry_depth, 0u);
+    if (picolibc_stdio) {
+        int result = __wrap_close(dup(fileno(file))); // bufio close() of its descriptor
+        fclose(file);                                 // then the host FILE itself
+        return result;
+    }
     ++real_closes;
     if (observe_pending)
         EXPECT_GT(users.load(), 0u); // Close/flush must finish before releasing.
@@ -154,7 +174,7 @@ protected:
         poisoned = false;
         begin_result = ESP_OK;
         open_fail = close_fail = fdopen_fail = metadata_fail = observe_pending = false;
-        same_handle = reuse_during_close = false;
+        same_handle = reuse_during_close = picolibc_stdio = false;
         reuse_path = "/storage/next.jpg";
         last_flags = last_mode = 0;
         char path[] = "/tmp/read-pico-dir-XXXXXX";
@@ -180,6 +200,20 @@ TEST_F(ReadPicoFs, StorageFilePinsDuringOpenAndCloseThenReleasesExactlyOnce)
     EXPECT_EQ(users.load(), 0u);
     EXPECT_EQ(begins.load(), 1u);
     EXPECT_EQ(ends.load(), 1u);
+}
+TEST_F(ReadPicoFs, NestedOpenFdopenStdioDoesNotLeakRegistrySlots)
+{
+    // Device regression: picolibc fopen() publishes the FILE through the nested
+    // fdopen(); a second outer slot was never released, exhausting all 32 slots.
+    picolibc_stdio = true;
+    for (int i = 0; i < 100; ++i) {
+        FILE *file = __wrap_fopen("/storage/images/Default/a.jpg", "rb");
+        ASSERT_NE(file, nullptr) << "open " << i;
+        EXPECT_EQ(users.load(), 1u);
+        ASSERT_EQ(__wrap_fclose(file), 0);
+        ASSERT_EQ(users.load(), 0u) << "close " << i;
+    }
+    EXPECT_EQ(begins.load(), ends.load());
 }
 TEST_F(ReadPicoFs, OutsidePathsAndPrefixLookalikesPassThroughWithoutBoardAccess)
 {
