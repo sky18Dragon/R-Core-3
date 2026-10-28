@@ -1,45 +1,82 @@
 # 文件与资料索引
 
-## 当前有效文档
+## 先读这四份
+
+| 文件 | 用途 |
+| --- | --- |
+| [TODO](../TODO.md) | 唯一的当前进度与下一步，只含R1 |
+| [测试策略](TESTING.md) | T0–T3分层、按改动触发、R1真机验收单；`scripts/test_quick.sh` |
+| [路线图](ROADMAP.md) | R2、P0–P5、G1–G3，不阻塞R1 |
+| [验证记录](VALIDATION.md) | 里程碑汇总与候选台账；逐轮全文在[历史](history/2026-10-11/INDEX.md) |
+
+## 项目与规则
 
 | 文件 | 用途 |
 | --- | --- |
 | [README](../README.md) | 项目方向与入口 |
-| [README.upstream](../README.upstream.md) | PhotoFrame 原始功能说明，非本板烧写指引 |
-| [TODO](../TODO.md) | 唯一的当前任务状态与实施顺序 |
 | [AGENTS](../AGENTS.md) | 项目协作规则 |
 | [DESIGN](../DESIGN.md) | 显示和交互约束 |
-| [CHANGELOG](../CHANGELOG.md) | 简要变更记录 |
-| [PROJECT-SPEC](PROJECT-SPEC.md) | 当前需求、阶段范围与验收 |
+| [CHANGELOG](../CHANGELOG.md) | 阶段性变更摘要 |
+| [PROJECT-SPEC](PROJECT-SPEC.md) | 需求、阶段范围与验收 |
 | [ARCHITECTURE](ARCHITECTURE.md) | PhotoFrame 业务与 Read Pico 适配边界 |
-| [DEVELOPMENT](DEVELOPMENT.md) | 固定版本、已验证命令与环境 |
-| [READ-PICO-BRINGUP](READ-PICO-BRINGUP.md) | P1 诊断入口、只读边界与上板条件 |
-| [READ-PICO-DISPLAY](READ-PICO-DISPLAY.md) | P2a/P2b 像素格式、真实后端、结果传播与未验收的硬件边界 |
-| [READ-PICO-STORAGE](READ-PICO-STORAGE.md) | P3 SD单一挂载、卡检测、退出租约、限定文件写入与重启只读核对 |
-| [READ-PICO-UPLOAD](READ-PICO-UPLOAD.md) | P3 HTTP接收/关闭保护、FAT非覆盖发布与本卡单次合成探针通过/保留产物 |
-| [READ-PICO-PHOTO](READ-PICO-PHOTO.md) | P3 原片边界、S1 ROM真机结果、文件JPEG方向/Cover/灰阶软件链路与显示门禁 |
-| [READ-PICO-PHOTO-VALIDATION](READ-PICO-PHOTO-VALIDATION.md) | 单张原片显示候选、固定路径、人工白参考/照片确认、内存记录与更新权限 |
-| [READ-PICO-INTEGRATION](READ-PICO-INTEGRATION.md) | 完整PhotoFrame编译链接、NVS/存储/路径保护和运行门禁 |
-| [READ-PICO-MIGRATION](READ-PICO-MIGRATION.md) | 只读配置加载、旧方向/配置审查、实际分区冲突和OTA恢复/运行门禁 |
-| [READ-PICO-WIFI](READ-PICO-WIFI.md) | Wi-Fi初始化/候选保存/扫描、AP共享无线控制/检查式停机、服务取消/资源退出与DNS边界 |
-| [READ-PICO-HTTP](READ-PICO-HTTP.md) | 普通页面/AP共用HTTP资源、逐路由注册、请求就绪与错误退出边界 |
-| [READ-PICO-BACKGROUND](READ-PICO-BACKGROUND.md) | 四类后台检查式创建/就绪门禁、合作取消与恢复前有界确认；非整机退出 |
-| [READ-PICO-PERIODIC](READ-PICO-PERIODIC.md) | 周期timer/第五任务、NVS时间戳与检查式NTP配置；SNTP后续适配另见下项 |
-| [READ-PICO-SNTP](READ-PICO-SNTP.md) | 带身份DNS/数字地址服务、PCB预约、SDK回复关联与检查式退出；非真实联网验收 |
-| [READ-PICO-TIME-CONFIG](READ-PICO-TIME-CONFIG.md) | 时区检查式保存/应用状态、保护内生成时间副本与HTTP返回；非完整TZ/DST语义验收 |
-| [READ-PICO-REMOTE-CONFIG](READ-PICO-REMOTE-CONFIG.md) | 远端结构/步骤错误、三组及版本共享控制；其余general字段/原子性/实机未闭环 |
-| [READ-PICO-NETWORK-CONFIG](READ-PICO-NETWORK-CONFIG.md) | 名称/网络保存与同值重试、全组应用保护和请求诊断副本；直接入口/实机未闭环 |
-| [READ-PICO-CONFIG-DOCUMENT](READ-PICO-CONFIG-DOCUMENT.md) | 有界文档/两组读写/图像选项与初始header检查；凭据/URL/证书/整图和实机未闭环 |
-| [GRAY16-VALIDATION-PLAN](GRAY16-VALIDATION-PLAN.md) | 官方16灰示例复核、分变量验证顺序与光学验收方法 |
-| [COMPONENT-GUIDELINES](COMPONENT-GUIDELINES.md) | 拟修改组件与职责 |
-| [DEPLOYMENT](DEPLOYMENT.md) | 新方案的烧写/恢复准备要求 |
-| [THIRD-PARTY](THIRD-PARTY.md) | 已引入来源、版本与许可边界 |
-| [VALIDATION](VALIDATION.md) | 新方案测试矩阵与实际验证记录 |
-| [HARDWARE-REFERENCE](HARDWARE-REFERENCE.md) | 官方规格、GPIO/IOE、PMU、频率与本机待填档案 |
-| [UPSTREAM-BASELINE](UPSTREAM-BASELINE.md) | 固定源码核对、测试/构建入口、接口与分区差异 |
-| [OPEN-ITEMS](OPEN-ITEMS.md) | 剩余信息、负责人、首版范围分层及样本准备 |
-| [研究资料说明](reference/README.md) | 附件出处、使用边界及未核对项 |
-| [历史归档](archive/README.md) | 旧需求、旧 TODO、实验与协议资料 |
+| [DEVELOPMENT](DEVELOPMENT.md) | 固定版本、构建命令与环境 |
+| [DEPLOYMENT](DEPLOYMENT.md) | 烧写/恢复前的核对要求与本机分区布局 |
+| [COMPONENT-GUIDELINES](COMPONENT-GUIDELINES.md) | 组件与职责 |
+
+## R1 链路的现行契约（本地上传/显示/轮播会经过）
+
+| 文件 | 用途 |
+| --- | --- |
+| [READ-PICO-BRINGUP](READ-PICO-BRINGUP.md) | 板级诊断入口、只读边界、上板条件 |
+| [READ-PICO-DISPLAY](READ-PICO-DISPLAY.md) | 像素格式、显示后端、结果传播与硬件边界 |
+| [READ-PICO-STORAGE](READ-PICO-STORAGE.md) | SD单一挂载、卡检测、退出租约 |
+| [READ-PICO-UPLOAD](READ-PICO-UPLOAD.md) | HTTP上传接收、FAT非覆盖发布 |
+| [READ-PICO-PHOTO](READ-PICO-PHOTO.md) | 原片边界、JPEG方向/Cover/灰阶链路 |
+| [R1-RELEASE](R1-RELEASE.md) | R1 交付说明：固件身份、构建与只写应用部署、网页使用、已验证范围与已知限制 |
+| [R1-RUNTIME](R1-RUNTIME.md) | R1本地相框启动顺序、范围外入口处置、已知限制 |
+| [READ-PICO-INTEGRATION](READ-PICO-INTEGRATION.md) | 完整PhotoFrame编译链接、NVS/存储/路径保护、运行门禁 |
+| [READ-PICO-WIFI](READ-PICO-WIFI.md) | Wi-Fi初始化、AP、扫描、检查式停机 |
+| [READ-PICO-HTTP](READ-PICO-HTTP.md) | HTTP资源、逐路由注册、请求就绪 |
+| [READ-PICO-BACKGROUND](READ-PICO-BACKGROUND.md) | 后台任务创建/就绪门禁与合作取消 |
+| [READ-PICO-PERIODIC](READ-PICO-PERIODIC.md) | 周期任务、NVS时间戳 |
+| [READ-PICO-CONFIG-DOCUMENT](READ-PICO-CONFIG-DOCUMENT.md) | 配置读写、图像选项 |
+| [READ-PICO-NETWORK-CONFIG](READ-PICO-NETWORK-CONFIG.md) | 名称/网络配置保存 |
+| [READ-PICO-TIME-CONFIG](READ-PICO-TIME-CONFIG.md) | 时区保存与应用 |
+
+## 非R1必需，按需查阅
+
+| 文件 | 何时看 |
+| --- | --- |
+| [READ-PICO-MIGRATION](READ-PICO-MIGRATION.md) | 部署前确认分区冲突；OTA/旧配置迁移 |
+| [READ-PICO-REMOTE-CONFIG](READ-PICO-REMOTE-CONFIG.md) | 重新启用远程配置时（R1拒绝该入口） |
+| [READ-PICO-SNTP](READ-PICO-SNTP.md) | 修改时间同步时 |
+| [READ-PICO-PHOTO-VALIDATION](READ-PICO-PHOTO-VALIDATION.md) | 修改单张照片诊断profile时 |
+| [GRAY16-VALIDATION-PLAN](GRAY16-VALIDATION-PLAN.md) | 修改显示后端/波形/供电时序时 |
+
+分类依据是各文档摘要与TODO的R1范围，未逐份重写。
+
+## 硬件与上游参考
+
+| 文件 | 用途 |
+| --- | --- |
+| [HARDWARE-REFERENCE](HARDWARE-REFERENCE.md) | 官方规格、GPIO/IOE、PMU、频率与本机档案 |
+| [UPSTREAM-BASELINE](UPSTREAM-BASELINE.md) | 固定源码核对、接口与分区差异 |
+| [THIRD-PARTY](THIRD-PARTY.md) | 引入来源、版本与许可 |
+| [OPEN-ITEMS](OPEN-ITEMS.md) | 信息缺口、决策编号 |
+| [README.upstream](../README.upstream.md)、[API](API.md)、[DEV](DEV.md)、[MEASURED_PALETTE](MEASURED_PALETTE.md) | PhotoFrame 上游说明，不等于本板已支持 |
+| [研究资料](reference/README.md) | 附件出处与使用边界 |
+
+## 历史（不作为新指令）
+
+| 文件 | 内容 |
+| --- | --- |
+| [精简前全文](history/2026-10-11/INDEX.md) | VALIDATION全文、精简前TODO与CHANGELOG |
+| [进度历史快照](history/README.md) | 2026-10-08整理前专题文档原文 |
+| [旧独立方案](archive/README.md) | 旧架构与协议研究 |
+
+## 状态与历史的维护规则
+
+TODO集中维护进度、下一步、运行门禁和最近候选；专题文档维护现行接口/限制，不叠加“最新”段落。VALIDATION/CHANGELOG按轮次追加事实，历史记录不回写成后来结果。历史快照属于当前移植方案的过去记录；archive仅是旧独立方案，二者均不作为新操作指令。
 
 ## 当前源码布局
 

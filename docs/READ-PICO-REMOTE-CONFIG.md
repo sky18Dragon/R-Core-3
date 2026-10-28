@@ -1,8 +1,8 @@
 # Read Pico 远端配置协调与版本确认
 
-2026-10-08，仅软件。沿用PhotoFrame图片服务器X-Config-Payload、三个配置组、现有转换/保存和请求版本头；新板增加便携协调器，不新建配置/相册系统，旧板原行为保留。产品仍INTEGRATION_ONLY。
+进度、候选身份与下一步统一见 [TODO](../TODO.md)；逐轮测试、部署与失败记录见 [验证记录](VALIDATION.md)。整理前原文保留在 [历史快照](history/2026-10-08/docs/READ-PICO-REMOTE-CONFIG.md)。
 
-最新增量：解析前安全检查/真实cJSON文档检查迁到共享`config_document`，远端2048容量、三组顺序/阶段/空组语义保留；processing/palette回调改checked转换，拒错误类型/截断/非float有限值及非法RGB，不自动改数值。两组HTTP GET与更新共享应用控制，读取/序列化及输入详细边界见[配置文档说明](READ-PICO-CONFIG-DOCUMENT.md)。原1007项/其余转换未检查说明属于此前增量，general内部未检查字段仍未完成。
+现行解析契约：解析前安全检查/真实cJSON文档检查迁到共享`config_document`，远端2048容量、三组顺序/阶段/空组语义保留；processing/palette回调改checked转换，拒错误类型/截断/非float有限值及非法RGB，不自动改数值。两组HTTP GET与更新共享应用控制，读取/序列化及输入详细边界见[配置文档说明](READ-PICO-CONFIG-DOCUMENT.md)。general内部其余未检查字段仍待补齐。
 
 ## 输入与执行
 
@@ -16,7 +16,7 @@
 
 ## 版本和下载结果
 
-最新软件增量将一次远端解析、三组回调及finish一起放在共享应用控制内，与本地general/处理/调色板修改互斥。繁忙不开始解析/业务回调，不自动重试；private general回调避免递归获取控制。本地general的值更新和版本在同一保护内，诊断在释放前复制到请求结果。仅参与的应用入口互斥，不包含所有直接setter/读者/SDK消费者，不增加SDK等待时限、跨组回滚或掉电原子性；详见[配置说明](READ-PICO-NETWORK-CONFIG.md)最新节。
+远端解析将一次远端解析、三组回调及finish一起放在共享应用控制内，与本地general/处理/调色板修改互斥。繁忙不开始解析/业务回调，不自动重试；private general回调避免递归获取控制。本地general的值更新和版本在同一保护内，诊断在释放前复制到请求结果。仅参与的应用入口互斥，不包含所有直接setter/读者/SDK消费者，不增加SDK等待时限、跨组回滚或掉电原子性；详见[配置说明](READ-PICO-NETWORK-CONFIG.md)。
 
 检查式版本touch在共用time_config_control中检查有效clock、int64溢出、NVS open/set/commit/close，仅确认后发布RAM。逻辑秒版本取max(now,previous+1)，同秒/时钟回退也前进；不是严格实时时间或跨客户端CAS。直接void setter在新板也检查保存并拒绝回退，读取请求头使用受保护副本；加载失败保留此前确认版本。IO失败可能已改NVS，不假称回滚；未保护旧getter仍不适合外部并发消费者。
 
@@ -28,8 +28,6 @@
 
 真实cJSON测试优先复用SDK managed component；干净host环境没有缓存时只获取SBOM固定上游提交`b2890c8d76bbb64e710585ebc0a917196b9c67e7`，不加载其tests/install子工程。SDK组件1.7.19~2含安全补丁，与普通v1.7.19标签不同，不能只比较版本号。源码SHA `607e756460fa0de37d20a7a9181f2de29c97bfb7ce5a0e6c2f548243836cd852`、头SHA `25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee`均检查。原MIT版权/许可证保留，不修改SDK/供应方源码。
 
-新增44项CTest：20便携协调/真实cJSON及分配故障，11真实processing/palette C+合成NVS（逐项13处失败），13真实revision C（12新板/1旧板，含实际双线程/加载失败）。44项各重复20次、完整普通/ASan各1007唯一、Python59+17=76和六配置编译通过。独立目录固定依赖下载/校验/构建31项通过；复用已有GoogleTest源码，不是全部依赖纯离线/空机或远端CI验收。CMake<3.18兼容获取分支未运行。
-
 巨大utils/HTTP/main未在host运行，源接入检查不是浏览器/SDK网络/真实NVS/掉电或整栈验收；ASan非TSan。详情与最终身份见[VALIDATION](VALIDATION.md)末节。未部署/回读/联网或操作设备、测试卡、原片、相机；产品/OTA/迁移门禁保持。
 
-下一软件：general其余setter/全部JSON、图片请求头与便捷读取的错误默认化、直接入口与读者的应用并发/多字段副作用、RTC/调度/文件/空间策略及全栈退出。真实服务器/RF/恢复/睡醒/完整产品需另定人工范围。
+本地/远端应用与配置请求捕获已共享控制，图像选项读取及自有初始header检查已接入；其余general字段、凭据/完整快照及RTC/调度/文件/退出按TODO继续。CMake<3.18获取分支、真实服务器/RF/NVS/恢复尚未验收。

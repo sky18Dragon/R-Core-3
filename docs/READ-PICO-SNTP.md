@@ -1,8 +1,6 @@
 # Read Pico 检查式时间同步适配
 
-后续[时区软件](READ-PICO-TIME-CONFIG.md)已补检查式保存/应用状态及保护内HTTP时间副本；普通/ASan各963、Python73与六配置通过。本文件54新增/938是本服务轮次证据，最新产物见VALIDATION末节，不把软件回归当实机验收。
-
-2026-10-08，仅软件。沿用PhotoFrame daily SNTP、Web手动同步、RTC更新与周期完成记录；新板在外层增加read_pico_sntp，旧板仍原代码。固定SDK/厂家源码不改，产品入口仍INTEGRATION_ONLY。
+进度、候选身份与下一步统一见 [TODO](../TODO.md)；逐轮测试、部署与失败记录见 [验证记录](VALIDATION.md)。整理前原文保留在 [历史快照](history/2026-10-08/docs/READ-PICO-SNTP.md)。
 
 ## 配置、解析与所有权
 
@@ -32,6 +30,4 @@ main日同步使用副本及检查式结果；恢复/启动返回先关闭SNTP/�
 
 SDK测试需显式READ_PICO_TEST_IDF_PATH；CMake检查原文件SHA256 `8695155c80c807d7ac949801b023d4e2f27db7975f78bcbba726bcdc012020e7`，不下载/复制SDK分叉。未设置时这9项不会存在，见[开发命令](DEVELOPMENT.md)。IO/timeout为替身、随机启动延迟替身100ms、地址类型模型简化，非真实RTOS/RF/DNS/双栈/分配器/浏览器/掉电验收；ASan不是TSan。
 
-最终普通/ASan各938唯一、Python54+17=71、六配置编译通过，54项各重复20次。实际ELF的SDK发送/init分别调用时间戳/PCB包装，弱apply被自有实现替代，非仅discarded符号。身份/耗时见[VALIDATION](VALIDATION.md)末节。未烧录/回读/联网/操作设备、卡、NVS、原片或相机。
-
-下一安全软件：时区/其他setter、JSON/远端结果、多字段配置、文件/空间策略及全栈退出。服务真实网络/恢复、P2重复性、PMU睡醒/触摸和完整产品仍需另定人工范围与实机验收。
+时区保存/应用与时间响应契约见 [时区说明](READ-PICO-TIME-CONFIG.md)。服务真实网络/双栈/恢复、RTC和整机退出尚待验收，逐轮计数/产物只在VALIDATION保留，下一步见TODO。
