@@ -2,6 +2,7 @@
 #if CONFIG_BOARD_DRIVER_READ_PICO
 #include "wifi_text.h"
 #include "wifi_link.h"
+#include "wifi_watch.h"
 #include <stdatomic.h>
 #include "esp_wifi_default.h"
 #endif
@@ -278,7 +279,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
         // see the link as down again, not a stale bit from an earlier IP.
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 #endif
-        ESP_LOGI(TAG, "connect to the AP fail");
+        ESP_LOGI(TAG, "connect to the AP fail (reason %d)", disc ? (int) disc->reason : -1);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -1023,6 +1024,24 @@ void wifi_manager_keep_reconnecting(void)
     xSemaphoreGive(s_connection_lock);
 #endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static wifi_watch_t s_watch;
+
+void wifi_manager_supervise(int64_t now_ms)
+{
+    if (!s_driver_ready || !s_policy_lock) return;
+    xSemaphoreTake(s_policy_lock, portMAX_DELAY);
+    bool connected = s_is_connected && s_link.ready;
+    bool stalled = s_link.active && !s_candidate && !s_give_up && s_retries_exhausted &&
+                   station_phase_allowed(false);
+    xSemaphoreGive(s_policy_lock);
+    if (!wifi_watch_step(&s_watch, now_ms, connected, stalled)) return;
+    ESP_LOGW(TAG, "Station offline with no retry in progress; reconnecting (restart %u)",
+             (unsigned) s_watch.kicks);
+    wifi_manager_keep_reconnecting();
+}
+#endif
 
 esp_err_t wifi_manager_disconnect(void)
 {

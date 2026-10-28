@@ -112,6 +112,11 @@ static void rotation_timer_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
 #if CONFIG_BOARD_DRIVER_READ_PICO
         if (!read_pico_background_running() || !http_server_is_ready()) return;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        // Always-on frame: bring the station back after outages that outlast
+        // the quick reconnect retries (router reboot), without a restart.
+        wifi_manager_supervise(esp_timer_get_time() / 1000);
+#endif
 #endif
 
         // Run active rotation when:

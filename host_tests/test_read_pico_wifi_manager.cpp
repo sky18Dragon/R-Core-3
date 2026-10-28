@@ -8,6 +8,7 @@
 #include <cstring>
 extern "C" {
 #include "wifi_manager.h"
+#include "wifi_watch.h"
 #include "config_manager.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -928,6 +929,39 @@ TEST_F(ReadPicoWifiManager, StartCallbackAndBackgroundRetrySdkFailurePublishFail
     wifi_manager_keep_reconnecting();
     EXPECT_EQ(connect_calls, before + 1); EXPECT_NE(bits & WIFI_FAIL_BIT, 0u);
     EXPECT_FALSE(wifi_manager_is_connected());
+}
+TEST_F(ReadPicoWifiManager, SupervisorRestartsReconnectAfterOutageOutlastsQuickRetries) {
+    ASSERT_EQ(wifi_manager_connect("new", "password"), ESP_OK);
+    wifi_manager_supervise(0);  // connected: resets any earlier backoff
+    auto stops = stop_calls;
+    no_response = true;         // router reboots and stays away
+    wifi_event_sta_disconnected_t disc{}; disc.reason = 200;  // BEACON_TIMEOUT: AP gone, not an auth rejection
+    for (int i = 0; i < 6; ++i)
+        queue(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disc, sizeof(disc));
+    drain();
+    ASSERT_NE(bits & WIFI_FAIL_BIT, 0u);  // quick retries exhausted, nothing in progress
+    auto before = connect_calls;
+    wifi_manager_supervise(1000);         // schedules
+    wifi_manager_supervise(1000 + WIFI_WATCH_FIRST_RETRY_MS - 1);
+    EXPECT_EQ(connect_calls, before);
+    wifi_manager_supervise(1000 + WIFI_WATCH_FIRST_RETRY_MS);
+    EXPECT_EQ(connect_calls, before + 1);
+    EXPECT_EQ(bits & WIFI_FAIL_BIT, 0u);
+    // The restarted attempt is still running: no duplicate kicks.
+    wifi_manager_supervise(1000 + 10 * WIFI_WATCH_MAX_RETRY_MS);
+    EXPECT_EQ(connect_calls, before + 1);
+    no_response = false;
+    queue(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disc, sizeof(disc)); drain();
+    EXPECT_TRUE(wifi_manager_is_connected());
+    EXPECT_EQ(stop_calls, stops);  // recovered without stopping the radio
+}
+TEST_F(ReadPicoWifiManager, SupervisorLeavesProvisioningAndStoppedStationAlone) {
+    no_response = true;
+    ASSERT_EQ(wifi_manager_connect("old", "password"), ESP_ERR_TIMEOUT);
+    wifi_manager_stop_connecting();
+    auto before = connect_calls;
+    for (int64_t t = 0; t <= 2 * WIFI_WATCH_MAX_RETRY_MS; t += 1000) wifi_manager_supervise(t);
+    EXPECT_EQ(connect_calls, before);
 }
 TEST_F(ReadPicoWifiManager, PerformanceSettingDoesNotReuseStaleCacheOrHideSdkFailure) {
     ASSERT_EQ(wifi_manager_set_performance_mode(true), ESP_OK);

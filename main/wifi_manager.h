@@ -2,6 +2,7 @@
 #define WIFI_MANAGER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "wifi_credentials.h"
@@ -74,6 +75,10 @@ esp_err_t wifi_manager_stop_connecting_checked(void);
 // many rejections as a normal connect allows, WIFI_FAIL_BIT is set and the
 // retries stop.
 void wifi_manager_keep_reconnecting(void);
+// Read Pico always-on frames: call about once a second. When the station has
+// stopped retrying (e.g. a router reboot outlasted the quick retries), restart
+// reconnecting with a 30 s..10 min backoff. Never restarts or provisions.
+void wifi_manager_supervise(int64_t now_ms);
 esp_err_t wifi_manager_disconnect(void);
 bool wifi_manager_is_connected(void);
 // Read Pico returns a complete current address only for a verified live link;

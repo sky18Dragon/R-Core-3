@@ -234,13 +234,18 @@ endforeach()
 set_source_files_properties(../main/config_manager.c PROPERTIES COMPILE_DEFINITIONS
   "malloc=config_load_test_malloc;setenv=config_load_test_setenv;tzset=config_load_test_tzset;time=config_load_test_time;localtime_r=config_load_test_localtime_r;strftime=config_load_test_strftime")
 
+add_executable(wifi_watch_test test_wifi_watch.cpp ../main/wifi_watch.c)
+target_include_directories(wifi_watch_test PRIVATE ../main)
+target_link_libraries(wifi_watch_test GTest::gtest_main)
+gtest_discover_tests(wifi_watch_test)
+
 add_executable(wifi_link_test test_wifi_link.cpp ../main/wifi_link.c)
 target_include_directories(wifi_link_test PRIVATE ../main)
 target_link_libraries(wifi_link_test GTest::gtest_main)
 gtest_discover_tests(wifi_link_test)
 
 add_executable(read_pico_wifi_manager_test test_read_pico_wifi_manager.cpp
-  ../main/wifi_manager.c ../main/wifi_link.c ../main/wifi_text.c ../main/wifi_network.c)
+  ../main/wifi_manager.c ../main/wifi_link.c ../main/wifi_watch.c ../main/wifi_text.c ../main/wifi_network.c)
 target_compile_definitions(read_pico_wifi_manager_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
 target_include_directories(read_pico_wifi_manager_test PRIVATE wifi_stubs config_load_stubs
   display_checked_stubs stubs ../main)
