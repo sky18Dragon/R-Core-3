@@ -47,6 +47,10 @@
 #include "read_pico_sntp.h"
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "read_pico_epaper.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "upload_sweep.h"
+#define UPLOAD_SWEEP_MAX_PER_BOOT 64
+#endif
 #if CONFIG_READ_PICO_TOUCH
 #include "read_pico_touch_nav.h"
 #endif
@@ -967,6 +971,17 @@ void app_main(void)
                  esp_err_to_name(metadata_start));
         return;
     }
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Before HTTP starts, so no upload can own a temporary yet: remove
+    // unpublished upload temporaries left by an interrupted request.
+    upload_sweep_result_t sweep;
+    if (upload_sweep_orphans(IMAGE_DIRECTORY, UPLOAD_SWEEP_MAX_PER_BOOT, &sweep) == 0 &&
+        (sweep.removed || sweep.failed)) {
+        ESP_LOGI(TAG, "Removed %u orphaned upload temporaries (%llu bytes)%s; %u could not be removed",
+                 sweep.removed, (unsigned long long) sweep.bytes,
+                 sweep.truncated ? ", more remain" : "", sweep.failed);
+    }
+#endif
 #else
     ESP_ERROR_CHECK(ota_manager_init());
     ESP_ERROR_CHECK(album_manager_init());

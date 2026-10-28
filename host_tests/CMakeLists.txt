@@ -234,6 +234,11 @@ endforeach()
 set_source_files_properties(../main/config_manager.c PROPERTIES COMPILE_DEFINITIONS
   "malloc=config_load_test_malloc;setenv=config_load_test_setenv;tzset=config_load_test_tzset;time=config_load_test_time;localtime_r=config_load_test_localtime_r;strftime=config_load_test_strftime")
 
+add_executable(upload_sweep_test test_upload_sweep.cpp ../main/upload_sweep.c)
+target_include_directories(upload_sweep_test PRIVATE ../main)
+target_link_libraries(upload_sweep_test GTest::gtest_main)
+gtest_discover_tests(upload_sweep_test)
+
 add_executable(touch_gesture_test test_touch_gesture.cpp ../main/touch_gesture.c)
 target_include_directories(touch_gesture_test PRIVATE ../main)
 target_link_libraries(touch_gesture_test GTest::gtest_main)
