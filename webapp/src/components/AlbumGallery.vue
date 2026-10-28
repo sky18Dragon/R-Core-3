@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref } from "vue";
 import { useAppStore } from "../stores";
 
@@ -72,19 +73,19 @@ function getThumbnailUrl(image) {
   <v-card>
     <v-card-title class="d-flex align-center">
       <v-icon icon="mdi-image-multiple" class="mr-2" />
-      Albums & Gallery
+      {{ t("Albums & Gallery") }}
     </v-card-title>
 
     <v-card-text>
       <!-- Album List -->
       <div class="d-flex align-center mb-2">
         <span class="text-body-2 text-grey">
-          ✓ = Enabled for auto-rotation • Click album name to view images
+          {{ t("✓ = Enabled for auto-rotation • Click album name to view images") }}
         </span>
         <v-spacer />
         <v-btn color="primary" size="small" @click="newAlbumDialog = true">
           <v-icon icon="mdi-plus" start />
-          New Album
+          {{ t("New Album") }}
         </v-btn>
       </div>
 
@@ -127,7 +128,9 @@ function getThumbnailUrl(image) {
         </h3>
         <v-spacer />
         <v-progress-circular v-if="displayLoading" indeterminate size="24" class="mr-2" />
-        <span v-if="displayLoading" class="text-body-2 text-grey"> Updating display... </span>
+        <span v-if="displayLoading" class="text-body-2 text-grey">
+          {{ t("Updating display...") }}
+        </span>
       </div>
 
       <div v-if="appStore.loading.images" class="d-flex justify-center align-center py-12">
@@ -165,8 +168,8 @@ function getThumbnailUrl(image) {
                   size="x-small"
                   color="error"
                   class="delete-overlay"
-                  title="Delete image"
-                  aria-label="Delete image"
+                  :title="t('Delete image')"
+                  :aria-label="t('Delete image')"
                   @click.stop="confirmDeleteImage(image)"
                 />
               </div>
@@ -175,7 +178,7 @@ function getThumbnailUrl(image) {
         </v-row>
 
         <v-alert v-else type="info" variant="tonal" class="mt-4">
-          No images in this album. Upload images to get started.
+          {{ t("No images in this album. Upload images to get started.") }}
         </v-alert>
       </template>
     </v-card-text>
@@ -184,19 +187,19 @@ function getThumbnailUrl(image) {
   <!-- New Album Dialog -->
   <v-dialog v-model="newAlbumDialog" max-width="400">
     <v-card>
-      <v-card-title>Create New Album</v-card-title>
+      <v-card-title>{{ t("Create New Album") }}</v-card-title>
       <v-card-text>
         <v-text-field
           v-model="newAlbumName"
-          label="Album Name"
+          :label="t('Album Name')"
           autofocus
           @keyup.enter="createAlbum"
         />
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="newAlbumDialog = false"> Cancel </v-btn>
-        <v-btn color="primary" @click="createAlbum"> Create </v-btn>
+        <v-btn variant="text" @click="newAlbumDialog = false"> {{ t("Cancel") }} </v-btn>
+        <v-btn color="primary" @click="createAlbum"> {{ t("Create") }} </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -204,15 +207,21 @@ function getThumbnailUrl(image) {
   <!-- Delete Album Dialog -->
   <v-dialog v-model="deleteAlbumDialog" max-width="400">
     <v-card>
-      <v-card-title>Delete Album?</v-card-title>
+      <v-card-title>{{ t("Delete Album?") }}</v-card-title>
       <v-card-text>
-        Are you sure you want to delete "{{ albumToDelete?.name }}"? This will also delete all
-        images in the album.
+        {{
+          t(
+            'Are you sure you want to delete "{name}"? This will also delete all images in the album.',
+            {
+              name: albumToDelete?.name,
+            }
+          )
+        }}
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="deleteAlbumDialog = false"> Cancel </v-btn>
-        <v-btn color="error" @click="deleteAlbum"> Delete </v-btn>
+        <v-btn variant="text" @click="deleteAlbumDialog = false"> {{ t("Cancel") }} </v-btn>
+        <v-btn color="error" @click="deleteAlbum"> {{ t("Delete") }} </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -222,10 +231,10 @@ function getThumbnailUrl(image) {
     <v-card>
       <v-card-title>
         <v-icon icon="mdi-monitor" class="mr-2" />
-        Display Image?
+        {{ t("Display Image?") }}
       </v-card-title>
       <v-card-text>
-        <div class="mb-3">Show this image on the e-paper display?</div>
+        <div class="mb-3">{{ t("Show this image on the e-paper display?") }}</div>
         <div class="d-flex justify-center">
           <img
             v-if="imageToDisplay"
@@ -237,8 +246,8 @@ function getThumbnailUrl(image) {
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="displayDialog = false"> Cancel </v-btn>
-        <v-btn color="primary" @click="displayImage"> Display </v-btn>
+        <v-btn variant="text" @click="displayDialog = false"> {{ t("Cancel") }} </v-btn>
+        <v-btn color="primary" @click="displayImage"> {{ t("Display") }} </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -248,10 +257,10 @@ function getThumbnailUrl(image) {
     <v-card>
       <v-card-title>
         <v-icon icon="mdi-delete" color="error" class="mr-2" />
-        Delete Image?
+        {{ t("Delete Image?") }}
       </v-card-title>
       <v-card-text>
-        <div class="mb-3">Are you sure you want to delete this image?</div>
+        <div class="mb-3">{{ t("Are you sure you want to delete this image?") }}</div>
         <div class="d-flex justify-center">
           <img
             v-if="imageToDelete"
@@ -263,8 +272,8 @@ function getThumbnailUrl(image) {
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="deleteImageDialog = false"> Cancel </v-btn>
-        <v-btn color="error" @click="deleteImage"> Delete </v-btn>
+        <v-btn variant="text" @click="deleteImageDialog = false"> {{ t("Cancel") }} </v-btn>
+        <v-btn color="error" @click="deleteImage"> {{ t("Delete") }} </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, onMounted, onUnmounted } from "vue";
 
 // Inline SVG icon paths (works offline during provisioning)
@@ -85,7 +86,7 @@ onUnmounted(() => {
 async function submitForm() {
   loading.value = true;
   status.value = "info";
-  statusMessage.value = "Testing WiFi connection...";
+  statusMessage.value = t("Testing WiFi connection...");
 
   const formData = new URLSearchParams();
   formData.append("ssid", ssid.value);
@@ -114,7 +115,10 @@ async function submitForm() {
       status.value = "success";
       // Generate mDNS hostname from device name (lowercase, spaces to hyphens)
       const hostname = deviceName.value.toLowerCase().replace(/\s+/g, "-");
-      statusMessage.value = `Credentials saved! Device will restart in 3 seconds and attempt to connect to "${ssid.value}".`;
+      statusMessage.value = t(
+        'Credentials saved! Device will restart in 3 seconds and attempt to connect to "{ssid}".',
+        { ssid: ssid.value }
+      );
 
       setTimeout(() => {
         statusMessage.value += `\n\nRestarting now... Close this page and reconnect to your WiFi network, then visit http://${hostname}.local`;
@@ -125,16 +129,17 @@ async function submitForm() {
 
       const text = await response.text();
       if (text.includes("Connection Failed") || text.includes("connect")) {
-        statusMessage.value =
-          "WiFi Connection Failed. Please check your password, SSID, and ensure it's a 2.4GHz network.";
+        statusMessage.value = t(
+          "WiFi Connection Failed. Please check your password, SSID, and ensure it's a 2.4GHz network."
+        );
       } else {
-        statusMessage.value = "An error occurred. Please try again.";
+        statusMessage.value = t("An error occurred. Please try again.");
       }
     }
   } catch (error) {
     loading.value = false;
     status.value = "error";
-    statusMessage.value = "Error: " + error.message;
+    statusMessage.value = t("Error: ") + error.message;
   }
 }
 </script>
@@ -143,9 +148,9 @@ async function submitForm() {
   <v-app>
     <v-main class="provision-main bg-grey-lighten-4">
       <v-card class="provision-card" elevation="12">
-        <v-card-title class="text-h6"> PhotoFrame Setup </v-card-title>
+        <v-card-title class="text-h6"> {{ t("PhotoFrame Setup") }} </v-card-title>
 
-        <v-card-subtitle class="mb-2"> Connect your PhotoFrame to WiFi </v-card-subtitle>
+        <v-card-subtitle class="mb-2"> {{ t("Connect your PhotoFrame to WiFi") }} </v-card-subtitle>
 
         <v-form @submit.prevent="submitForm">
           <v-combobox
@@ -153,13 +158,13 @@ async function submitForm() {
             :items="networks"
             item-title="title"
             item-value="value"
-            label="WiFi Network Name (SSID)"
+            :label="t('WiFi Network Name (SSID)')"
             variant="outlined"
             required
             :disabled="loading"
             :loading="scanning"
             class="mb-2"
-            placeholder="Select or type a network name"
+            :placeholder="t('Select or type a network name')"
             @update:model-value="
               (val) => {
                 if (val && typeof val === 'object') ssid = val.value;
@@ -195,11 +200,11 @@ async function submitForm() {
 
           <v-text-field
             v-model="password"
-            label="WiFi Password"
+            :label="t('WiFi Password')"
             :type="showPassword ? 'text' : 'password'"
             variant="outlined"
             :disabled="loading"
-            hint="Leave blank for open networks"
+            :hint="t('Leave blank for open networks')"
             class="mb-2"
           >
             <template #append-inner>
@@ -216,10 +221,10 @@ async function submitForm() {
 
           <v-text-field
             v-model="deviceName"
-            label="Device Name"
+            :label="t('Device Name')"
             variant="outlined"
             :disabled="loading"
-            hint="Used for mDNS hostname"
+            :hint="t('Used for mDNS hostname')"
             class="mb-2"
           />
 
@@ -230,17 +235,17 @@ async function submitForm() {
               :disabled="loading"
               @click="showAdvanced = !showAdvanced"
             >
-              {{ showAdvanced ? "▾" : "▸" }} Advanced network settings
+              {{ showAdvanced ? "▾" : "▸" }} {{ t("Advanced network settings") }}
             </button>
 
             <div v-if="showAdvanced" class="mt-2">
               <v-select
                 v-model="ipMode"
                 :items="[
-                  { title: 'Automatic (DHCP)', value: 'dhcp' },
-                  { title: 'Static IP', value: 'static' },
+                  { title: t('Automatic (DHCP)'), value: 'dhcp' },
+                  { title: t('Static IP'), value: 'static' },
                 ]"
-                label="IP Configuration"
+                :label="t('IP Configuration')"
                 variant="outlined"
                 density="compact"
                 :disabled="loading"
@@ -250,7 +255,7 @@ async function submitForm() {
               <template v-if="ipMode === 'static'">
                 <v-text-field
                   v-model="staticIp"
-                  label="IP Address"
+                  :label="t('IP Address')"
                   variant="outlined"
                   density="compact"
                   :disabled="loading"
@@ -259,7 +264,7 @@ async function submitForm() {
                 />
                 <v-text-field
                   v-model="staticNetmask"
-                  label="Netmask"
+                  :label="t('Netmask')"
                   variant="outlined"
                   density="compact"
                   :disabled="loading"
@@ -267,7 +272,7 @@ async function submitForm() {
                 />
                 <v-text-field
                   v-model="staticGateway"
-                  label="Gateway"
+                  :label="t('Gateway')"
                   variant="outlined"
                   density="compact"
                   :disabled="loading"
@@ -278,7 +283,7 @@ async function submitForm() {
 
               <v-text-field
                 v-model="dnsServer"
-                label="DNS Server (optional)"
+                :label="t('DNS Server (optional)')"
                 variant="outlined"
                 density="compact"
                 :disabled="loading"
@@ -294,7 +299,7 @@ async function submitForm() {
           </div>
 
           <v-btn type="submit" color="primary" size="large" block :loading="loading">
-            Connect to WiFi
+            {{ t("Connect to WiFi") }}
           </v-btn>
         </v-form>
 

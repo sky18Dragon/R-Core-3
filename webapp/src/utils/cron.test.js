@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { parseCron, isValidCron, nextRuns, compileCard, cardFromCron, newCard } from "./cron.js";
+import {
+  parseCron,
+  isValidCron,
+  nextRuns,
+  compileCard,
+  cardFromCron,
+  newCard,
+  describeCardZh,
+} from "./cron.js";
 
 const dow = (e) => [...parseCron(e).dow].sort((a, b) => a - b);
 const hour = (e) => [...parseCron(e).hour].sort((a, b) => a - b);
@@ -116,5 +124,36 @@ describe("cardFromCron round-trip", () => {
   it("an unmappable expression falls back to a raw card", () => {
     const card = cardFromCron("15 8-20 *");
     expect(card.raw).toBe("15 8-20 *");
+  });
+});
+
+describe("describeCardZh", () => {
+  it("summarises interval, times and custom cards in Chinese", () => {
+    expect(
+      describeCardZh({
+        mode: "interval",
+        every: 2,
+        unit: "hours",
+        fromHour: 8,
+        toHour: 20,
+        days: "weekdays",
+        raw: null,
+      })
+    ).toBe("工作日，08:00–20:00，每 2 小时轮播一次");
+    expect(
+      describeCardZh({
+        mode: "interval",
+        every: 1,
+        unit: "hours",
+        fromHour: 0,
+        toHour: 23,
+        days: "everyday",
+        raw: null,
+      })
+    ).toBe("每天，每小时轮播一次");
+    expect(
+      describeCardZh({ mode: "times", times: ["07:30", "21:00"], days: [6, 0], raw: null })
+    ).toBe("周日、周六 07:30、21:00 轮播");
+    expect(describeCardZh({ raw: "0 */12 *" })).toBe("自定义：0 */12 *");
   });
 });

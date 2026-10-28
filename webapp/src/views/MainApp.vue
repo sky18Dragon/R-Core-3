@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useAppStore, useSettingsStore } from "../stores";
 import AppHeader from "../components/AppHeader.vue";
@@ -41,7 +42,7 @@ let keepAliveInterval = null;
 let wakeRetryInterval = null;
 
 const deviceAsleep = ref(false);
-const wakeupKeyName = computed(() => appStore.systemInfo.wakeup_key_name || "wake button");
+const wakeupKeyName = computed(() => appStore.systemInfo.wakeup_key_name || t("wake button"));
 
 async function pingKeepAlive() {
   const alive = await appStore.keepAlive();
@@ -120,8 +121,12 @@ onUnmounted(() => {
           type="info"
           variant="tonal"
           class="mb-6"
-          title="SD Card Not Detected"
-          text="This device supports an SD card. To upload images and create multiple albums, please insert one and restart the device."
+          :title="t('SD Card Not Detected')"
+          :text="
+            t(
+              'This device supports an SD card. To upload images and create multiple albums, please insert one and restart the device.'
+            )
+          "
         ></v-alert>
 
         <AlbumGallery
@@ -141,16 +146,22 @@ onUnmounted(() => {
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon icon="mdi-power-sleep" class="mr-2" />
-          Device is asleep
+          {{ t("Device is asleep") }}
         </v-card-title>
         <v-card-text>
-          Your photo frame has gone to sleep to save power and is no longer responding. Press the
+          {{
+            t(
+              "Your photo frame has gone to sleep to save power and is no longer responding. Press the"
+            )
+          }}
           <strong>{{ wakeupKeyName }}</strong>
-          on the device to wake it, then tap Try again.
+          {{ t("on the device to wake it, then tap Try again.") }}
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn color="primary" variant="text" @click="pingKeepAlive"> Try again </v-btn>
+          <v-btn color="primary" variant="text" @click="pingKeepAlive">
+            {{ t("Try again") }}
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

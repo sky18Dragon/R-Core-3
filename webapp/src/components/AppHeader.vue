@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from "vue";
 import { useAppStore, useSettingsStore } from "../stores";
+import { locale, setLocale, t } from "../i18n";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
@@ -51,14 +52,24 @@ function getBatteryColor(level) {
         icon
         class="mr-2"
         :loading="rotating"
-        title="Rotate to next image"
+        :title="t('Rotate to next image')"
         @click="handleRotate"
       >
         <v-icon>mdi-rotate-right</v-icon>
       </v-btn>
 
       <!-- Sleep Button -->
-      <v-btn icon class="mr-2" title="Enter Deep Sleep" @click="sleepDialog = true">
+      <!-- Language switch -->
+      <v-btn
+        variant="text"
+        class="mr-2"
+        :title="t('Switch language')"
+        @click="setLocale(locale === 'zh' ? 'en' : 'zh')"
+      >
+        {{ locale === "zh" ? "EN" : "中文" }}
+      </v-btn>
+
+      <v-btn icon class="mr-2" :title="t('Enter Deep Sleep')" @click="sleepDialog = true">
         <v-icon>mdi-sleep</v-icon>
       </v-btn>
 
@@ -71,11 +82,11 @@ function getBatteryColor(level) {
       >
         <v-icon :icon="appStore.battery.charging ? 'mdi-battery-charging' : 'mdi-battery'" start />
         {{ appStore.battery.level }}%
-        <span v-if="appStore.battery.charging" class="ml-1">Charging</span>
+        <span v-if="appStore.battery.charging" class="ml-1">{{ t("Charging") }}</span>
       </v-chip>
       <v-chip v-else variant="flat" color="grey-darken-1" class="mr-2 text-white">
         <v-icon icon="mdi-power-plug-off" start />
-        No Battery
+        {{ t("No Battery") }}
       </v-chip>
     </template>
   </v-app-bar>
@@ -83,14 +94,14 @@ function getBatteryColor(level) {
   <!-- Sleep Confirmation Dialog -->
   <v-dialog v-model="sleepDialog" max-width="400">
     <v-card>
-      <v-card-title>Enter Deep Sleep?</v-card-title>
+      <v-card-title>{{ t("Enter Deep Sleep?") }}</v-card-title>
       <v-card-text>
-        The device will enter deep sleep mode and stop responding until woken up.
+        {{ t("The device will enter deep sleep mode and stop responding until woken up.") }}
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="sleepDialog = false"> Cancel </v-btn>
-        <v-btn color="primary" @click="handleSleep"> Sleep </v-btn>
+        <v-btn variant="text" @click="sleepDialog = false"> {{ t("Cancel") }} </v-btn>
+        <v-btn color="primary" @click="handleSleep"> {{ t("Sleep") }} </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

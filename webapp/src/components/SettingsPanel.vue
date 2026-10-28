@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useSettingsStore, useAppStore } from "../stores";
 import PaletteCalibration from "./PaletteCalibration.vue";
@@ -58,10 +59,12 @@ const selectedZone = computed({
 const timezoneItems = computed(() => {
   const items = Object.keys(TIMEZONES).map((name) => ({ title: name, value: name }));
   if (selectedZone.value === FIXED_OFFSET_ZONE) {
-    const label = `Fixed offset ${fixedOffsetLabel(timezoneRule.value)} (no DST)`;
+    const label = t("Fixed offset {offset} (no DST)", {
+      offset: fixedOffsetLabel(timezoneRule.value),
+    });
     items.unshift({ title: label, value: FIXED_OFFSET_ZONE });
   } else if (selectedZone.value === CUSTOM_ZONE) {
-    items.unshift({ title: "Custom rule", value: CUSTOM_ZONE });
+    items.unshift({ title: t("Custom rule"), value: CUSTOM_ZONE });
   }
   return items;
 });
@@ -78,8 +81,8 @@ watch(
 );
 
 const saveBlocker = computed(() => {
-  if (!scheduleValid.value) return "Fix the rotation schedule first (invalid or too many rules)";
-  if (timezoneError.value) return "Fix the time zone rule first";
+  if (!scheduleValid.value) return t("Fix the rotation schedule first (invalid or too many rules)");
+  if (timezoneError.value) return t("Fix the time zone rule first");
   return "";
 });
 
@@ -167,8 +170,8 @@ const orientationOptions = computed(() => {
   const minDim = Math.min(width, height);
 
   return [
-    { title: `Landscape (${maxDim}×${minDim})`, value: "landscape" },
-    { title: `Portrait (${minDim}×${maxDim})`, value: "portrait" },
+    { title: t("Landscape ({w}×{h})", { w: maxDim, h: minDim }), value: "landscape" },
+    { title: t("Portrait ({w}×{h})", { w: minDim, h: maxDim }), value: "portrait" },
   ];
 });
 
@@ -181,16 +184,16 @@ const rotationOptions = [
 ];
 
 const rotationModeOptions = computed(() => {
-  const options = [{ title: "URL - Fetch image from URL", value: "url" }];
+  const options = [{ title: t("URL - Fetch image from URL"), value: "url" }];
   if (appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage) {
-    options.unshift({ title: "Storage - Rotate through images", value: "storage" });
+    options.unshift({ title: t("Storage - Rotate through images"), value: "storage" });
   }
   return options;
 });
 
 const sdRotationModeOptions = [
-  { title: "Random - Shuffle images", value: "random" },
-  { title: "Sequential - In sequence", value: "sequential" },
+  { title: t("Random - Shuffle images"), value: "random" },
+  { title: t("Sequential - In sequence"), value: "sequential" },
 ];
 
 const saving = ref(false);
@@ -255,7 +258,7 @@ async function downloadDebugLog() {
     const response = await fetch("/api/debug/log");
     if (!response.ok) {
       saveError.value = true;
-      saveMessage.value = "No debug logs available";
+      saveMessage.value = t("No debug logs available");
       setTimeout(() => (saveError.value = false), 5000);
       return;
     }
@@ -270,7 +273,7 @@ async function downloadDebugLog() {
   } catch (error) {
     console.error("Failed to download debug log:", error);
     saveError.value = true;
-    saveMessage.value = "Failed to download debug logs";
+    saveMessage.value = t("Failed to download debug logs");
     setTimeout(() => (saveError.value = false), 5000);
   } finally {
     downloadingLog.value = false;
@@ -287,12 +290,12 @@ async function clearDebugLog() {
       throw new Error(`HTTP ${response.status}`);
     }
     saveSuccess.value = true;
-    saveMessage.value = "Debug logs cleared";
+    saveMessage.value = t("Debug logs cleared");
     setTimeout(() => (saveSuccess.value = false), 3000);
   } catch (error) {
     console.error("Failed to clear debug logs:", error);
     saveError.value = true;
-    saveMessage.value = "Failed to clear debug logs";
+    saveMessage.value = t("Failed to clear debug logs");
     setTimeout(() => (saveError.value = false), 5000);
   } finally {
     clearingLog.value = false;
@@ -311,7 +314,7 @@ function onImportFileSelected(event) {
       showImportDialog.value = true;
     } catch {
       saveError.value = true;
-      saveMessage.value = "Invalid JSON file";
+      saveMessage.value = t("Invalid JSON file");
       setTimeout(() => (saveError.value = false), 5000);
     }
   };
@@ -369,18 +372,26 @@ async function performImport() {
     let authNote = "";
     if (typeof importedAuth === "boolean" && importedAuth !== deviceAuth) {
       authNote = importedAuth
-        ? " Exports never include the device password: set it again under General → Advanced network settings to require one."
-        : " The device password was left in place: turn it off under General → Advanced network settings if you want the frame open.";
+        ? " " +
+          t(
+            "Exports never include the device password: set it again under General → Advanced network settings to require one."
+          )
+        : " " +
+          t(
+            "The device password was left in place: turn it off under General → Advanced network settings if you want the frame open."
+          );
     }
 
     saveSuccess.value = true;
     saveError.value = false;
-    saveMessage.value = authNote ? `Config imported.${authNote}` : "Config imported successfully!";
+    saveMessage.value = authNote
+      ? t("Config imported.") + authNote
+      : t("Config imported successfully!");
     setTimeout(() => (saveSuccess.value = false), authNote ? 10000 : 3000);
   } catch (error) {
     console.error("Failed to import config:", error);
     saveError.value = true;
-    saveMessage.value = "Failed to import config";
+    saveMessage.value = t("Failed to import config");
     setTimeout(() => (saveError.value = false), 5000);
   } finally {
     saving.value = false;
@@ -402,7 +413,7 @@ async function saveSettings() {
   if (deviceResult.success && processingSuccess) {
     saveSuccess.value = true;
     saveError.value = false;
-    saveMessage.value = deviceResult.message || "Settings saved!";
+    saveMessage.value = deviceResult.message || t("Settings saved!");
     setTimeout(() => (saveSuccess.value = false), 3000);
 
     // Refresh device time in case timezone changed
@@ -411,7 +422,7 @@ async function saveSettings() {
     // Show error message
     saveError.value = true;
     saveSuccess.value = false;
-    saveMessage.value = deviceResult.message || "Failed to save settings";
+    saveMessage.value = deviceResult.message || t("Failed to save settings");
     setTimeout(() => (saveError.value = false), 5000);
   }
 }
@@ -441,20 +452,20 @@ async function performFactoryReset() {
     <v-card style="overflow: visible">
       <v-card-title class="d-flex align-center">
         <v-icon icon="mdi-cog" class="mr-2" />
-        Settings
+        {{ t("Settings") }}
       </v-card-title>
 
       <v-tabs v-model="tab" color="primary" show-arrows density="compact">
-        <v-tab value="general"> General </v-tab>
-        <v-tab value="autoRotate"> Auto Rotate </v-tab>
-        <v-tab value="power"> Power </v-tab>
+        <v-tab value="general"> {{ t("General") }} </v-tab>
+        <v-tab value="autoRotate"> {{ t("Auto Rotate") }} </v-tab>
+        <v-tab value="power"> {{ t("Power") }} </v-tab>
         <v-tab value="homeAssistant"> Home Assistant </v-tab>
-        <v-tab value="processing"> Processing </v-tab>
-        <v-tab value="ai"> AI Generation </v-tab>
+        <v-tab value="processing"> {{ t("Processing") }} </v-tab>
+        <v-tab value="ai"> {{ t("AI Generation") }} </v-tab>
         <v-tab value="calibration">
-          {{ appStore.isGrayscale ? "Grayscale" : "Palette" }}
+          {{ appStore.isGrayscale ? t("Grayscale calibration") : t("Palette") }}
         </v-tab>
-        <v-tab value="maintenance"> Maintenance </v-tab>
+        <v-tab value="maintenance"> {{ t("Maintenance") }} </v-tab>
       </v-tabs>
 
       <v-card-text>
@@ -465,9 +476,13 @@ async function performFactoryReset() {
               <v-col cols="12" md="6">
                 <v-text-field
                   v-model="settingsStore.deviceSettings.deviceName"
-                  label="Device Name"
+                  :label="t('Device Name')"
                   variant="outlined"
-                  hint="Used for mDNS hostname (e.g., 'Living Room Frame' → living-room-frame.local)"
+                  :hint="
+                    t(
+                      'Used for mDNS hostname (e.g., \'Living Room Frame\' → living-room-frame.local)'
+                    )
+                  "
                   persistent-hint
                 />
               </v-col>
@@ -477,19 +492,19 @@ async function performFactoryReset() {
               <v-col cols="12" md="6">
                 <v-text-field
                   v-model="settingsStore.deviceSettings.wifiSsid"
-                  label="WiFi SSID"
+                  :label="t('WiFi SSID')"
                   variant="outlined"
-                  hint="Network name to connect to"
+                  :hint="t('Network name to connect to')"
                   persistent-hint
                 />
               </v-col>
               <v-col cols="12" md="6">
                 <v-text-field
                   v-model="settingsStore.deviceSettings.wifiPassword"
-                  label="WiFi Password"
+                  :label="t('WiFi Password')"
                   type="password"
                   variant="outlined"
-                  hint="Leave empty to keep current password"
+                  :hint="t('Leave empty to keep current password')"
                   persistent-hint
                   placeholder="••••••••"
                 />
@@ -503,7 +518,7 @@ async function performFactoryReset() {
                   :items="orientationOptions"
                   item-title="title"
                   item-value="value"
-                  label="Display Orientation"
+                  :label="t('Display Orientation')"
                   variant="outlined"
                 />
               </v-col>
@@ -513,7 +528,7 @@ async function performFactoryReset() {
                   :items="rotationOptions"
                   item-title="title"
                   item-value="value"
-                  label="Display Rotation (deg)"
+                  :label="t('Display Rotation (deg)')"
                   variant="outlined"
                 />
               </v-col>
@@ -523,10 +538,10 @@ async function performFactoryReset() {
               <v-col cols="12" md="6">
                 <v-text-field
                   :model-value="deviceTime || 'Loading...'"
-                  label="Device Time"
+                  :label="t('Device Time')"
                   variant="outlined"
                   readonly
-                  hint="Click sync to update from NTP server"
+                  :hint="t('Click sync to update from NTP server')"
                   persistent-hint
                 >
                   <template #append-inner>
@@ -538,7 +553,7 @@ async function performFactoryReset() {
                       @click="syncTime"
                     >
                       <v-icon>mdi-sync</v-icon>
-                      <v-tooltip activator="parent" location="top">Sync NTP</v-tooltip>
+                      <v-tooltip activator="parent" location="top">{{ t("Sync NTP") }}</v-tooltip>
                     </v-btn>
                   </template>
                 </v-text-field>
@@ -547,14 +562,14 @@ async function performFactoryReset() {
                 <v-autocomplete
                   v-model="selectedZone"
                   :items="timezoneItems"
-                  label="Time zone"
+                  :label="t('Time zone')"
                   variant="outlined"
                   auto-select-first
-                  hint="The rotation schedule (Auto Rotate) runs in this time zone"
+                  :hint="t('The rotation schedule (Auto Rotate) runs in this time zone')"
                   persistent-hint
                 />
                 <div class="text-caption text-medium-emphasis mt-1">
-                  POSIX TZ rule: <code>{{ timezoneRule }}</code>
+                  {{ t("POSIX TZ rule:") }} <code>{{ timezoneRule }}</code>
                 </div>
                 <div v-if="approximateNote" class="text-caption text-warning mt-1">
                   {{ approximateNote }}
@@ -568,7 +583,7 @@ async function performFactoryReset() {
                     :disabled="selectedZone === browserZone"
                     @click="selectedZone = browserZone"
                   >
-                    Use this browser's time zone ({{ browserZone }})
+                    {{ t("Use this browser's time zone ({zone})", { zone: browserZone }) }}
                   </v-btn>
                   <v-btn
                     size="small"
@@ -576,20 +591,24 @@ async function performFactoryReset() {
                     :prepend-icon="showAdvancedTz ? 'mdi-chevron-up' : 'mdi-chevron-down'"
                     @click="showAdvancedTz = !showAdvancedTz"
                   >
-                    Advanced: POSIX TZ rule
+                    {{ t("Advanced: POSIX TZ rule") }}
                   </v-btn>
                 </div>
                 <v-expand-transition>
                   <v-text-field
                     v-if="showAdvancedTz"
                     v-model="settingsStore.deviceSettings.timezone"
-                    label="POSIX TZ rule"
+                    :label="t('POSIX TZ rule')"
                     variant="outlined"
                     density="compact"
                     class="mt-2"
                     :maxlength="TIMEZONE_MAX_BYTES"
                     :error-messages="timezoneError ? [timezoneError] : []"
-                    hint="Any rule tzset() accepts, e.g. EST5EDT,M3.2.0,M11.1.0. A fixed offset is UTC-8 for eight hours ahead of UTC (POSIX inverts the sign)."
+                    :hint="
+                      t(
+                        'Any rule tzset() accepts, e.g. EST5EDT,M3.2.0,M11.1.0. A fixed offset is UTC-8 for eight hours ahead of UTC (POSIX inverts the sign).'
+                      )
+                    "
                     persistent-hint
                   />
                 </v-expand-transition>
@@ -598,15 +617,15 @@ async function performFactoryReset() {
             <!-- Advanced network settings (#43, #130): collapsed by default — NTP,
                  static IP and DNS override are tinkerer territory. -->
             <v-expansion-panels class="mt-2" variant="accordion">
-              <v-expansion-panel title="Advanced network settings" elevation="0">
+              <v-expansion-panel :title="t('Advanced network settings')" elevation="0">
                 <v-expansion-panel-text>
                   <v-row>
                     <v-col cols="12" md="6">
                       <v-text-field
                         v-model="settingsStore.deviceSettings.ntpServer"
-                        label="NTP Server"
+                        :label="t('NTP Server')"
                         variant="outlined"
-                        hint="e.g., pool.ntp.org, cn.pool.ntp.org, or a local IP"
+                        :hint="t('e.g., pool.ntp.org, cn.pool.ntp.org, or a local IP')"
                         persistent-hint
                       />
                     </v-col>
@@ -617,9 +636,9 @@ async function performFactoryReset() {
                           { title: 'Automatic (DHCP)', value: 'dhcp' },
                           { title: 'Static IP', value: 'static' },
                         ]"
-                        label="IP Configuration"
+                        :label="t('IP Configuration')"
                         variant="outlined"
-                        hint="Applied on the next boot / wake"
+                        :hint="t('Applied on the next boot / wake')"
                         persistent-hint
                       />
                     </v-col>
@@ -628,7 +647,7 @@ async function performFactoryReset() {
                     <v-col cols="12" md="4">
                       <v-text-field
                         v-model="settingsStore.deviceSettings.staticIp"
-                        label="IP Address"
+                        :label="t('IP Address')"
                         variant="outlined"
                         placeholder="192.168.1.50"
                       />
@@ -636,14 +655,14 @@ async function performFactoryReset() {
                     <v-col cols="12" md="4">
                       <v-text-field
                         v-model="settingsStore.deviceSettings.staticNetmask"
-                        label="Netmask"
+                        :label="t('Netmask')"
                         variant="outlined"
                       />
                     </v-col>
                     <v-col cols="12" md="4">
                       <v-text-field
                         v-model="settingsStore.deviceSettings.staticGateway"
-                        label="Gateway"
+                        :label="t('Gateway')"
                         variant="outlined"
                         placeholder="192.168.1.1"
                       />
@@ -653,7 +672,7 @@ async function performFactoryReset() {
                     <v-col cols="12" md="6">
                       <v-text-field
                         v-model="settingsStore.deviceSettings.dnsServer"
-                        label="DNS Server"
+                        :label="t('DNS Server')"
                         variant="outlined"
                         :hint="
                           settingsStore.deviceSettings.ipMode === 'static'
@@ -666,14 +685,17 @@ async function performFactoryReset() {
                   </v-row>
                   <v-switch
                     v-model="settingsStore.deviceSettings.httpAuthEnabled"
-                    label="Require a password for this device's web interface"
+                    :label="t('Require a password for this device\'s web interface')"
                     color="primary"
                     class="mt-6"
                     hide-details
                   />
                   <div class="text-caption text-medium-emphasis mb-2">
-                    Off by default. Most frames sit on a trusted home network, where this is
-                    unnecessary.
+                    {{
+                      t(
+                        "Off by default. Most frames sit on a trusted home network, where this is unnecessary."
+                      )
+                    }}
                   </div>
                   <v-text-field
                     v-if="settingsStore.deviceSettings.httpAuthEnabled"
@@ -682,13 +704,13 @@ async function performFactoryReset() {
                       settingsStore.deviceSettings.httpAuthEnabled &&
                       settingsStore.deviceSettings.httpPassword === '' &&
                       settingsStore.deviceSettings.httpAuthWasEnabled
-                        ? 'Password (set \u2014 leave blank to keep)'
-                        : 'Password'
+                        ? t('Password (set — leave blank to keep)')
+                        : t('Password')
                     "
                     type="password"
                     maxlength="63"
                     variant="outlined"
-                    hint="Any username is accepted; the password is the whole credential."
+                    :hint="t('Any username is accepted; the password is the whole credential.')"
                     persistent-hint
                     class="mt-2"
                   />
@@ -699,11 +721,11 @@ async function performFactoryReset() {
                     density="compact"
                     class="mt-3"
                   >
-                    Enter the same password in the photoframe server, the Home Assistant integration
-                    and the mobile app, or they will stop syncing with this frame; older versions of
-                    them cannot send it at all. It is also sent unencrypted over plain HTTP &mdash;
-                    it guards against casual access on a shared network, not against someone who can
-                    capture your traffic.
+                    {{
+                      t(
+                        "Enter the same password in the photoframe server, the Home Assistant integration and the mobile app, or they will stop syncing with this frame; older versions of them cannot send it at all. It is also sent unencrypted over plain HTTP — it guards against casual access on a shared network, not against someone who can capture your traffic."
+                      )
+                    }}
                   </v-alert>
                 </v-expansion-panel-text>
               </v-expansion-panel>
@@ -714,7 +736,7 @@ async function performFactoryReset() {
           <v-tabs-window-item value="autoRotate">
             <v-switch
               v-model="settingsStore.deviceSettings.autoRotate"
-              label="Enable Auto-Rotate"
+              :label="t('Enable Auto-Rotate')"
               color="primary"
               class="mb-2"
               hide-details
@@ -731,7 +753,7 @@ async function performFactoryReset() {
                 :items="rotationModeOptions"
                 item-title="title"
                 item-value="value"
-                label="Rotation Mode"
+                :label="t('Rotation Mode')"
                 variant="outlined"
                 class="mt-8 mb-4"
                 :disabled="!settingsStore.deviceSettings.autoRotate"
@@ -752,7 +774,7 @@ async function performFactoryReset() {
                       :items="sdRotationModeOptions"
                       item-title="title"
                       item-value="value"
-                      label="Storage Rotation Logic"
+                      :label="t('Storage Rotation Logic')"
                       variant="outlined"
                       hide-details
                     />
@@ -772,7 +794,7 @@ async function performFactoryReset() {
                   <v-card-text>
                     <v-text-field
                       v-model="settingsStore.deviceSettings.imageUrl"
-                      label="Image URL"
+                      :label="t('Image URL')"
                       variant="outlined"
                       hide-details
                       class="mb-4"
@@ -789,11 +811,14 @@ async function performFactoryReset() {
                         style="align-self: flex-start"
                       >
                         <v-icon start>mdi-check-circle</v-icon>
-                        Certificate Pinned
+                        {{ t("Certificate Pinned") }}
                       </v-chip>
                       <div class="text-caption text-medium-emphasis">
-                        The TLS certificate for this HTTPS URL is pinned. It will re-pin
-                        automatically when you change the URL.
+                        {{
+                          t(
+                            "The TLS certificate for this HTTPS URL is pinned. It will re-pin automatically when you change the URL."
+                          )
+                        }}
                       </div>
                     </div>
 
@@ -804,7 +829,7 @@ async function performFactoryReset() {
                       density="compact"
                       class="mb-4"
                     >
-                      Last fetch error: {{ settingsStore.deviceSettings.lastFetchError }}
+                      {{ t("Last fetch error:") }} {{ settingsStore.deviceSettings.lastFetchError }}
                     </v-alert>
 
                     <v-checkbox
@@ -812,7 +837,7 @@ async function performFactoryReset() {
                         appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage
                       "
                       v-model="settingsStore.deviceSettings.saveDownloadedImages"
-                      label="Save downloaded images to Downloads album"
+                      :label="t('Save downloaded images to Downloads album')"
                       color="primary"
                       class="mb-8"
                       hide-details
@@ -820,9 +845,9 @@ async function performFactoryReset() {
 
                     <v-text-field
                       v-model="settingsStore.deviceSettings.accessToken"
-                      label="Access Token (Optional)"
+                      :label="t('Access Token (Optional)')"
                       variant="outlined"
-                      hint="Sets Authorization: Bearer header"
+                      :hint="t('Sets Authorization: Bearer header')"
                       persistent-hint
                       class="mt-4"
                     />
@@ -831,15 +856,15 @@ async function performFactoryReset() {
                       <v-col cols="12" md="6">
                         <v-text-field
                           v-model="settingsStore.deviceSettings.httpHeaderKey"
-                          label="Custom Header Name"
+                          :label="t('Custom Header Name')"
                           variant="outlined"
-                          placeholder="e.g., X-API-Key"
+                          :placeholder="t('e.g., X-API-Key')"
                         />
                       </v-col>
                       <v-col cols="12" md="6">
                         <v-text-field
                           v-model="settingsStore.deviceSettings.httpHeaderValue"
-                          label="Custom Header Value"
+                          :label="t('Custom Header Value')"
                           variant="outlined"
                         />
                       </v-col>
@@ -854,7 +879,7 @@ async function performFactoryReset() {
           <v-tabs-window-item value="power">
             <v-switch
               v-model="settingsStore.deviceSettings.deepSleepEnabled"
-              label="Enable Deep Sleep"
+              :label="t('Enable Deep Sleep')"
               color="primary"
               class="mb-4"
             />
@@ -865,9 +890,13 @@ async function performFactoryReset() {
                 type="warning"
                 variant="tonal"
               >
-                <strong>Power Consumption Notice</strong><br />
-                Disabling deep sleep keeps the HTTP server accessible but significantly increases
-                power consumption. Only disable if permanently powered via USB.
+                <strong>{{ t("Power Consumption Notice") }}</strong
+                ><br />
+                {{
+                  t(
+                    "Disabling deep sleep keeps the HTTP server accessible but significantly increases power consumption. Only disable if permanently powered via USB."
+                  )
+                }}
               </v-alert>
             </v-expand-transition>
           </v-tabs-window-item>
@@ -876,10 +905,10 @@ async function performFactoryReset() {
           <v-tabs-window-item class="mt-2" value="homeAssistant">
             <v-text-field
               v-model="settingsStore.deviceSettings.haUrl"
-              label="Home Assistant URL"
+              :label="t('Home Assistant URL')"
               variant="outlined"
               placeholder="http://homeassistant.local:8123"
-              hint="Configure for dynamic image serving and battery level reporting"
+              :hint="t('Configure for dynamic image serving and battery level reporting')"
               persistent-hint
             />
           </v-tabs-window-item>
@@ -888,8 +917,11 @@ async function performFactoryReset() {
           <v-tabs-window-item value="processing">
             <div class="pa-4">
               <v-alert v-if="wideEdit" type="info" variant="tonal" density="compact">
-                Processing controls are shown next to the preview in wide-edit mode. Turn wide edit
-                off (the split icon on the Upload card) to edit them here.
+                {{
+                  t(
+                    "Processing controls are shown next to the preview in wide-edit mode. Turn wide edit off (the split icon on the Upload card) to edit them here."
+                  )
+                }}
               </v-alert>
               <ProcessingControls
                 v-else
@@ -905,12 +937,14 @@ async function performFactoryReset() {
           <!-- AI Generation Tab -->
           <v-tabs-window-item value="ai">
             <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-4">
-              API keys are used for client-side AI image generation when uploading images.
+              {{
+                t("API keys are used for client-side AI image generation when uploading images.")
+              }}
             </v-alert>
 
             <v-text-field
               v-model="settingsStore.deviceSettings.aiCredentials.openaiApiKey"
-              label="OpenAI API Key"
+              :label="t('OpenAI API Key')"
               variant="outlined"
               type="password"
               hint="sk-..."
@@ -918,7 +952,7 @@ async function performFactoryReset() {
               class="mb-2"
             />
             <div class="text-caption text-grey ml-2 mb-4">
-              Get your API key at
+              {{ t("Get your API key at") }}
               <a
                 href="https://platform.openai.com/api-keys"
                 target="_blank"
@@ -929,13 +963,13 @@ async function performFactoryReset() {
 
             <v-text-field
               v-model="settingsStore.deviceSettings.aiCredentials.googleApiKey"
-              label="Google Gemini API Key"
+              :label="t('Google Gemini API Key')"
               variant="outlined"
               type="password"
               class="mb-2"
             />
             <div class="text-caption text-grey ml-2 mb-4">
-              Get your API key at
+              {{ t("Get your API key at") }}
               <a
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
@@ -953,16 +987,16 @@ async function performFactoryReset() {
 
           <!-- Maintenance Tab -->
           <v-tabs-window-item value="maintenance">
-            <div class="text-subtitle-1 mt-2 mb-4">Config Backup</div>
+            <div class="text-subtitle-1 mt-2 mb-4">{{ t("Config Backup") }}</div>
             <v-row>
               <v-col cols="12">
                 <v-btn variant="outlined" class="mr-2" @click="exportConfig">
                   <v-icon start>mdi-download</v-icon>
-                  Export Config
+                  {{ t("Export Config") }}
                 </v-btn>
                 <v-btn variant="outlined" @click="$refs.importInput.click()">
                   <v-icon start>mdi-upload</v-icon>
-                  Import Config
+                  {{ t("Import Config") }}
                 </v-btn>
                 <input
                   ref="importInput"
@@ -976,12 +1010,12 @@ async function performFactoryReset() {
 
             <v-divider class="my-6" />
 
-            <div class="text-subtitle-1 mb-4">Debug Logging</div>
+            <div class="text-subtitle-1 mb-4">{{ t("Debug Logging") }}</div>
             <v-row>
               <v-col cols="12">
                 <v-switch
                   v-model="settingsStore.deviceSettings.debugLogEnabled"
-                  label="Save console logs to storage"
+                  :label="t('Save console logs to storage')"
                   color="primary"
                   hide-details
                   class="mb-2"
@@ -994,8 +1028,11 @@ async function performFactoryReset() {
                     density="compact"
                     class="mb-4"
                   >
-                    Serial console output is mirrored to the SD card, keeping only the most recent
-                    lines. Takes effect after saving.
+                    {{
+                      t(
+                        "Serial console output is mirrored to the SD card, keeping only the most recent lines. Takes effect after saving."
+                      )
+                    }}
                   </v-alert>
                 </v-expand-transition>
                 <v-btn
@@ -1005,11 +1042,11 @@ async function performFactoryReset() {
                   @click="downloadDebugLog"
                 >
                   <v-icon start>mdi-download</v-icon>
-                  Download Logs
+                  {{ t("Download Logs") }}
                 </v-btn>
                 <v-btn variant="outlined" :loading="clearingLog" @click="clearDebugLog">
                   <v-icon start>mdi-delete</v-icon>
-                  Clear Logs
+                  {{ t("Clear Logs") }}
                 </v-btn>
               </v-col>
             </v-row>
@@ -1018,12 +1055,12 @@ async function performFactoryReset() {
 
             <LastCrash />
 
-            <div class="text-subtitle-1 mb-4">Factory Reset</div>
+            <div class="text-subtitle-1 mb-4">{{ t("Factory Reset") }}</div>
             <v-row>
               <v-col cols="12">
                 <v-btn color="error" variant="outlined" @click="showFactoryResetDialog = true">
                   <v-icon start>mdi-restore-alert</v-icon>
-                  Factory Reset Device
+                  {{ t("Factory Reset Device") }}
                 </v-btn>
               </v-col>
             </v-row>
@@ -1036,11 +1073,11 @@ async function performFactoryReset() {
         <v-fade-transition>
           <v-chip v-if="saveSuccess" color="success" variant="tonal">
             <v-icon icon="mdi-check" start />
-            {{ saveMessage || "Settings saved!" }}
+            {{ saveMessage || t("Settings saved!") }}
           </v-chip>
           <v-chip v-else-if="saveError" color="error" variant="tonal">
             <v-icon icon="mdi-alert-circle" start />
-            {{ saveMessage || "Failed to save settings" }}
+            {{ saveMessage || t("Failed to save settings") }}
           </v-chip>
         </v-fade-transition>
         <v-tooltip :text="saveBlocker" location="top" :disabled="!saveBlocker">
@@ -1053,7 +1090,7 @@ async function performFactoryReset() {
                 @click="saveSettings"
               >
                 <v-icon icon="mdi-content-save" start />
-                Save Settings
+                {{ t("Save Settings") }}
               </v-btn>
             </span>
           </template>
@@ -1066,38 +1103,44 @@ async function performFactoryReset() {
       <v-card>
         <v-card-title class="text-h5 text-error">
           <v-icon icon="mdi-alert" class="mr-2" />
-          Confirm Factory Reset
+          {{ t("Confirm Factory Reset") }}
         </v-card-title>
         <v-card-text>
           <v-alert type="error" variant="tonal" class="mb-4">
-            <div class="text-subtitle-2 mb-2">This action is irreversible!</div>
+            <div class="text-subtitle-2 mb-2">{{ t("This action is irreversible!") }}</div>
             <div class="text-body-2">
-              All device settings will be permanently erased, including:
+              {{ t("All device settings will be permanently erased, including:") }}
             </div>
             <ul class="mt-2">
-              <li>WiFi credentials</li>
-              <li>Image processing settings</li>
-              <li>Device configuration</li>
-              <li>All custom settings</li>
+              <li>{{ t("WiFi credentials") }}</li>
+              <li>{{ t("Image processing settings") }}</li>
+              <li>{{ t("Device configuration") }}</li>
+              <li>{{ t("All custom settings") }}</li>
             </ul>
           </v-alert>
           <div class="text-body-1 mb-3">
-            The device will restart and return to factory defaults. Are you sure you want to
-            continue?
+            {{
+              t(
+                "The device will restart and return to factory defaults. Are you sure you want to continue?"
+              )
+            }}
           </div>
           <v-alert type="info" variant="tonal" density="compact">
             <div class="text-body-2">
-              <strong>After reset:</strong> The device will create a WiFi access point named
-              <strong>"PhotoFrame"</strong>. Connect to it from your device to restart the
-              provisioning process.
+              <strong>{{ t("After reset:") }}</strong>
+              {{
+                t(
+                  'The device will create a WiFi access point named "PhotoFrame". Connect to it from your device to restart the provisioning process.'
+                )
+              }}
             </div>
           </v-alert>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="showFactoryResetDialog = false">Cancel</v-btn>
+          <v-btn variant="text" @click="showFactoryResetDialog = false">{{ t("Cancel") }}</v-btn>
           <v-btn color="error" variant="flat" :loading="resetting" @click="performFactoryReset">
-            Reset Device
+            {{ t("Reset Device") }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -1107,28 +1150,28 @@ async function performFactoryReset() {
       <v-card>
         <v-card-title>
           <v-icon icon="mdi-upload" class="mr-2" />
-          Import Config
+          {{ t("Import Config") }}
         </v-card-title>
         <v-card-text>
           <v-alert type="warning" variant="tonal" class="mb-4">
-            This will overwrite your current settings with the imported config.
+            {{ t("This will overwrite your current settings with the imported config.") }}
           </v-alert>
           <div class="text-body-2 mb-2">
-            File: <strong>{{ importFileName }}</strong>
+            {{ t("File:") }} <strong>{{ importFileName }}</strong>
           </div>
           <div v-if="importData" class="text-body-2">
-            Sections to import:
+            {{ t("Sections to import:") }}
             <ul class="mt-1 ml-4">
-              <li v-if="importData.config">Device settings</li>
-              <li v-if="importData.processing">Processing settings</li>
-              <li v-if="importData.palette">Palette calibration</li>
+              <li v-if="importData.config">{{ t("Device settings") }}</li>
+              <li v-if="importData.processing">{{ t("Processing settings") }}</li>
+              <li v-if="importData.palette">{{ t("Palette calibration") }}</li>
             </ul>
           </div>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="showImportDialog = false">Cancel</v-btn>
-          <v-btn color="primary" variant="flat" @click="performImport"> Import </v-btn>
+          <v-btn variant="text" @click="showImportDialog = false">{{ t("Cancel") }}</v-btn>
+          <v-btn color="primary" variant="flat" @click="performImport"> {{ t("Import") }} </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

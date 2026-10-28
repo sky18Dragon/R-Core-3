@@ -1,7 +1,8 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, computed, onMounted, onUnmounted } from "vue";
 
-const currentVersion = ref("Loading...");
+const currentVersion = ref(t("Loading..."));
 const latestVersion = ref("-");
 const otaState = ref("idle");
 const progress = ref(0);
@@ -20,19 +21,19 @@ const statusMessage = computed(() => {
     case "idle":
       return "";
     case "checking":
-      return "Checking for updates...";
+      return t("Checking for updates...");
     case "update_available":
-      return `Update available: ${latestVersion.value}`;
+      return t("Update available: {version}", { version: latestVersion.value });
     case "downloading":
-      return "Downloading firmware...";
+      return t("Downloading firmware...");
     case "installing":
-      return "Installing firmware...";
+      return t("Installing firmware...");
     case "success":
-      return "Update successful! Device will reboot...";
+      return t("Update successful! Device will reboot...");
     case "error":
-      return errorMessage.value || "Update failed";
+      return errorMessage.value || t("Update failed");
     case "up_to_date":
-      return "You're running the latest version.";
+      return t("You're running the latest version.");
     default:
       return "";
   }
@@ -61,7 +62,7 @@ async function loadOTAStatus() {
 
     const data = await response.json();
 
-    currentVersion.value = data.current_version || "Unknown";
+    currentVersion.value = data.current_version || t("Unknown");
     latestVersion.value = data.latest_version || "-";
     otaState.value = data.state || "idle";
     progress.value = data.progress_percent || 0;
@@ -87,7 +88,7 @@ async function checkForUpdate() {
     // Immediately reload status
     await loadOTAStatus();
   } catch (error) {
-    errorMessage.value = "Failed to check for updates: " + error.message;
+    errorMessage.value = t("Failed to check for updates: ") + error.message;
     otaState.value = "error";
   }
 }
@@ -105,7 +106,7 @@ async function installUpdate() {
     // Immediately reload status
     await loadOTAStatus();
   } catch (error) {
-    errorMessage.value = "Failed to install update: " + error.message;
+    errorMessage.value = t("Failed to install update: ") + error.message;
     otaState.value = "error";
   }
 }
@@ -151,18 +152,20 @@ onUnmounted(() => {
   <v-card style="overflow: visible">
     <v-card-title class="d-flex align-center">
       <v-icon icon="mdi-cellphone-arrow-down" class="mr-2" />
-      Firmware Update (OTA)
+      {{ t("Firmware Update (OTA)") }}
     </v-card-title>
 
     <v-card-text>
       <p class="text-body-2 text-grey mb-4">
-        Check for and install firmware updates from GitHub releases.
+        {{ t("Check for and install firmware updates from GitHub releases.") }}
       </p>
 
       <v-row align="center">
         <v-col cols="12" md="4">
           <v-list-item>
-            <v-list-item-title class="text-body-2 text-grey"> Current Version </v-list-item-title>
+            <v-list-item-title class="text-body-2 text-grey">
+              {{ t("Current Version") }}
+            </v-list-item-title>
             <v-list-item-subtitle class="text-h6">
               {{ currentVersion }}
             </v-list-item-subtitle>
@@ -171,7 +174,9 @@ onUnmounted(() => {
 
         <v-col cols="12" md="4">
           <v-list-item>
-            <v-list-item-title class="text-body-2 text-grey"> Latest Version </v-list-item-title>
+            <v-list-item-title class="text-body-2 text-grey">
+              {{ t("Latest Version") }}
+            </v-list-item-title>
             <v-list-item-subtitle class="text-h6">
               <span :class="{ 'text-success': updateAvailable }">
                 {{ latestVersion }}
@@ -183,7 +188,7 @@ onUnmounted(() => {
         <v-col cols="12" md="4" class="d-flex flex-wrap justify-end gap-2">
           <v-btn variant="outlined" :loading="checking" class="mr-2" @click="checkForUpdate">
             <v-icon icon="mdi-refresh" start />
-            Check
+            {{ t("Check") }}
           </v-btn>
 
           <v-btn
@@ -193,7 +198,7 @@ onUnmounted(() => {
             @click="installUpdate"
           >
             <v-icon icon="mdi-download" start />
-            Install
+            {{ t("Install") }}
           </v-btn>
         </v-col>
       </v-row>
