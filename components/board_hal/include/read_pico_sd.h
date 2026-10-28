@@ -29,6 +29,11 @@ esp_err_t read_pico_sd_get_status(read_pico_sd_status_t *out);
 // Does not retry close, release the lease, or perform board I/O.
 void read_pico_sd_note_file_close_failure(void);
 
+// A photo refresh (white flash + GC16) holds the board lock for about 2 s;
+// SD users (io_begin, get_status) wait past one refresh instead of failing
+// mid-rotation. Mount/unmount keep the short board-lock timeout.
+#define READ_PICO_SD_IO_LOCK_WAIT_MS 5000
+
 // Reserve while holding the same board lock as mount/unmount, before opening
 // any SD object. Unmount refuses active users without invalidating the media.
 esp_err_t read_pico_sd_io_begin(void);

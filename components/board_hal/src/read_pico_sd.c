@@ -19,7 +19,7 @@ void read_pico_sd_note_file_close_failure(void)
 
 esp_err_t read_pico_sd_io_begin(void)
 {
-    esp_err_t err = read_pico_board_lock(100);
+    esp_err_t err = read_pico_board_lock(READ_PICO_SD_IO_LOCK_WAIT_MS);
     if (err != ESP_OK)
         return err;
     if (!owned || !media_valid || exit_failure != ESP_OK ||
@@ -134,7 +134,8 @@ esp_err_t read_pico_sd_get_status(read_pico_sd_status_t *out)
     if (out == NULL)
         return ESP_ERR_INVALID_ARG;
     *out = (read_pico_sd_status_t) {0};
-    esp_err_t err = read_pico_board_lock(100);
+    // Upload readiness checks run here too; wait out a refresh like io_begin.
+    esp_err_t err = read_pico_board_lock(READ_PICO_SD_IO_LOCK_WAIT_MS);
     if (err != ESP_OK)
         return err;
     err = read_pico_board_sd_present(&out->present);

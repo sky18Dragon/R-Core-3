@@ -11,6 +11,7 @@ extern "C" {
 namespace
 {
 int lock_depth, claim_calls, release_calls, mount_calls, unmount_calls, detect_calls;
+uint32_t last_lock_timeout_ms;
 bool present, mounted, lease;
 int remove_at;
 esp_err_t lock_error, detect_error, claim_error, mount_error, unmount_error;
@@ -26,8 +27,9 @@ read_pico_sd_command_t line(read_pico_sd_parser_t &parser, const std::string &in
 }  // namespace
 
 extern "C" {
-esp_err_t read_pico_board_lock(uint32_t)
+esp_err_t read_pico_board_lock(uint32_t timeout_ms)
 {
+    last_lock_timeout_ms = timeout_ms;
     if (lock_error != ESP_OK)
         return lock_error;
     ++lock_depth;
@@ -171,6 +173,22 @@ TEST_F(ReadPicoSdTest, RemovalPreventsNewIoButOutstandingUsersCanDrainBeforeUnmo
     EXPECT_EQ(read_pico_sd_mount(), ESP_OK);
     EXPECT_EQ(read_pico_sd_io_begin(), ESP_OK);
     read_pico_sd_io_end();
+}
+
+TEST_F(ReadPicoSdTest, IoBeginWaitsLongerThanOnePhotoRefresh)
+{
+    ASSERT_EQ(read_pico_sd_mount(), ESP_OK);
+    ASSERT_EQ(read_pico_sd_io_begin(), ESP_OK);
+    // Measured white flash + GC16 holds the board lock ~2.3 s; 100 ms made
+    // uploads overlapping a rotation fail with "Album storage unavailable".
+    EXPECT_EQ(last_lock_timeout_ms, (uint32_t) READ_PICO_SD_IO_LOCK_WAIT_MS);
+    EXPECT_GE(last_lock_timeout_ms, 3000u);
+    read_pico_sd_io_end();
+    // Upload readiness checks go through get_status and must wait as long.
+    read_pico_sd_status_t status;
+    ASSERT_EQ(read_pico_sd_get_status(&status), ESP_OK);
+    EXPECT_EQ(last_lock_timeout_ms, (uint32_t) READ_PICO_SD_IO_LOCK_WAIT_MS);
+    EXPECT_EQ(read_pico_sd_unmount(), ESP_OK);
 }
 
 TEST_F(ReadPicoSdTest, IoLockAndCardDetectionFailuresDoNotAcquirePhantomUsers)
