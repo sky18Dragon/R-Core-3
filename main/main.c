@@ -49,6 +49,7 @@
 #include "read_pico_epaper.h"
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "upload_sweep.h"
+#include "read_pico_ota.h"
 #define UPLOAD_SWEEP_MAX_PER_BOOT 64
 #endif
 #if CONFIG_READ_PICO_TOUCH
@@ -750,6 +751,10 @@ void app_main(void)
                  esp_err_to_name(nvs_start));
         return;
     }
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // First thing after NVS: count/limit trial boots of a newly uploaded image.
+    read_pico_ota_boot_guard();
+#endif
     esp_err_t config_start = config_manager_init();
     if (config_start != ESP_OK) {
         ESP_LOGE(TAG, "Config load refused (%s); no board/storage/display/network startup "

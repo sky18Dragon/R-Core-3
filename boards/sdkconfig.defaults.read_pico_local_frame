@@ -1,3 +1,6 @@
 # R1 local Web/SD frame candidate: automatic screen clear and product startup.
 # Build-only CLI. Deployment requires explicit authorization; not yet accepted.
 CONFIG_READ_PICO_LOCAL_FRAME=y
+# Local OTA: factory layout plus appended otadata/ota_0/ota_1 (factory stays the fallback).
+# Writing this table to 0x8000 is a separate, explicitly approved migration step.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/partitions.read_pico_ota.csv"

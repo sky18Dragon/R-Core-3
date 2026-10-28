@@ -9,6 +9,16 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+
+// Online release checks stay off on Read Pico; the local frame instead takes
+// firmware uploads at /api/ota/upload (read_pico_ota.c).
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#define READ_PICO_OTA_STATUS_MESSAGE "Online updates disabled; upload a Read Pico local-frame image instead"
+#endif
+#ifndef READ_PICO_OTA_STATUS_MESSAGE
+#define READ_PICO_OTA_STATUS_MESSAGE \
+    "Read Pico OTA withheld: board/image compatibility and partition migration require acceptance"
+#endif
 #if !CONFIG_BOARD_DRIVER_READ_PICO
 #include "board_hal.h"
 #include "cJSON.h"
@@ -464,8 +474,8 @@ esp_err_t ota_manager_init(void)
     // Keep the API contract, but do not query releases, touch OTA NVS, mark an
     // unaccepted image valid, register background checks or write a partition.
     ota_status.state = OTA_STATE_ERROR;
-    snprintf(ota_status.error_message, sizeof(ota_status.error_message),
-             "Read Pico OTA withheld: board/image compatibility and partition migration require acceptance");
+    snprintf(ota_status.error_message, sizeof(ota_status.error_message), "%s",
+             READ_PICO_OTA_STATUS_MESSAGE);
     return ESP_OK;
 #else
     // Load last known OTA status from NVS (latest_version, state)

@@ -1,6 +1,7 @@
 <script setup>
 import { t } from "../i18n";
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { HEADER_BYTES, inspectFirmware } from "../utils/otaLocal.js";
 
 const currentVersion = ref(t("Loading..."));
 const latestVersion = ref("-");
@@ -139,8 +140,59 @@ function stopStatusPolling() {
   }
 }
 
+// Read Pico local frame: firmware is uploaded from this page instead of
+// downloaded from GitHub. /api/ota/local exists only on that build.
+const local = ref(null);
+const firmwareFile = ref(null);
+const localBusy = ref(false);
+const localMessage = ref("");
+const localType = ref("info");
+
+async function loadLocalStatus() {
+  try {
+    const response = await fetch("/api/ota/local");
+    if (response.ok) local.value = await response.json();
+  } catch (error) {
+    console.error("Failed to load local OTA status:", error);
+  }
+}
+
+async function uploadFirmware() {
+  const file = Array.isArray(firmwareFile.value) ? firmwareFile.value[0] : firmwareFile.value;
+  if (!file) return;
+  const head = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
+  const check = inspectFirmware(head, file.size, local.value?.slot_size);
+  if (!check.ok) {
+    localType.value = "error";
+    localMessage.value = t(check.reason);
+    return;
+  }
+  if (!window.confirm(t("Install firmware {version}? The frame restarts afterwards.", { version: check.version })))
+    return;
+  localBusy.value = true;
+  localType.value = "info";
+  localMessage.value = t("Uploading firmware...");
+  try {
+    const response = await fetch("/api/ota/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.status !== "success") throw new Error(data.message || `HTTP ${response.status}`);
+    localType.value = "success";
+    localMessage.value = t("Firmware installed. The frame is restarting; reload this page in a minute.");
+  } catch (error) {
+    localType.value = "error";
+    localMessage.value = t("Firmware upload failed: ") + error.message;
+  } finally {
+    localBusy.value = false;
+  }
+}
+
 onMounted(() => {
   loadOTAStatus();
+  loadLocalStatus();
 });
 
 onUnmounted(() => {
@@ -155,7 +207,39 @@ onUnmounted(() => {
       {{ t("Firmware Update (OTA)") }}
     </v-card-title>
 
-    <v-card-text>
+    <v-card-text v-if="local">
+      <p class="text-body-2 text-grey mb-4">
+        {{ t("Upload a Read Pico local-frame firmware file (.bin). The factory firmware stays as a fallback.") }}
+      </p>
+      <v-list-item class="px-0 mb-2">
+        <v-list-item-title class="text-body-2 text-grey">{{ t("Current Version") }}</v-list-item-title>
+        <v-list-item-subtitle class="text-h6">{{ local.version }} ({{ local.running }})</v-list-item-subtitle>
+      </v-list-item>
+      <v-alert v-if="!local.supported" type="warning" variant="tonal" density="compact">
+        {{ t("This device does not have the update partitions yet; install them over USB first.") }}
+      </v-alert>
+      <div v-else class="d-flex flex-wrap align-center gap-2">
+        <v-file-input
+          v-model="firmwareFile"
+          accept=".bin"
+          :label="t('Firmware file')"
+          density="compact"
+          hide-details
+          prepend-icon="mdi-chip"
+          style="min-width: 260px"
+          :disabled="localBusy"
+        />
+        <v-btn color="primary" :loading="localBusy" :disabled="!firmwareFile" @click="uploadFirmware">
+          <v-icon icon="mdi-upload" start />
+          {{ t("Upload and install") }}
+        </v-btn>
+      </div>
+      <v-alert v-if="localMessage" :type="localType" variant="tonal" class="mt-4" density="compact">
+        {{ localMessage }}
+      </v-alert>
+    </v-card-text>
+
+    <v-card-text v-else>
       <p class="text-body-2 text-grey mb-4">
         {{ t("Check for and install firmware updates from GitHub releases.") }}
       </p>

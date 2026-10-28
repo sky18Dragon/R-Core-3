@@ -21,6 +21,12 @@ if(NOT PROJECT_VER)
     set(PROJECT_VER "dev-unknown")
 endif()
 
+# Read Pico local-frame images carry a board marker that local OTA requires,
+# so an image for another board or profile is refused before it is written.
+if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico_local_frame")
+    set(PROJECT_VER "${PROJECT_VER}+rplf")
+endif()
+
 message(STATUS "Project version: ${PROJECT_VER}")
 
 # Allow FIRMWARE_VERSION to be overridden from command line, otherwise use PROJECT_VER

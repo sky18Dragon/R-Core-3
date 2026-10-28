@@ -676,6 +676,8 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/ota/status", "HTTP_GET"),
             ("/api/ota/check", "HTTP_POST"),
             ("/api/ota/update", "HTTP_POST"),
+            ("/api/ota/upload", "HTTP_POST"),  # CONFIG_READ_PICO_LOCAL_FRAME only
+            ("/api/ota/local", "HTTP_GET"),
             ("/api/keep_alive", "HTTP_POST"),
             ("/api/format-storage", "HTTP_POST"),
             ("/api/display-image", "HTTP_POST"),
@@ -1058,6 +1060,24 @@ class ReadPicoBuildTests(unittest.TestCase):
             ["factory", "app", "factory", "0x10000", "0x400000"],
             ["storage", "data", "fat", "0x410000", "0x500000"],
         ])
+
+    def test_ota_partition_table_appends_without_moving_factory_layout(self):
+        def rows(name):
+            lines = (ROOT / name).read_text().splitlines()
+            return [[field.strip() for field in line.split(",")[:5]]
+                    for line in lines if line.strip() and not line.startswith("#")]
+        factory, ota = rows("boards/partitions.read_pico_factory.csv"), rows("boards/partitions.read_pico_ota.csv")
+        self.assertEqual(ota[:len(factory)], factory)
+        self.assertEqual([r[:3] for r in ota[len(factory):]], [
+            ["otadata", "data", "ota"], ["ota_0", "app", "ota_0"], ["ota_1", "app", "ota_1"]])
+        end = 0
+        for name, _, _, offset, size in ota:
+            start = int(offset, 16)
+            self.assertGreaterEqual(start, end, name)
+            end = start + int(size, 16)
+        self.assertLessEqual(end, 16 * 1024 * 1024)
+        defaults = (ROOT / "boards/sdkconfig.defaults.read_pico_local_frame").read_text()
+        self.assertIn('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/partitions.read_pico_ota.csv"', defaults)
 
     def test_display_validation_requires_factory_and_firmware_only(self):
         for arguments in ([], ["--board", "read_pico", "--step", "firmware"],

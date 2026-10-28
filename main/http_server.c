@@ -52,6 +52,9 @@
 #if CONFIG_READ_PICO_TOUCH
 #include "read_pico_touch_nav.h"
 #endif
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_ota.h"
+#endif
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -3044,6 +3047,35 @@ static esp_err_t touch_status_handler(httpd_req_t *req)
 }
 #endif
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
+// Local OTA: raw firmware image body; the response is sent before restart.
+static esp_err_t ota_upload_handler(httpd_req_t *req)
+{
+    power_manager_reset_sleep_timer();
+    return read_pico_ota_receive(req);
+}
+
+static esp_err_t ota_local_status_handler(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    if (!response) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    read_pico_ota_describe(response);
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (!json_str) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    return err;
+}
+#endif
+
 static esp_err_t time_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -3376,6 +3408,10 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/ota/check", HTTP_POST, ota_check_handler);
 
         HTTP_REGISTER("/api/ota/update", HTTP_POST, ota_update_handler);
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        HTTP_REGISTER("/api/ota/upload", HTTP_POST, ota_upload_handler);
+        HTTP_REGISTER("/api/ota/local", HTTP_GET, ota_local_status_handler);
+#endif
 
         HTTP_REGISTER("/api/keep_alive", HTTP_POST, keep_alive_handler);
 
@@ -3424,7 +3460,7 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
 esp_err_t http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 50;
+    config.max_uri_handlers = 56;
     config.stack_size = 12288;
     config.max_open_sockets = 10;
     config.lru_purge_enable = true;

@@ -350,4 +350,20 @@ export default {
   "← Original": "← 原图",
   "✓ = Enabled for auto-rotation • Click album name to view images":
     "✓ = 参与自动轮播 • 点击相册名查看图片",
+  "Upload a Read Pico local-frame firmware file (.bin). The factory firmware stays as a fallback.":
+    "上传小纸 Pico 本地相框固件（.bin）。出厂固件保留作为回退。",
+  "This device does not have the update partitions yet; install them over USB first.":
+    "本设备还没有升级分区，需要先通过 USB 安装。",
+  "Firmware file": "固件文件",
+  "Upload and install": "上传并安装",
+  "Install firmware {version}? The frame restarts afterwards.": "安装固件 {version}？安装后相框会重启。",
+  "Uploading firmware...": "正在上传固件…",
+  "Firmware installed. The frame is restarting; reload this page in a minute.":
+    "固件已安装，相框正在重启；约一分钟后刷新本页。",
+  "Firmware upload failed: ": "固件上传失败：",
+  "Not a firmware image": "不是固件文件",
+  "Firmware is larger than the update slot": "固件超过升级分区大小",
+  "Firmware is not for ESP32-S3": "固件不是 ESP32-S3 版本",
+  "Firmware is not for this photo frame": "固件不属于本相框项目",
+  "Firmware is not a Read Pico local-frame build": "固件不是小纸 Pico 本地相框版本",
 };

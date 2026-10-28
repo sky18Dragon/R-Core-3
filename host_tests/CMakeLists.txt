@@ -239,6 +239,11 @@ target_include_directories(upload_sweep_test PRIVATE ../main)
 target_link_libraries(upload_sweep_test GTest::gtest_main)
 gtest_discover_tests(upload_sweep_test)
 
+add_executable(ota_local_test test_ota_local.cpp ../main/ota_local.c)
+target_include_directories(ota_local_test PRIVATE ../main)
+target_link_libraries(ota_local_test GTest::gtest_main)
+gtest_discover_tests(ota_local_test)
+
 add_executable(touch_gesture_test test_touch_gesture.cpp ../main/touch_gesture.c)
 target_include_directories(touch_gesture_test PRIVATE ../main)
 target_link_libraries(touch_gesture_test GTest::gtest_main)
