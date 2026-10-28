@@ -132,6 +132,15 @@
 - 测完恢复原设置（随机、`0 */12 *`、自动轮播关）并读回确认。测试图留在相册，是否删除由用户决定。
 连同此前在本镜像上的失败路径、无卡启动结果，R1 冒烟闭环在同一候选上完成；热点配网与断电冷启动仍未验证。屏幕观感本轮未单独请用户确认。
 
+## 2026-10-29 · R2 触摸导航、开机清理临时文件、压测脚本（仅软件，未上板）
+
+- 触摸：新组件 `read_pico_touch`（厂家 CST836U 驱动原样使用，共享板级 I2C，持板级锁，INT=GPIO43，不拉 TP_RST），便携 `touch_gesture`（滑动/点击/三触摸键，阈值参考厂家 UI）与 `image_history`（16 条上一张历史）；`read_pico_touch_nav` 在按键任务中每 50ms 轮询。`GET /api/touch` 只读诊断。Kconfig `READ_PICO_TOUCH`（local-frame 默认开）。
+- 开机清理：`upload_sweep` 在 HTTP 启动前删除相册目录下精确命名的上传临时文件，至多 64 个。
+- 依赖：新增 cst836u 组件使 manifest hash 变化、组件管理器把 zlib 升到 1.3.2~2；已改回锁定的 1.3.2~1（只保留新 manifest hash），重下载后核对版本。
+- 主机：`touch_gesture_test` 6、`image_history_test` 4、`upload_sweep_test` 4；T0+ASan 各 1350/1350，Python 路由清单已加 `/api/touch`。
+- 编译：local-frame exit 0，镜像 `e914f847d350a70f9ff81db1a2372a1d4e3254cd51e69e0952c6cfbde0466168`（1,964,736 字节），未上板。
+- 未验证：触摸芯片能否应答（TP_RST 状态未知）、坐标轴映射、实际手感；清理在真卡上的效果。验证清单见 [路线图](ROADMAP.md#r2-待实机验证开发完成后一次做完)。
+
 ## 2026-10-29 · R2 长稳：Wi-Fi 断线后不再永久离线（已上板，恢复未实测）
 
 - 问题（源码核对）：正常开机连上网后，断线只由事件处理快速重试 5 次（`WIFI_MAX_RETRY`），之后置 `WIFI_FAIL_BIT` 并不再重连；只有开机超时路径会调用 `wifi_manager_keep_reconnecting()`。路由器重启超过几秒即会让设备离线到重启为止，与“运行约 3 天后网络不可达”的现象相符（未确认那次的实际原因）。
