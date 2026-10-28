@@ -13,6 +13,9 @@
 
 static const char *TAG = "color_palette";
 static const char *NVS_KEY_PALETTE = "palette";
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static const char *NVS_KEY_GRAY_LEVELS = "gray_levels";
+#endif
 
 void color_palette_get_defaults(color_palette_t *palette)
 {
@@ -175,7 +178,23 @@ static cJSON *color_to_json(const color_rgb_t *color)
     return obj;
 }
 
+static char *palette_to_json(const color_palette_t *palette, const float *levels);
+
 char *color_palette_to_json(const color_palette_t *palette)
+{
+    return palette_to_json(palette, NULL);
+}
+
+char *color_palette_to_json_with_levels(const color_palette_t *palette,
+                                        const float levels[COLOR_PALETTE_GRAY_LEVELS])
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (levels && !color_palette_gray_levels_valid(levels)) return NULL;
+#endif
+    return palette_to_json(palette, levels);
+}
+
+static char *palette_to_json(const color_palette_t *palette, const float *levels)
 {
 #if CONFIG_BOARD_DRIVER_READ_PICO
     if (!palette || !isfinite(palette->gray_black_y) || !isfinite(palette->gray_white_y) ||
@@ -196,7 +215,21 @@ char *color_palette_to_json(const color_palette_t *palette)
             !cJSON_AddNumberToObject(json, "gamma", palette->gray_gamma)) {
             cJSON_Delete(json); return NULL;
         }
+        if (levels) {
+            cJSON *array = cJSON_AddArrayToObject(json, "levels_y");
+            for (int i = 0; array && i < COLOR_PALETTE_GRAY_LEVELS; ++i) {
+                cJSON *value = cJSON_CreateNumber(levels[i]);
+                if (!value || !cJSON_AddItemToArray(array, value)) {
+                    cJSON_Delete(value);
+                    array = NULL;
+                }
+            }
+            if (!array) {
+                cJSON_Delete(json); return NULL;
+            }
+        }
 #else
+        (void) levels;
         cJSON_AddNumberToObject(json, "black_y", palette->gray_black_y);
         cJSON_AddNumberToObject(json, "white_y", palette->gray_white_y);
         cJSON_AddNumberToObject(json, "gamma", palette->gray_gamma);
@@ -261,6 +294,77 @@ esp_err_t color_palette_from_json_checked(cJSON *json, color_palette_t *palette)
         *values[i] = (float)item->valuedouble;
     }
     *palette = candidate;
+    return ESP_OK;
+}
+#endif
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+bool color_palette_gray_levels_valid(const float levels[COLOR_PALETTE_GRAY_LEVELS])
+{
+    if (!levels) return false;
+    for (int i = 0; i < COLOR_PALETTE_GRAY_LEVELS; ++i) {
+        if (!isfinite(levels[i]) || levels[i] <= 0.0f || levels[i] > 1.0f) return false;
+        if (i > 0 && levels[i] < levels[i - 1]) return false;
+    }
+    return levels[COLOR_PALETTE_GRAY_LEVELS - 1] > levels[0];
+}
+
+esp_err_t color_palette_load_gray_levels(float levels[COLOR_PALETTE_GRAY_LEVELS], bool *present)
+{
+    if (!levels || !present) return ESP_ERR_INVALID_ARG;
+    float candidate[COLOR_PALETTE_GRAY_LEVELS];
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) { *present = false; return ESP_OK; }
+    if (err != ESP_OK) return err;
+    size_t size = sizeof(candidate);
+    err = nvs_get_blob(handle, NVS_KEY_GRAY_LEVELS, candidate, &size);
+    nvs_close(handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) { *present = false; return ESP_OK; }
+    if (err != ESP_OK) return err;
+    if (size != sizeof(candidate)) return ESP_ERR_INVALID_SIZE;
+    if (!color_palette_gray_levels_valid(candidate)) return ESP_ERR_INVALID_RESPONSE;
+    memcpy(levels, candidate, sizeof(candidate));
+    *present = true;
+    return ESP_OK;
+}
+
+esp_err_t color_palette_save_gray_levels(const float levels[COLOR_PALETTE_GRAY_LEVELS])
+{
+    if (levels && !color_palette_gray_levels_valid(levels)) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    if (levels) {
+        err = nvs_set_blob(handle, NVS_KEY_GRAY_LEVELS, levels, sizeof(float) * COLOR_PALETTE_GRAY_LEVELS);
+    } else {
+        err = nvs_erase_key(handle, NVS_KEY_GRAY_LEVELS);
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    }
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Gray ramp %s failed: %s", levels ? "save" : "erase", esp_err_to_name(err));
+    return err;
+}
+
+esp_err_t color_palette_gray_levels_from_json(cJSON *json, color_palette_gray_levels_action_t *action,
+                                              float levels[COLOR_PALETTE_GRAY_LEVELS])
+{
+    if (!cJSON_IsObject(json) || !action || !levels) return ESP_ERR_INVALID_ARG;
+    cJSON *item = cJSON_GetObjectItem(json, "levels_y");
+    if (!item) { *action = COLOR_PALETTE_GRAY_LEVELS_KEEP; return ESP_OK; }
+    if (cJSON_IsNull(item)) { *action = COLOR_PALETTE_GRAY_LEVELS_CLEAR; return ESP_OK; }
+    if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != COLOR_PALETTE_GRAY_LEVELS) return ESP_ERR_INVALID_ARG;
+    float candidate[COLOR_PALETTE_GRAY_LEVELS];
+    for (int i = 0; i < COLOR_PALETTE_GRAY_LEVELS; ++i) {
+        cJSON *value = cJSON_GetArrayItem(item, i);
+        if (!cJSON_IsNumber(value) || !isfinite(value->valuedouble) || fabs(value->valuedouble) > FLT_MAX)
+            return ESP_ERR_INVALID_ARG;
+        candidate[i] = (float) value->valuedouble;
+    }
+    if (!color_palette_gray_levels_valid(candidate)) return ESP_ERR_INVALID_ARG;
+    memcpy(levels, candidate, sizeof(candidate));
+    *action = COLOR_PALETTE_GRAY_LEVELS_SET;
     return ESP_OK;
 }
 #endif

@@ -29,6 +29,12 @@ read_pico_refresh_result_t read_pico_epaper_display_continuous_pair(const uint8_
 // Establish a reference only after the white clear is visually verified in this boot session.
 esp_err_t read_pico_epaper_clear_unverified(void);
 esp_err_t read_pico_epaper_confirm_white_reference(void);
+// R1-only product startup: initialize, clear once, and accept a SOFTWARE reference.
+// Does not claim visual confirmation or a hard DMA timeout. Requires deployment
+// authorization for automatic screen power/clear; diagnostics retain manual confirmation.
+#if CONFIG_READ_PICO_LOCAL_FRAME
+esp_err_t read_pico_epaper_prepare_local_frame(void);
+#endif
 bool read_pico_epaper_faulted(void);
 
 #ifdef __cplusplus

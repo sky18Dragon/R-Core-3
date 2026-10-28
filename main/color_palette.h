@@ -1,6 +1,7 @@
 #ifndef COLOR_PALETTE_H
 #define COLOR_PALETTE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "cJSON.h"
@@ -38,5 +39,30 @@ void color_palette_from_json(cJSON *json, color_palette_t *palette);
 // and calibration numbers finite/float-representable. No automatic calibration.
 // Candidate/output is untouched on any error; unknown fields remain ignored.
 esp_err_t color_palette_from_json_checked(cJSON *json, color_palette_t *palette);
+
+// Read Pico: optional measured GC16 ramp, one relative luminance (Y, 0..1] per
+// gray code 0..15. Stored under its own NVS key so the palette blob layout is
+// unchanged; when absent the black/white/gamma model is used. When present it
+// replaces that model on the device and is reported to the web converter.
+#define COLOR_PALETTE_GRAY_LEVELS 16
+typedef enum {
+    COLOR_PALETTE_GRAY_LEVELS_KEEP = 0, // request did not mention "levels_y"
+    COLOR_PALETTE_GRAY_LEVELS_CLEAR,    // "levels_y": null
+    COLOR_PALETTE_GRAY_LEVELS_SET,      // "levels_y": [16 numbers]
+} color_palette_gray_levels_action_t;
+// Finite, 0 < y <= 1, non-decreasing, and full white brighter than full black.
+bool color_palette_gray_levels_valid(const float levels[COLOR_PALETTE_GRAY_LEVELS]);
+// Missing namespace/key: ESP_OK with *present=false. Other read, size or value
+// errors are returned and leave the outputs untouched.
+esp_err_t color_palette_load_gray_levels(float levels[COLOR_PALETTE_GRAY_LEVELS], bool *present);
+// NULL erases the key (already missing counts as success).
+esp_err_t color_palette_save_gray_levels(const float levels[COLOR_PALETTE_GRAY_LEVELS]);
+// Parse "levels_y" from a palette request. Invalid input returns
+// ESP_ERR_INVALID_ARG and leaves the outputs untouched.
+esp_err_t color_palette_gray_levels_from_json(cJSON *json, color_palette_gray_levels_action_t *action,
+                                              float levels[COLOR_PALETTE_GRAY_LEVELS]);
+// color_palette_to_json() plus "levels_y" when `levels` is not NULL.
+char *color_palette_to_json_with_levels(const color_palette_t *palette,
+                                        const float levels[COLOR_PALETTE_GRAY_LEVELS]);
 
 #endif

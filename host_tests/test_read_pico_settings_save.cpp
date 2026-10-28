@@ -16,9 +16,48 @@ extern "C" {
 #endif
 }
 namespace {
+struct RedirectSequence {
+    std::vector<int> calls;
+    int fail = 0;
+    static esp_err_t step(void *context, int stage) {
+        auto &self = *static_cast<RedirectSequence *>(context);
+        self.calls.push_back(stage);
+        return stage == self.fail ? ESP_ERR_NO_MEM : ESP_OK;
+    }
+    static esp_err_t prepare(void *c) { return step(c, 1); }
+    static esp_err_t host(void *c) { return step(c, 2); }
+    static esp_err_t schedule(void *c) { return step(c, 3); }
+};
+}
+TEST(RequestRedirect, EveryPreparationFailureStopsBeforeScheduling) {
+    for (int failure = 0; failure <= 3; ++failure) {
+        RedirectSequence state; state.fail = failure;
+        request_redirect_ops_t ops{&state, RedirectSequence::prepare, RedirectSequence::host, RedirectSequence::schedule};
+        EXPECT_EQ(request_redirect_schedule_checked(&ops), failure ? ESP_ERR_NO_MEM : ESP_OK);
+        std::vector<int> expected{1};
+        if (failure != 1) expected.push_back(2);
+        if (!failure || failure == 3) expected.push_back(3);
+        EXPECT_EQ(state.calls, expected);
+    }
+}
+TEST(RequestRedirect, MissingCallbacksNeverStartPreparation) {
+    RedirectSequence state;
+    request_redirect_ops_t full{&state, RedirectSequence::prepare, RedirectSequence::host, RedirectSequence::schedule};
+    EXPECT_EQ(request_redirect_schedule_checked(nullptr), ESP_ERR_INVALID_ARG);
+    for (int missing = 0; missing < 3; ++missing) {
+        auto ops = full;
+        if (missing == 0) ops.prepare_url = nullptr;
+        if (missing == 1) ops.confirm_host = nullptr;
+        if (missing == 2) ops.schedule = nullptr;
+        EXPECT_EQ(request_redirect_schedule_checked(&ops), ESP_ERR_INVALID_ARG);
+        EXPECT_TRUE(state.calls.empty());
+    }
+}
+namespace {
 std::map<std::string, std::string> saved;
 std::vector<std::string> keys;
-int opens, sets, commits, closes, active, fail_set;
+int opens, sets, commits, closes, active, fail_set, erases;
+esp_err_t erase_error;
 esp_err_t open_error, set_error, commit_error, blob_error;
 std::map<std::string, esp_err_t> get_errors;
 int read_calls, json_allocations, json_fail_at, json_live;
@@ -57,6 +96,7 @@ protected:
         EXPECT_TRUE(sdk_header_live.empty()); sdk_header_allocations = 0; sdk_header_fail_at = -1;
 #endif
         open_error = commit_error = blob_error = ESP_OK; set_error = ESP_ERR_NO_MEM; short_blob = false;
+        erases = 0; erase_error = ESP_OK;
     }
     void TearDown() override { EXPECT_EQ(active, 0); EXPECT_EQ(json_live, 0); cJSON_InitHooks(nullptr); }
 };
@@ -164,6 +204,10 @@ esp_err_t nvs_set_u32(nvs_handle_t, const char *key, uint32_t value) { return wr
 esp_err_t nvs_set_u8(nvs_handle_t, const char *key, uint8_t value) { return write(key, &value, sizeof(value)); }
 esp_err_t nvs_set_str(nvs_handle_t, const char *key, const char *value) { return write(key, value, strlen(value) + 1); }
 esp_err_t nvs_set_blob(nvs_handle_t, const char *key, const void *value, size_t n) { return write(key, value, n); }
+esp_err_t nvs_erase_key(nvs_handle_t, const char *key) {
+    ++erases; if (erase_error) return erase_error;
+    return saved.erase(key) ? ESP_OK : ESP_ERR_NVS_NOT_FOUND;
+}
 esp_err_t nvs_commit(nvs_handle_t h) { EXPECT_EQ(h, 1); ++commits; return commit_error; }
 esp_err_t nvs_get_u32(nvs_handle_t, const char *key, uint32_t *out) { return read_value(key, out, sizeof(*out)); }
 esp_err_t nvs_get_u8(nvs_handle_t, const char *key, uint8_t *out) { return read_value(key, out, sizeof(*out)); }
@@ -267,16 +311,17 @@ namespace {
 struct RequestHeaders {
     std::map<std::string, std::string> values;
     int calls = 0, fail_at = -1, stale_set = -1, null_readback_at = -1, lost_set = -1;
+    esp_err_t fail_error = ESP_ERR_NO_MEM;
     bool fake_remove = false;
     static esp_err_t remove(void *ctx, const char *key) {
         auto &h = *(RequestHeaders *)ctx;
-        if (++h.calls == h.fail_at) return ESP_ERR_NO_MEM;
+        if (++h.calls == h.fail_at) return h.fail_error;
         if (h.fake_remove) return ESP_OK;
         return h.values.erase(key) ? ESP_OK : ESP_ERR_NOT_FOUND;
     }
     static esp_err_t get(void *ctx, const char *key, const char **out) {
         auto &h = *(RequestHeaders *)ctx;
-        if (++h.calls == h.fail_at) return ESP_ERR_NO_MEM;
+        if (++h.calls == h.fail_at) return h.fail_error;
         if (h.calls == h.null_readback_at) { *out = nullptr; return ESP_OK; }
         auto found = h.values.find(key);
         *out = found == h.values.end() ? nullptr : found->second.c_str();
@@ -284,7 +329,7 @@ struct RequestHeaders {
     }
     static esp_err_t set(void *ctx, const char *key, const char *value) {
         auto &h = *(RequestHeaders *)ctx;
-        if (++h.calls == h.fail_at) return ESP_ERR_NO_MEM;
+        if (++h.calls == h.fail_at) return h.fail_error;
         if (h.calls == h.lost_set) return ESP_OK;
         h.values[key] = h.calls == h.stale_set ? "wrong" : value; return ESP_OK;
     }
@@ -347,6 +392,100 @@ TEST_F(ReadPicoSettingsSave, HeaderPutAcceptsTokenKeysAndSafeOpaqueValuesIncludi
             EXPECT_EQ(request_header_put_checked(&ops, key, value), ESP_OK);
             EXPECT_EQ(h.values[key], value);
         }
+}
+TEST_F(ReadPicoSettingsSave, HeaderRemoveConfirmsExistingOrAbsentWithoutSetCallback) {
+    for (bool existing : {false, true}) {
+        RequestHeaders h; if (existing) h.values["Authorization"] = "synthetic";
+        h.values["X-Other"] = "keep";
+        auto ops = h.ops(); ops.set = nullptr;
+        EXPECT_EQ(request_header_remove_checked(&ops, "Authorization"), ESP_OK);
+        EXPECT_EQ(h.calls, 2); EXPECT_EQ(h.values.count("Authorization"), 0u);
+        EXPECT_EQ(h.values["X-Other"], "keep");
+    }
+}
+TEST_F(ReadPicoSettingsSave, HeaderRemoveInvalidArgumentsNeverTouchSdk) {
+    RequestHeaders h; auto ops = h.ops();
+    EXPECT_EQ(request_header_remove_checked(nullptr, "Authorization"), ESP_ERR_INVALID_ARG);
+    for (const char *key : {static_cast<const char *>(nullptr), "", "Bad Key", "Bad:Key", "Bad\r\nKey", "中文"})
+        EXPECT_EQ(request_header_remove_checked(&ops, key), ESP_ERR_INVALID_ARG);
+    auto bad = ops; bad.remove = nullptr;
+    EXPECT_EQ(request_header_remove_checked(&bad, "Authorization"), ESP_ERR_INVALID_ARG);
+    bad = ops; bad.get = nullptr;
+    EXPECT_EQ(request_header_remove_checked(&bad, "Authorization"), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(h.calls, 0);
+}
+TEST_F(ReadPicoSettingsSave, HeaderRemoveRejectsEveryUnexpectedReadbackState) {
+    struct Readback { esp_err_t error; const char *value; int calls; };
+    for (esp_err_t error : {ESP_OK, ESP_ERR_NOT_FOUND, ESP_FAIL, ESP_ERR_NO_MEM}) {
+        for (const char *value : {static_cast<const char *>(nullptr), "synthetic"}) {
+            Readback state{error, value, 0};
+            request_header_ops_t ops{&state,
+                [](void *ctx, const char *) { ++((Readback *)ctx)->calls; return ESP_ERR_NOT_FOUND; },
+                [](void *ctx, const char *, const char **out) {
+                    auto &s = *(Readback *)ctx; ++s.calls; *out = s.value; return s.error;
+                }, nullptr};
+            auto expected = error == ESP_ERR_NOT_FOUND && !value ? ESP_OK :
+                error != ESP_OK && error != ESP_ERR_NOT_FOUND ? error : ESP_ERR_INVALID_RESPONSE;
+            EXPECT_EQ(request_header_remove_checked(&ops, "Authorization"), expected);
+            EXPECT_EQ(state.calls, 2);
+        }
+    }
+}
+TEST_F(ReadPicoSettingsSave, CredentialStripOptionalOrAuthorizationAliasOnlyRemovesOnce) {
+    for (const char *custom : {static_cast<const char *>(nullptr), "", "Authorization", "aUtHoRiZaTiOn", "X-Synthetic-Key"}) {
+        RequestHeaders h; auto ops = h.ops(); ops.set = nullptr;
+        h.values["Authorization"] = "synthetic";
+        h.values["X-Synthetic-Key"] = "custom"; h.values["X-Other"] = "keep";
+        bool distinct = custom && !strcmp(custom, "X-Synthetic-Key");
+        EXPECT_EQ(request_headers_strip_credentials(&ops, custom), ESP_OK);
+        EXPECT_EQ(h.calls, distinct ? 4 : 2); EXPECT_EQ(h.values.count("Authorization"), 0u);
+        EXPECT_EQ(h.values.count("X-Synthetic-Key"), distinct ? 0u : 1u);
+        EXPECT_EQ(h.values["X-Other"], "keep");
+        // Repeated stripping never restores credentials and missing is checked too.
+        EXPECT_EQ(request_headers_strip_credentials(&ops, custom), ESP_OK);
+        EXPECT_EQ(h.calls, distinct ? 8 : 4);
+    }
+}
+TEST_F(ReadPicoSettingsSave, CredentialStripEachFailurePreservesFirstErrorAndStopsLaterOperations) {
+    for (esp_err_t error : {ESP_FAIL, ESP_ERR_NO_MEM, ESP_ERR_INVALID_STATE}) {
+        for (int index = 1; index <= 4; ++index) {
+            RequestHeaders h; auto ops = h.ops(); ops.set = nullptr;
+            h.fail_at = index; h.fail_error = error;
+            h.values["Authorization"] = "synthetic";
+            h.values["X-Synthetic-Key"] = "custom"; h.values["X-Other"] = "keep";
+            EXPECT_EQ(request_headers_strip_credentials(&ops, "X-Synthetic-Key"), error);
+            EXPECT_EQ(h.calls, index);
+            if (index <= 3) EXPECT_EQ(h.values["X-Synthetic-Key"], "custom");
+            EXPECT_EQ(h.values["X-Other"], "keep");
+            // Partial removal is not rollback. A deliberate later call can clear
+            // what remains, but the failed call never continued or set a secret.
+            h.fail_at = -1;
+            EXPECT_EQ(request_headers_strip_credentials(&ops, "X-Synthetic-Key"), ESP_OK);
+            EXPECT_EQ(h.values.count("Authorization"), 0u);
+            EXPECT_EQ(h.values.count("X-Synthetic-Key"), 0u);
+        }
+    }
+}
+TEST_F(ReadPicoSettingsSave, CredentialStripInvalidCustomOrOpsRefusesBeforeAnyMutation) {
+    RequestHeaders h; auto ops = h.ops(); h.values["Authorization"] = "synthetic";
+    for (const char *custom : {"Bad Key", "Bad:Key", "Bad\nKey", "中文"})
+        EXPECT_EQ(request_headers_strip_credentials(&ops, custom), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(request_headers_strip_credentials(nullptr, "X-Synthetic-Key"), ESP_ERR_INVALID_ARG);
+    auto bad = ops; bad.get = nullptr;
+    EXPECT_EQ(request_headers_strip_credentials(&bad, "X-Synthetic-Key"), ESP_ERR_INVALID_ARG);
+    bad = ops; bad.remove = nullptr;
+    EXPECT_EQ(request_headers_strip_credentials(&bad, "X-Synthetic-Key"), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(h.calls, 0); EXPECT_EQ(h.values["Authorization"], "synthetic");
+}
+TEST_F(ReadPicoSettingsSave, CredentialStripUnconfirmedAuthorizationNeverTouchesCustom) {
+    for (bool false_remove : {false, true}) {
+        RequestHeaders h; auto ops = h.ops();
+        h.values["Authorization"] = "synthetic"; h.values["X-Synthetic-Key"] = "custom";
+        h.fake_remove = false_remove;
+        if (!false_remove) h.null_readback_at = 2;
+        EXPECT_EQ(request_headers_strip_credentials(&ops, "X-Synthetic-Key"), ESP_ERR_INVALID_RESPONSE);
+        EXPECT_EQ(h.calls, 2); EXPECT_EQ(h.values["X-Synthetic-Key"], "custom");
+    }
 }
 TEST_F(ReadPicoSettingsSave, HeaderPutRejectsInvalidKeyBytesBeforeAnySdkOperation) {
     for (int byte = 1; byte <= 255; ++byte) {
@@ -504,6 +643,31 @@ TEST_F(ReadPicoSettingsSave, FixedSdkHeaderPutReplacesCredentialWithCheckedAlloc
     EXPECT_EQ(request_header_put_checked(&ops, "Authorization", "Bearer next"), ESP_ERR_NO_MEM);
     EXPECT_EQ(http_header_destroy(h), ESP_OK); EXPECT_TRUE(sdk_header_live.empty());
 }
+TEST_F(ReadPicoSettingsSave, FixedSdkCredentialStripIsCaseInsensitiveAllocationFreeAndWireSecretsAbsent) {
+    auto h = http_header_init(); ASSERT_NE(h, nullptr); auto ops = sdk_header_ops(h); ops.set = nullptr;
+    ASSERT_EQ(http_header_set(h, "authorization", "synthetic-bearer"), ESP_OK);
+    ASSERT_EQ(http_header_set(h, "x-synthetic-key", "synthetic-custom"), ESP_OK);
+    ASSERT_EQ(http_header_set(h, "X-Other", "keep"), ESP_OK);
+    sdk_header_allocations = 0; sdk_header_fail_at = 1;
+    EXPECT_EQ(request_headers_strip_credentials(&ops, "X-Synthetic-Key"), ESP_OK);
+    EXPECT_EQ(sdk_header_allocations, 0);
+    char bytes[256] = {}; int size = sizeof(bytes);
+    EXPECT_EQ(http_header_generate_string(h, 0, bytes, &size), 1);
+    EXPECT_STREQ(bytes, "X-Other: keep\r\n\r\n");
+    EXPECT_EQ(request_headers_strip_credentials(&ops, "AUTHORIZATION"), ESP_OK);
+    EXPECT_EQ(http_header_destroy(h), ESP_OK); EXPECT_TRUE(sdk_header_live.empty());
+}
+TEST_F(ReadPicoSettingsSave, FixedSdkHeaderRemoveClearsNullValueLeftByUncheckedUpdate) {
+    auto h = http_header_init(); ASSERT_NE(h, nullptr); auto ops = sdk_header_ops(h); ops.set = nullptr;
+    ASSERT_EQ(http_header_set(h, "Authorization", "synthetic"), ESP_OK);
+    sdk_header_allocations = 0; sdk_header_fail_at = 1;
+    ASSERT_EQ(http_header_set(h, "Authorization", "next"), ESP_OK);
+    char *value = (char *)"sentinel";
+    ASSERT_EQ(http_header_get(h, "Authorization", &value), ESP_OK); EXPECT_EQ(value, nullptr);
+    EXPECT_EQ(request_header_remove_checked(&ops, "authorization"), ESP_OK);
+    EXPECT_EQ(http_header_get(h, "Authorization", &value), ESP_ERR_NOT_FOUND); EXPECT_EQ(value, nullptr);
+    EXPECT_EQ(http_header_destroy(h), ESP_OK); EXPECT_TRUE(sdk_header_live.empty());
+}
 #endif
 
 TEST_F(ReadPicoSettingsSave, ProcessingSuccessChecksAllFieldsInOrderAndCommitsOnce) {
@@ -590,6 +754,93 @@ TEST_F(ReadPicoSettingsSave, PaletteSaveSetAndCommitErrorsPropagateAndClose) {
     EXPECT_EQ(color_palette_save(&palette), ESP_ERR_NO_MEM); EXPECT_EQ(commits, 0); EXPECT_EQ(closes, 1);
     fail_set = -1; commit_error = ESP_FAIL;
     EXPECT_EQ(color_palette_save(&palette), ESP_FAIL); EXPECT_EQ(commits, 1); EXPECT_EQ(closes, 2);
+}
+
+static const float kRamp[COLOR_PALETTE_GRAY_LEVELS] = {
+    0.028f, 0.034f, 0.042f, 0.065f, 0.095f, 0.132f, 0.201f, 0.253f,
+    0.337f, 0.394f, 0.470f, 0.522f, 0.581f, 0.610f, 0.643f, 0.645f};
+TEST_F(ReadPicoSettingsSave, GrayLevelsValidationRejectsBadRamps) {
+    EXPECT_TRUE(color_palette_gray_levels_valid(kRamp));
+    float bad[COLOR_PALETTE_GRAY_LEVELS];
+    memcpy(bad, kRamp, sizeof(bad)); bad[5] = bad[4] - 0.01f; EXPECT_FALSE(color_palette_gray_levels_valid(bad));
+    memcpy(bad, kRamp, sizeof(bad)); bad[0] = 0.0f; EXPECT_FALSE(color_palette_gray_levels_valid(bad));
+    memcpy(bad, kRamp, sizeof(bad)); bad[15] = 1.5f; EXPECT_FALSE(color_palette_gray_levels_valid(bad));
+    memcpy(bad, kRamp, sizeof(bad)); bad[7] = std::numeric_limits<float>::quiet_NaN(); EXPECT_FALSE(color_palette_gray_levels_valid(bad));
+    for (float &v : bad) v = 0.5f; EXPECT_FALSE(color_palette_gray_levels_valid(bad));
+    EXPECT_FALSE(color_palette_gray_levels_valid(nullptr));
+    EXPECT_EQ(color_palette_save_gray_levels(bad), ESP_ERR_INVALID_ARG); EXPECT_EQ(opens, 0);
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsMissingMeansAbsentWithoutChangingOutput) {
+    float out[COLOR_PALETTE_GRAY_LEVELS]; memset(out, 0x55, sizeof(out)); bool present = true;
+    open_error = ESP_ERR_NVS_NOT_FOUND;
+    EXPECT_EQ(color_palette_load_gray_levels(out, &present), ESP_OK); EXPECT_FALSE(present);
+    open_error = ESP_OK; present = true;
+    EXPECT_EQ(color_palette_load_gray_levels(out, &present), ESP_OK); EXPECT_FALSE(present);
+    unsigned char raw[sizeof(out)]; memset(raw, 0x55, sizeof(raw)); EXPECT_EQ(memcmp(out, raw, sizeof(out)), 0);
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsRoundTripAndEraseLeavesPaletteBlobAlone) {
+    color_palette_t palette; color_palette_get_defaults(&palette); ASSERT_EQ(color_palette_save(&palette), ESP_OK);
+    std::string blob = saved["palette"];
+    ASSERT_EQ(color_palette_save_gray_levels(kRamp), ESP_OK);
+    EXPECT_EQ(saved["gray_levels"].size(), sizeof(kRamp)); EXPECT_EQ(saved["palette"], blob);
+    float out[COLOR_PALETTE_GRAY_LEVELS]; bool present = false;
+    ASSERT_EQ(color_palette_load_gray_levels(out, &present), ESP_OK); EXPECT_TRUE(present);
+    EXPECT_EQ(memcmp(out, kRamp, sizeof(out)), 0);
+    ASSERT_EQ(color_palette_save_gray_levels(nullptr), ESP_OK); EXPECT_EQ(saved.count("gray_levels"), 0u);
+    EXPECT_EQ(color_palette_save_gray_levels(nullptr), ESP_OK); // already absent is still success
+    EXPECT_EQ(saved["palette"], blob);
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsCorruptRecordIsAnErrorNotADefault) {
+    float out[COLOR_PALETTE_GRAY_LEVELS]; memset(out, 0x55, sizeof(out)); auto before = std::string((char *)out, sizeof(out));
+    bool present = false;
+    saved["gray_levels"] = std::string((const char *)kRamp, sizeof(kRamp) - 4);
+    EXPECT_EQ(color_palette_load_gray_levels(out, &present), ESP_ERR_INVALID_SIZE);
+    float bad[COLOR_PALETTE_GRAY_LEVELS]; memcpy(bad, kRamp, sizeof(bad)); bad[3] = 2.0f;
+    saved["gray_levels"] = std::string((const char *)bad, sizeof(bad));
+    EXPECT_EQ(color_palette_load_gray_levels(out, &present), ESP_ERR_INVALID_RESPONSE);
+    blob_error = ESP_FAIL; EXPECT_EQ(color_palette_load_gray_levels(out, &present), ESP_FAIL);
+    EXPECT_EQ(std::string((char *)out, sizeof(out)), before); EXPECT_FALSE(present);
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsWriteAndEraseErrorsPropagate) {
+    fail_set = 1; EXPECT_EQ(color_palette_save_gray_levels(kRamp), ESP_ERR_NO_MEM); EXPECT_EQ(commits, 0);
+    fail_set = -1; erase_error = ESP_FAIL; EXPECT_EQ(color_palette_save_gray_levels(nullptr), ESP_FAIL);
+    erase_error = ESP_OK; commit_error = ESP_FAIL; EXPECT_EQ(color_palette_save_gray_levels(kRamp), ESP_FAIL);
+    EXPECT_EQ(closes, 3);
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsJsonKeepClearSetAndRejectInvalid) {
+    color_palette_gray_levels_action_t action = COLOR_PALETTE_GRAY_LEVELS_SET;
+    float out[COLOR_PALETTE_GRAY_LEVELS] = {0};
+    cJSON *json = cJSON_Parse("{\"gamma\":0.8}");
+    EXPECT_EQ(color_palette_gray_levels_from_json(json, &action, out), ESP_OK);
+    EXPECT_EQ(action, COLOR_PALETTE_GRAY_LEVELS_KEEP); cJSON_Delete(json);
+    json = cJSON_Parse("{\"levels_y\":null}");
+    EXPECT_EQ(color_palette_gray_levels_from_json(json, &action, out), ESP_OK);
+    EXPECT_EQ(action, COLOR_PALETTE_GRAY_LEVELS_CLEAR); cJSON_Delete(json);
+    json = cJSON_Parse("{\"levels_y\":[0.028,0.034,0.042,0.065,0.095,0.132,0.201,0.253,0.337,0.394,0.47,0.522,0.581,0.61,0.643,0.645]}");
+    EXPECT_EQ(color_palette_gray_levels_from_json(json, &action, out), ESP_OK);
+    EXPECT_EQ(action, COLOR_PALETTE_GRAY_LEVELS_SET); EXPECT_FLOAT_EQ(out[6], 0.201f); cJSON_Delete(json);
+    for (const char *bad : {"{\"levels_y\":[0.1,0.2]}", "{\"levels_y\":\"x\"}",
+                            "{\"levels_y\":[0.5,0.4,0.42,0.065,0.095,0.132,0.201,0.253,0.337,0.394,0.47,0.522,0.581,0.61,0.643,0.645]}",
+                            "{\"levels_y\":[0.028,0.034,0.042,0.065,0.095,0.132,0.201,0.253,0.337,0.394,0.47,0.522,0.581,0.61,0.643,1e100]}"}) {
+        json = cJSON_Parse(bad); ASSERT_NE(json, nullptr);
+        action = COLOR_PALETTE_GRAY_LEVELS_KEEP; float keep[COLOR_PALETTE_GRAY_LEVELS]; memcpy(keep, out, sizeof(keep));
+        EXPECT_EQ(color_palette_gray_levels_from_json(json, &action, out), ESP_ERR_INVALID_ARG) << bad;
+        EXPECT_EQ(action, COLOR_PALETTE_GRAY_LEVELS_KEEP); EXPECT_EQ(memcmp(out, keep, sizeof(out)), 0);
+        cJSON_Delete(json);
+    }
+}
+TEST_F(ReadPicoSettingsSave, GrayLevelsReportedInPaletteJsonOnlyWhenGiven) {
+    color_palette_t palette; color_palette_get_defaults(&palette);
+    char *plain = color_palette_to_json_with_levels(&palette, nullptr); ASSERT_NE(plain, nullptr);
+    cJSON *a = cJSON_Parse(plain); free(plain); ASSERT_NE(a, nullptr);
+    EXPECT_EQ(cJSON_GetObjectItem(a, "levels_y"), nullptr); cJSON_Delete(a);
+    char *with = color_palette_to_json_with_levels(&palette, kRamp); ASSERT_NE(with, nullptr);
+    cJSON *b = cJSON_Parse(with); free(with); ASSERT_NE(b, nullptr);
+    cJSON *levels = cJSON_GetObjectItem(b, "levels_y"); ASSERT_TRUE(cJSON_IsArray(levels));
+    EXPECT_EQ(cJSON_GetArraySize(levels), 16); EXPECT_NEAR(cJSON_GetArrayItem(levels, 15)->valuedouble, 0.645, 1e-6);
+    cJSON_Delete(b);
+    float bad[COLOR_PALETTE_GRAY_LEVELS]; memcpy(bad, kRamp, sizeof(bad)); bad[2] = 0.9f;
+    EXPECT_EQ(color_palette_to_json_with_levels(&palette, bad), nullptr);
 }
 
 TEST_F(ReadPicoSettingsSave, ProcessingLoadMissingNamespaceAndFieldsUseDefaultsWithoutWrites) {

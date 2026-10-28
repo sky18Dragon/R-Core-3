@@ -139,10 +139,25 @@ static esp_err_t load_palette(bool defaults_only)
         float black_l = lstar_from_y(palette.gray_black_y);
         float white_l = lstar_from_y(palette.gray_white_y);
         float gamma = palette.gray_gamma > 0.0f ? palette.gray_gamma : 1.0f;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        // A measured per-code ramp replaces the gamma model, as in the web converter.
+        float levels[COLOR_PALETTE_GRAY_LEVELS];
+        bool has_levels = false;
+        if (!defaults_only) {
+            err = color_palette_load_gray_levels(levels, &has_levels);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to load gray ramp: %s", esp_err_to_name(err));
+                return err;
+            }
+        }
+#endif
         for (int i = 0; i < 16; i++) {
             float t = (float) i / 15.0f;
             float shaped = powf(t, gamma);
             uint8_t v = gray_from_lstar(black_l + shaped * (white_l - black_l));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (has_levels) v = gray_from_lstar(lstar_from_y(levels[i]));
+#endif
             gray_measured[i] = (rgb_t){v, v, v};
         }
     }

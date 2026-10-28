@@ -20,6 +20,7 @@ bool upload_file_begin(upload_file_t *f, const upload_file_io_t *io, const char 
     }
     f->fd = io->create_new(io->context, path);
     f->failed = f->fd < 0;
+    f->created = !f->failed;
     return !f->failed;
 }
 
@@ -100,5 +101,18 @@ bool upload_file_publish(upload_file_t *f, const char *source, const char *desti
         f->failed = true;
         return false;
     }
+    return true;
+}
+
+bool upload_file_discard(upload_file_t *f)
+{
+    if (!f || !f->created)
+        return false;
+    upload_file_abort(f);  // closes at most once; a failed close sets close_failed
+    if (f->published || f->close_failed || !f->io.remove_temp)
+        return false;
+    if (f->io.remove_temp(f->io.context, f->source) != 0)
+        return false;
+    f->created = false;
     return true;
 }

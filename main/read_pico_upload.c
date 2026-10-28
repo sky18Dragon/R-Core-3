@@ -77,9 +77,28 @@ static int publish(void *c, const char *from, const char *to)
     }
     return rename(from, to);
 }
+static bool temp_name(const char *path)
+{
+    const char *base = path ? strrchr(path, '/') : NULL;
+    static const char prefix[] = "/.rc3-upload-", suffix[] = ".part";
+    size_t n = base ? strlen(base) : 0;
+    return n > sizeof(prefix) - 1 + sizeof(suffix) - 1 &&
+           !strncmp(base, prefix, sizeof(prefix) - 1) &&
+           !strcmp(base + n - (sizeof(suffix) - 1), suffix);
+}
+static int remove_temp(void *c, const char *path)
+{
+    (void) c;
+    if (!owned_path(path) || !temp_name(path)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return unlink(path);
+}
 upload_file_io_t read_pico_upload_io(void)
 {
-    return (upload_file_io_t) {NULL, ready, create, put, sync_file, close_file, uncertain, publish};
+    return (upload_file_io_t) {NULL,       ready,     create,  put, sync_file,
+                               close_file, uncertain, publish, remove_temp};
 }
 
 bool read_pico_upload_begin(upload_file_t *f, const char *directory, char *path, size_t capacity,

@@ -72,6 +72,20 @@ gtest_discover_tests(read_pico_sntp_test)
 # exact unmodified parser joins the real adapter; IO/timeouts are synthetic.
 set(READ_PICO_TEST_IDF_PATH "" CACHE PATH "Fixed IDF v6.1 checkout for real SNTP parser tests")
 if(READ_PICO_TEST_IDF_PATH)
+  set(endpoint_parser_dir "${READ_PICO_TEST_IDF_PATH}/components/http_parser")
+  file(SHA256 "${endpoint_parser_dir}/http_parser.c" endpoint_parser_sha)
+  file(SHA256 "${endpoint_parser_dir}/http_parser.h" endpoint_header_sha)
+  if(NOT endpoint_parser_sha STREQUAL "c164edcb06099b026e7ed853ed4d25536e83b4463d5e79921b28621e16588455" OR
+     NOT endpoint_header_sha STREQUAL "21fcfe834198349472a878e0334dd74b8571fafc70c6dd701169f525dd463041")
+    message(FATAL_ERROR "HTTP endpoint tests require the fixed unmodified SDK parser")
+  endif()
+  add_executable(http_endpoint_test test_http_endpoint.cpp ../main/http_endpoint.c
+    "${endpoint_parser_dir}/http_parser.c")
+  set_source_files_properties(../main/http_endpoint.c PROPERTIES COMPILE_DEFINITIONS
+    "malloc=endpoint_test_malloc;free=endpoint_test_free")
+  target_include_directories(http_endpoint_test PRIVATE ../main "${endpoint_parser_dir}")
+  target_link_libraries(http_endpoint_test GTest::gtest_main)
+  gtest_discover_tests(http_endpoint_test)
   set(read_pico_sntp_sdk_source "${READ_PICO_TEST_IDF_PATH}/components/lwip/lwip/src/apps/sntp/sntp.c")
   file(SHA256 "${read_pico_sntp_sdk_source}" read_pico_sntp_sdk_sha)
   if(NOT read_pico_sntp_sdk_sha STREQUAL "8695155c80c807d7ac949801b023d4e2f27db7975f78bcbba726bcdc012020e7")
@@ -197,18 +211,25 @@ target_include_directories(read_pico_ota_gate_test PRIVATE config_load_stubs dis
 target_link_libraries(read_pico_ota_gate_test GTest::gtest_main)
 gtest_discover_tests(read_pico_ota_gate_test)
 
-foreach(config_profile IN ITEMS read_pico legacy)
+foreach(config_profile IN ITEMS read_pico legacy local_frame)
   add_executable(${config_profile}_config_load_test test_config_load.cpp
     ../main/config_manager.c ../main/config_read.c ../main/cron.c
     ../main/wifi_credentials.c ../main/wifi_text.c ../main/wifi_network.c)
-  if(config_profile STREQUAL "read_pico")
+  if(config_profile STREQUAL "read_pico" OR config_profile STREQUAL "local_frame")
     target_compile_definitions(${config_profile}_config_load_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
   else()
     target_compile_definitions(${config_profile}_config_load_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=0)
   endif()
+  if(config_profile STREQUAL "local_frame")
+    target_compile_definitions(${config_profile}_config_load_test PRIVATE CONFIG_READ_PICO_LOCAL_FRAME=1)
+  endif()
   target_include_directories(${config_profile}_config_load_test PRIVATE config_load_stubs stubs ../main)
   target_link_libraries(${config_profile}_config_load_test GTest::gtest_main)
-  gtest_discover_tests(${config_profile}_config_load_test)
+  if(config_profile STREQUAL "local_frame")
+    gtest_discover_tests(${config_profile}_config_load_test TEST_PREFIX "R1.")
+  else()
+    gtest_discover_tests(${config_profile}_config_load_test)
+  endif()
 endforeach()
 set_source_files_properties(../main/config_manager.c PROPERTIES COMPILE_DEFINITIONS
   "malloc=config_load_test_malloc;setenv=config_load_test_setenv;tzset=config_load_test_tzset;time=config_load_test_time;localtime_r=config_load_test_localtime_r;strftime=config_load_test_strftime")
@@ -359,6 +380,13 @@ add_executable(read_pico_integration_entry_test
 target_include_directories(read_pico_integration_entry_test PRIVATE stubs)
 target_link_libraries(read_pico_integration_entry_test GTest::gtest_main)
 gtest_discover_tests(read_pico_integration_entry_test)
+
+add_executable(read_pico_local_frame_entry_test
+  test_read_pico_integration_entry.cpp ../main/read_pico_integration_entry.c)
+target_compile_definitions(read_pico_local_frame_entry_test PRIVATE CONFIG_READ_PICO_LOCAL_FRAME=1)
+target_include_directories(read_pico_local_frame_entry_test PRIVATE stubs)
+target_link_libraries(read_pico_local_frame_entry_test GTest::gtest_main)
+gtest_discover_tests(read_pico_local_frame_entry_test)
 
 add_executable(power_gpio_mask_test test_power_gpio_mask.cpp)
 target_include_directories(power_gpio_mask_test PRIVATE ../main)
@@ -725,3 +753,15 @@ target_include_directories(read_pico_vendor_test PRIVATE
 )
 target_link_libraries(read_pico_vendor_test GTest::gtest_main)
 gtest_discover_tests(read_pico_vendor_test)
+
+add_executable(sd_sector_diag_test test_sd_sector_diag.cpp ../components/sdcard/src/sd_sector_diag.c)
+target_include_directories(sd_sector_diag_test PRIVATE ../components/sdcard/include)
+target_link_libraries(sd_sector_diag_test GTest::gtest_main)
+gtest_discover_tests(sd_sector_diag_test)
+
+add_executable(read_pico_white_first_test test_read_pico_white_first.cpp
+  ../components/epaper_driver_read_pico/src/read_pico_white_first.c)
+target_include_directories(read_pico_white_first_test PRIVATE read_pico_native_stubs
+  ../components/epaper_driver_read_pico/src)
+target_link_libraries(read_pico_white_first_test GTest::gtest_main)
+gtest_discover_tests(read_pico_white_first_test)

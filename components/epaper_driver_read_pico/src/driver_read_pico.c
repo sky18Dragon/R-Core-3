@@ -19,6 +19,9 @@
 #include "soc/gpio_sig_map.h"
 #include "soc/clk_tree_defs.h"
 #include "sy7636a.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_white_first.h"
+#endif
 
 #if CONFIG_READ_PICO_DISPLAY_VALIDATION
 #include "read_pico_vendor_gray16.h"
@@ -42,6 +45,10 @@ static bool untouched_white;
 static esp_pm_lock_handle_t cpu_pm_lock, apb_pm_lock;
 static bool pm_locks_held;
 static esp_err_t callback_error;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+static uint8_t *target_fb; // Holds the photo while the panel is flashed white.
+static bool bus_healthy(void) { return callback_error == ESP_OK; }
+#endif
 static int temperature_c;
 
 static void read_scan_clocks(uint32_t *cpu_hz, uint32_t *apb_hz)
@@ -293,7 +300,13 @@ static int draw_frame(const uint8_t *frame, size_t size, int temperature, unsign
     (void) vendor_gray16;
 #endif
     {
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        int result = read_pico_white_first_gc16(&hl, target_fb, READ_PICO_FRAME_BYTES,
+                                                untouched_white, temperature, bus_healthy);
+        draw = result < 0 ? EPD_DRAW_SUCCESS : (enum EpdDrawError) result; // -1: callback_error set
+#else
         draw = epd_hl_update_screen_full(&hl, MODE_GC16, temperature);
+#endif
     }
     untouched_white = false;
     // The vendor HL API updates back_fb even on a draw error. Save only the logical reference;
@@ -368,6 +381,10 @@ static void free_buffers(void)
     heap_caps_free(hl.dirty_lines);
     heap_caps_free(hl.dirty_columns);
     memset(&hl, 0, sizeof(hl));
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    heap_caps_free(target_fb);
+    target_fb = NULL;
+#endif
 }
 static esp_err_t allocate_buffers(void)
 {
@@ -377,6 +394,13 @@ static esp_err_t allocate_buffers(void)
     hl.dirty_lines = heap_caps_calloc(684, sizeof(bool), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     hl.dirty_columns = heap_caps_aligned_alloc(16, 608, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     hl.waveform = &E0470_WAVEFORM;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    target_fb = heap_caps_aligned_alloc(16, READ_PICO_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+    if (!target_fb) {
+        free_buffers();
+        return ESP_ERR_NO_MEM;
+    }
+#endif
     if (!hl.front_fb || !hl.back_fb || !hl.difference_fb || !hl.dirty_lines || !hl.dirty_columns) {
         free_buffers();
         return ESP_ERR_NO_MEM;
@@ -639,7 +663,7 @@ clear_done:
     release(NULL);
     return err;
 }
-esp_err_t read_pico_epaper_confirm_white_reference(void)
+static esp_err_t accept_white_reference(void)
 {
     if (!acquire(NULL))
         return ESP_ERR_TIMEOUT;
@@ -654,6 +678,31 @@ esp_err_t read_pico_epaper_confirm_white_reference(void)
     release(NULL);
     return err;
 }
+esp_err_t read_pico_epaper_confirm_white_reference(void)
+{
+    return accept_white_reference();
+}
+
+#if CONFIG_READ_PICO_LOCAL_FRAME
+esp_err_t read_pico_epaper_prepare_local_frame(void)
+{
+    // Product startup deliberately accepts a software reference after one clear.
+    // Unlike the diagnostic's manual confirmation, this is NOT visual evidence:
+    // the upstream void clear cannot report every renderer/DMA failure.
+    esp_err_t err = read_pico_epaper_init(true);
+    if (err == ESP_OK) err = read_pico_epaper_clear_unverified();
+    if (err == ESP_OK) err = accept_white_reference();
+    if (err != ESP_OK) {
+        esp_err_t cleanup = read_pico_epaper_deinit();
+        ESP_LOGE(TAG, "R1 display startup failed: %s; cleanup: %s",
+                 esp_err_to_name(err), esp_err_to_name(cleanup));
+    } else {
+        ESP_LOGW(TAG, "R1 automatic clear: software reference only, not visual validation");
+    }
+    return err;
+}
+#endif
+
 esp_err_t read_pico_epaper_deinit(void)
 {
     if (display_mutex == NULL)

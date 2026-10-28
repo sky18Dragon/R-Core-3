@@ -32,6 +32,9 @@ extern size_t test_jpeg_media_calls, test_jpeg_media_fail_at;
 extern size_t test_heap_max_request, test_heap_request_limit;
 extern bool test_jpeg_close_failed;
 extern size_t test_image_close_calls, test_image_close_fail_at, test_image_close_media_loss_at;
+extern float test_gray_levels[16];
+extern bool test_gray_levels_present;
+extern esp_err_t test_gray_levels_error;
 }
 
 namespace
@@ -180,12 +183,16 @@ class ReadPicoJpegPipeline : public ::testing::Test
         test_image_close_calls = 0;
         test_image_close_fail_at = SIZE_MAX;
         test_image_close_media_loss_at = SIZE_MAX;
+        test_gray_levels_present = false;
+        test_gray_levels_error = ESP_OK;
         fake_display_reset();
         ASSERT_EQ(image_processor_init(), ESP_OK);
     }
     void TearDown() override
     {
         test_processing_options_error = ESP_OK;
+        test_gray_levels_present = false;
+        test_gray_levels_error = ESP_OK;
         remove(path.c_str());
         remove(output.c_str());
         fake_display_reset();
@@ -849,4 +856,38 @@ TEST_F(ReadPicoJpegPipeline, OversizedPngRefusedBeforeFastDisplayOrAllocation)
     EXPECT_NE(image_processor_process(path.c_str(), output.c_str(), DITHER_FLOYD_STEINBERG), ESP_OK);
     EXPECT_EQ(access(output.c_str(), F_OK), -1);
     EXPECT_EQ(test_heap_max_request, 0u);
+}
+
+static double frame_mean()
+{
+    auto f = frame();
+    double sum = 0;
+    for (size_t i = 0; i < f.size(); i += 3) sum += f[i];
+    return f.empty() ? -1 : sum / (f.size() / 3);
+}
+
+TEST_F(ReadPicoJpegPipeline, MeasuredGrayRampReplacesGammaModelOnDevice)
+{
+    auto png = oriented_png(fixture(), 1);
+    ASSERT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+              DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    double gamma_mean = frame_mean();
+    // Read Pico white-first ladder: mid codes are brighter than the 1.42 model,
+    // so the same picture must be drawn with darker (lower) codes.
+    const float ramp[16] = {0.028f, 0.034f, 0.042f, 0.065f, 0.095f, 0.132f, 0.201f, 0.253f,
+                            0.337f, 0.394f, 0.470f, 0.522f, 0.581f, 0.610f, 0.643f, 0.645f};
+    memcpy(test_gray_levels, ramp, sizeof(ramp));
+    test_gray_levels_present = true;
+    ASSERT_EQ(image_processor_reload_palette(), ESP_OK);
+    fake_display_reset();
+    ASSERT_EQ(image_processor_process_to_display(png.data(), png.size(), IMAGE_FORMAT_PNG,
+              DITHER_FLOYD_STEINBERG, nullptr), ESP_OK);
+    double lut_mean = frame_mean();
+    EXPECT_LT(lut_mean, gamma_mean - 10.0) << gamma_mean << " -> " << lut_mean;
+}
+
+TEST_F(ReadPicoJpegPipeline, GrayRampReadErrorFailsPaletteReload)
+{
+    test_gray_levels_error = ESP_ERR_INVALID_RESPONSE;
+    EXPECT_EQ(image_processor_reload_palette(), ESP_ERR_INVALID_RESPONSE);
 }

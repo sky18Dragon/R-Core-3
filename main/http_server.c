@@ -234,78 +234,58 @@ static esp_err_t register_uri(httpd_handle_t handle, const char *uri, httpd_meth
     return httpd_register_uri_handler(handle, &u);
 }
 
+// Vite emits fixed asset names, so an app-only update keeps the same URLs:
+// make browsers revalidate instead of running a cached script.
+static esp_err_t send_webapp_asset(httpd_req_t *req, const char *type, const uint8_t *start,
+                                   const uint8_t *end)
+{
+    esp_err_t err = httpd_resp_set_type(req, type);
+    if (err == ESP_OK) err = httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    if (err == ESP_OK) err = httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    if (err != ESP_OK) return err;
+    return httpd_resp_send(req, (const char *) start, end - start);
+}
+
 static esp_err_t index_handler(httpd_req_t *req)
 {
-    const size_t index_html_size = (index_html_end - index_html_start);
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) index_html_start, index_html_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "text/html", index_html_start, index_html_end);
 }
 
 static esp_err_t index_css_handler(httpd_req_t *req)
 {
-    const size_t index_css_size = (index_css_end - index_css_start);
-    httpd_resp_set_type(req, "text/css");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) index_css_start, index_css_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "text/css", index_css_start, index_css_end);
 }
 
 static esp_err_t index_js_handler(httpd_req_t *req)
 {
-    const size_t index_js_size = (index_js_end - index_js_start);
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) index_js_start, index_js_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "application/javascript", index_js_start, index_js_end);
 }
 
 static esp_err_t index2_js_handler(httpd_req_t *req)
 {
-    const size_t index2_js_size = (index2_js_end - index2_js_start);
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) index2_js_start, index2_js_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "application/javascript", index2_js_start, index2_js_end);
 }
 
 static esp_err_t exif_reader_js_handler(httpd_req_t *req)
 {
-    const size_t exif_reader_js_size = (exif_reader_js_end - exif_reader_js_start);
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) exif_reader_js_start, exif_reader_js_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "application/javascript", exif_reader_js_start,
+                             exif_reader_js_end);
 }
 
 static esp_err_t browser_js_handler(httpd_req_t *req)
 {
-    const size_t browser_js_size = (browser_js_end - browser_js_start);
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) browser_js_start, browser_js_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "application/javascript", browser_js_start, browser_js_end);
 }
 
 static esp_err_t vite_browser_external_js_handler(httpd_req_t *req)
 {
-    const size_t vite_browser_external_js_size =
-        (vite_browser_external_js_end - vite_browser_external_js_start);
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) vite_browser_external_js_start,
-                    vite_browser_external_js_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "application/javascript", vite_browser_external_js_start,
+                             vite_browser_external_js_end);
 }
 
 static esp_err_t icon_handler(httpd_req_t *req)
 {
-    const size_t icon_svg_size = (icon_svg_end - icon_svg_start);
-    httpd_resp_set_type(req, "image/svg+xml");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_send(req, (const char *) icon_svg_start, icon_svg_size);
-    return ESP_OK;
+    return send_webapp_asset(req, "image/svg+xml", icon_svg_start, icon_svg_end);
 }
 
 static esp_err_t measurement_sample_handler(httpd_req_t *req)
@@ -337,7 +317,16 @@ typedef struct {
     const char *directory;
     bool require_png;
     int current;
+    bool bad_type;  // a part was refused for its file extension
 } checked_multipart_context_t;
+
+// Failed upload: remove only this request's own unpublished temporaries.
+static void discard_upload_files(multipart_result_t *result)
+{
+    for (int i = 0; i < 2; ++i)
+        if (result->files[i].created && !upload_file_discard(&result->files[i]))
+            ESP_LOGW(TAG, "Upload temporary retained: %s", result->files[i].source);
+}
 
 static bool checked_part_begin(void *context, const char *field, const char *filename)
 {
@@ -345,10 +334,13 @@ static bool checked_part_begin(void *context, const char *field, const char *fil
     int index = !strcmp(field, "image") ? 0 : 1;
     const char *ext = strrchr(filename, '.');
     if (index == 0) {
-        if (c->require_png && (!ext || (strcasecmp(ext, ".png") && strcasecmp(ext, ".epdgz"))))
+        if (c->require_png && (!ext || (strcasecmp(ext, ".png") && strcasecmp(ext, ".epdgz")))) {
+            c->bad_type = true;
             return false;
+        }
         strcpy(c->result->original_filename, filename); // Portable parser bounds this to 119 bytes.
     } else if (!ext || (strcasecmp(ext, ".jpg") && strcasecmp(ext, ".jpeg"))) {
+        c->bad_type = true;
         return false;
     }
     c->current = index;
@@ -392,7 +384,7 @@ static esp_err_t parse_multipart_checked(httpd_req_t *req, const char *directory
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
         return ESP_FAIL;
     }
-    checked_multipart_context_t context = {result, directory, require_png, -1};
+    checked_multipart_context_t context = {result, directory, require_png, -1, false};
     upload_stream_sink_t sink = {&context, checked_part_begin, checked_part_write, checked_part_end};
     bool ok = upload_stream_init(parser, boundary, req->content_len, &sink);
     size_t remaining = req->content_len;
@@ -409,14 +401,30 @@ static esp_err_t parse_multipart_checked(httpd_req_t *req, const char *directory
         ok = upload_stream_feed(parser, buffer, got);
     }
     ok = ok && !remaining && upload_stream_finish(parser);
+    if (!ok && context.bad_type) {
+        // Refused at a part header: read the rest of the (already size-limited) body so the
+        // client receives the 415 reason instead of a reset connection.
+        timeouts = 0;
+        while (remaining && esp_timer_get_time() < deadline) {
+            int got = httpd_req_recv(req, (char *)buffer, MIN(remaining, 4096));
+            if (got == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 8) continue;
+            if (got <= 0) break;
+            timeouts = 0;
+            remaining -= got;
+        }
+    }
     free(parser); free(buffer);
     if (!ok) {
-        upload_file_abort(&result->files[0]);
-        upload_file_abort(&result->files[1]);
-        // Retain only exclusive, hidden .part files; never unlink by name.
+        discard_upload_files(result);
         result->has_image = result->has_thumbnail = false;
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "Upload incomplete or storage failed; temporary files retained");
+        if (context.bad_type) {
+            httpd_resp_set_status(req, "415 Unsupported Media Type");
+            httpd_resp_sendstr(req, "Unsupported file type: image must be .png or .epdgz, "
+                                    "thumbnail .jpg");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "Upload incomplete or storage failed");
+        }
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -809,9 +817,10 @@ static esp_err_t receive_raw_checked(httpd_req_t *req, char *path, size_t capaci
     free(buffer);
     ok = ok && !remaining && upload_file_finish(&file, req->content_len);
     if (!ok) {
-        upload_file_abort(&file);
+        if (file.created && !upload_file_discard(&file))
+            ESP_LOGW(TAG, "Upload temporary retained: %s", file.source);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "Upload incomplete or storage failed; temporary file retained");
+                            "Upload incomplete or storage failed");
         return ESP_FAIL;
     }
     *owner = file; // Transfer only the finished/closed exclusive-create proof.
@@ -933,13 +942,18 @@ static esp_err_t display_image_direct_handler(httpd_req_t *req)
         }
 
         if (!result.has_image) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            discard_upload_files(&result);
+#endif
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No image file in multipart upload");
             return ESP_FAIL;
         }
 
         image_format_t format = image_processor_detect_format(result.image_path);
         if (format == IMAGE_FORMAT_UNKNOWN) {
-#if !CONFIG_BOARD_DRIVER_READ_PICO
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            discard_upload_files(&result);
+#else
             unlink(result.image_path);
             if (result.has_thumbnail)
                 unlink(result.thumbnail_path);
@@ -982,7 +996,10 @@ static esp_err_t display_image_direct_handler(httpd_req_t *req)
         format = image_processor_detect_format(raw_path);
         if (format == IMAGE_FORMAT_UNKNOWN) {
             ESP_LOGE(TAG, "Unsupported image format or format detection failed");
-#if !CONFIG_BOARD_DRIVER_READ_PICO
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (!upload_file_discard(&raw_owner))
+                ESP_LOGW(TAG, "Upload temporary retained: %s", raw_path);
+#else
             unlink(raw_path);
 #endif
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unsupported image format");
@@ -1078,7 +1095,9 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     }
 
     if (!result.has_image || !result.has_thumbnail) {
-#if !CONFIG_BOARD_DRIVER_READ_PICO
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        discard_upload_files(&result);
+#else
         if (result.has_image)
             unlink(result.image_path);
         if (result.has_thumbnail)
@@ -1127,6 +1146,7 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     image_format_t image_format = image_processor_detect_format(result.image_path);
     if ((image_format != IMAGE_FORMAT_PNG && image_format != IMAGE_FORMAT_EPD_GZ) ||
         image_processor_detect_format(result.thumbnail_path) != IMAGE_FORMAT_JPG) {
+        discard_upload_files(&result);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Upload file signature mismatch");
         return ESP_FAIL;
     }
@@ -1134,11 +1154,13 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     for (unsigned i = 0; i < 2; ++i) {
         errno = 0;
         if (stat(targets[i], &st) == 0) {
+            discard_upload_files(&result);
             httpd_resp_set_status(req, "409 Conflict");
             httpd_resp_sendstr(req, "Filename already exists; original retained");
             return ESP_FAIL;
         }
         if (errno != ENOENT) {
+            discard_upload_files(&result);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Album storage unavailable");
             return ESP_FAIL;
         }
@@ -1148,8 +1170,9 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     // hidden image, report failure, and do not claim rollback or retry.
     if (!upload_file_publish(&result.files[1], result.thumbnail_path, final_thumb_path) ||
         !upload_file_publish(&result.files[0], result.image_path, final_dest_path)) {
+        discard_upload_files(&result);  // an already-published thumbnail is kept
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "Publication failed; files retained, no overwrite or retry");
+                            "Publication failed; no overwrite or retry");
         return ESP_FAIL;
     }
 #else
@@ -1951,20 +1974,41 @@ static esp_err_t config_handler(httpd_req_t *req)
                                     : "random");
 
         // Auto Rotate - URL
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        download_config_t *download = malloc(sizeof(*download));
+        esp_err_t download_error = download ? config_manager_copy_download(download) : ESP_ERR_NO_MEM;
+        if (download_error != ESP_OK) {
+            free(download);
+            cJSON_Delete(root);
+            esp_err_t status = httpd_resp_set_status(req, HTTPD_503);
+            return status != ESP_OK ? status : httpd_resp_sendstr(req, "Download configuration unavailable");
+        }
+        bool download_added = cJSON_AddStringToObject(root, "image_url", download->url) &&
+            cJSON_AddBoolToObject(root, "ca_cert_set", download->certificate_length != 0) &&
+            cJSON_AddStringToObject(root, "access_token", download->token) &&
+            cJSON_AddStringToObject(root, "http_header_key", download->header_key) &&
+            cJSON_AddStringToObject(root, "http_header_value", download->header_value);
+        config_manager_release_download(download);
+        free(download);
+        if (!download_added) { cJSON_Delete(root); return ESP_ERR_NO_MEM; }
+#else
         const char *image_url = config_manager_get_image_url();
         cJSON_AddStringToObject(root, "image_url", image_url ? image_url : "");
 
         size_t ca_cert_len = 0;
         config_manager_get_ca_cert_der(&ca_cert_len);
         cJSON_AddBoolToObject(root, "ca_cert_set", ca_cert_len > 0);
+#endif
 
         const char *fetch_error = utils_get_last_fetch_error();
         if (fetch_error && strlen(fetch_error) > 0) {
             cJSON_AddStringToObject(root, "last_fetch_error", fetch_error);
         }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         const char *access_token = config_manager_get_access_token();
         cJSON_AddStringToObject(root, "access_token", access_token ? access_token : "");
+#endif
         // The HTTP API password is the one secret this endpoint does NOT
         // return. It is the credential guarding this very endpoint, so
         // serving it here would be circular -- anyone who reaches /api/config
@@ -1976,12 +2020,14 @@ static esp_err_t config_handler(httpd_req_t *req)
         const char *http_password = config_manager_get_http_password();
         cJSON_AddBoolToObject(root, "http_auth_enabled", http_password && http_password[0] != '\0');
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         const char *http_header_key = config_manager_get_http_header_key();
         cJSON_AddStringToObject(root, "http_header_key", http_header_key ? http_header_key : "");
 
         const char *http_header_value = config_manager_get_http_header_value();
         cJSON_AddStringToObject(root, "http_header_value",
                                 http_header_value ? http_header_value : "");
+#endif
 
         cJSON_AddBoolToObject(root, "save_downloaded_images",
                               config_manager_get_save_downloaded_images());
@@ -3080,13 +3126,18 @@ static esp_err_t color_palette_handler_values(httpd_req_t *req)
 #if CONFIG_BOARD_DRIVER_READ_PICO
         esp_err_t loaded = color_palette_load(&palette);
         if (loaded != ESP_OK) return send_settings_failure(req, loaded);
+        float levels[COLOR_PALETTE_GRAY_LEVELS];
+        bool has_levels = false;
+        loaded = color_palette_load_gray_levels(levels, &has_levels);
+        if (loaded != ESP_OK) return send_settings_failure(req, loaded);
+        char *json_str = color_palette_to_json_with_levels(&palette, has_levels ? levels : NULL);
 #else
         if (color_palette_load(&palette) != ESP_OK) {
             color_palette_get_defaults(&palette);
         }
-#endif
 
         char *json_str = color_palette_to_json(&palette);
+#endif
         if (!json_str) {
 #if CONFIG_BOARD_DRIVER_READ_PICO
             return send_settings_failure(req, ESP_ERR_NO_MEM);
@@ -3139,6 +3190,9 @@ static esp_err_t color_palette_handler_values(httpd_req_t *req)
         color_palette_get_defaults(&palette);
 #if CONFIG_BOARD_DRIVER_READ_PICO
         esp_err_t parsed = color_palette_from_json_checked(json, &palette);
+        color_palette_gray_levels_action_t levels_action = COLOR_PALETTE_GRAY_LEVELS_KEEP;
+        float levels[COLOR_PALETTE_GRAY_LEVELS];
+        if (parsed == ESP_OK) parsed = color_palette_gray_levels_from_json(json, &levels_action, levels);
         cJSON_Delete(json);
         if (parsed != ESP_OK) {
             esp_err_t sent = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid color palette");
@@ -3150,6 +3204,12 @@ static esp_err_t color_palette_handler_values(httpd_req_t *req)
 #endif
 
         esp_err_t err = color_palette_save(&palette);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        // Two NVS records, not one transaction: a ramp failure after the palette
+        // save is reported as a failure; the palette part may already be stored.
+        if (err == ESP_OK && levels_action != COLOR_PALETTE_GRAY_LEVELS_KEEP)
+            err = color_palette_save_gray_levels(levels_action == COLOR_PALETTE_GRAY_LEVELS_SET ? levels : NULL);
+#endif
         if (err != ESP_OK) {
 #if CONFIG_BOARD_DRIVER_READ_PICO
             return send_settings_failure(req, err);
@@ -3183,6 +3243,9 @@ static esp_err_t color_palette_handler_values(httpd_req_t *req)
         color_palette_get_defaults(&palette);
 
         esp_err_t err = color_palette_save(&palette);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (err == ESP_OK) err = color_palette_save_gray_levels(NULL); // back to the gamma model
+#endif
         if (err != ESP_OK) {
 #if CONFIG_BOARD_DRIVER_READ_PICO
             return send_settings_failure(req, err);

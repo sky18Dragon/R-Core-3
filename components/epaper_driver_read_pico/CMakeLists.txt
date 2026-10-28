@@ -7,6 +7,9 @@ if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico" OR
     if(CONFIG_READ_PICO_PHOTO_VALIDATION)
         list(APPEND READ_PICO_SOURCES "src/read_pico_scan_probe.c")
     endif()
+    if(CONFIG_READ_PICO_LOCAL_FRAME)
+        list(APPEND READ_PICO_SOURCES "src/read_pico_white_first.c")
+    endif()
     idf_component_register(
         SRCS ${READ_PICO_SOURCES}
         INCLUDE_DIRS "include"

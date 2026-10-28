@@ -8,8 +8,10 @@ namespace
 {
 struct File {
     int guards = 0, fail_guard = 0, creates = 0, writes = 0, syncs = 0, closes = 0, uncertain = 0,
-        publishes = 0;
-    bool fail_create = false, fail_sync = false, fail_close = false, fail_publish = false;
+        publishes = 0, removes = 0;
+    bool fail_create = false, fail_sync = false, fail_close = false, fail_publish = false,
+         fail_remove = false;
+    std::string removed;
     int short_write = -1;
     std::string events, data;
     static File &get(void *p)
@@ -66,9 +68,17 @@ struct File {
         s.events += 'P';
         return s.fail_publish ? -1 : 0;
     }
+    static int remove(void *p, const char *path)
+    {
+        auto &s = get(p);
+        ++s.removes;
+        s.events += 'R';
+        s.removed = path;
+        return s.fail_remove ? -1 : 0;
+    }
     upload_file_io_t io()
     {
-        return {this, ready, create, write, sync, close, fail, publish};
+        return {this, ready, create, write, sync, close, fail, publish, remove};
     }
 };
 bool begin(File &s, upload_file_t &f)
@@ -274,4 +284,76 @@ TEST(UploadFile, OverlongSourceRejectedBeforeCreate)
     EXPECT_EQ(s.creates, 0);
     upload_file_abort(&f);
     EXPECT_EQ(s.closes, 0);
+}
+
+TEST(UploadFile, DiscardRemovesOwnUnpublishedTemporaryOnce)
+{
+    File s;
+    upload_file_t f;
+    ASSERT_TRUE(begin(s, f));
+    ASSERT_TRUE(write(f));
+    ASSERT_TRUE(upload_file_finish(&f, 4));
+    EXPECT_TRUE(upload_file_discard(&f));
+    EXPECT_EQ(s.events, "OWSCR");
+    EXPECT_EQ(s.removed, "hidden.part");
+    EXPECT_FALSE(upload_file_discard(&f));  // already gone; never a second remove
+    EXPECT_FALSE(upload_file_publish(&f, "hidden.part", "new.png"));
+    EXPECT_EQ(s.removes, 1);
+}
+TEST(UploadFile, DiscardClosesAnOpenFailedUploadFirst)
+{
+    File s;
+    upload_file_t f;
+    ASSERT_TRUE(begin(s, f));
+    ASSERT_TRUE(write(f));
+    EXPECT_TRUE(upload_file_discard(&f));
+    EXPECT_EQ(s.events, "OWCR");
+    EXPECT_EQ(s.closes, 1);
+}
+TEST(UploadFile, DiscardNeverRemovesWhatItDidNotCreateOrCannotTrust)
+{
+    {   // exclusive create failed: the path may belong to someone else
+        File s;
+        s.fail_create = true;
+        upload_file_t f;
+        EXPECT_FALSE(begin(s, f));
+        EXPECT_FALSE(upload_file_discard(&f));
+        EXPECT_EQ(s.removes, 0);
+    }
+    {   // published: the file is now an album original
+        File s;
+        upload_file_t f;
+        ASSERT_TRUE(begin(s, f));
+        ASSERT_TRUE(write(f));
+        ASSERT_TRUE(upload_file_finish(&f, 4));
+        ASSERT_TRUE(upload_file_publish(&f, "hidden.part", "new.png"));
+        EXPECT_FALSE(upload_file_discard(&f));
+        EXPECT_EQ(s.removes, 0);
+    }
+    {   // close failed: the handle state is unknown
+        File s;
+        s.fail_close = true;
+        upload_file_t f;
+        ASSERT_TRUE(begin(s, f));
+        ASSERT_TRUE(write(f));
+        EXPECT_FALSE(upload_file_discard(&f));
+        EXPECT_EQ(s.removes, 0);
+        EXPECT_EQ(s.uncertain, 1);
+    }
+    {   // adapter without a remover keeps the file
+        File s;
+        upload_file_t f;
+        auto io = s.io();
+        io.remove_temp = nullptr;
+        ASSERT_TRUE(upload_file_begin(&f, &io, "hidden.part", 8));
+        EXPECT_FALSE(upload_file_discard(&f));
+    }
+    {   // remover failure is reported, not hidden
+        File s;
+        s.fail_remove = true;
+        upload_file_t f;
+        ASSERT_TRUE(begin(s, f));
+        EXPECT_FALSE(upload_file_discard(&f));
+        EXPECT_EQ(s.removes, 1);
+    }
 }

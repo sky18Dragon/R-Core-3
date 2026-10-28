@@ -5,7 +5,8 @@
 extern "C" {
 #endif
 
-// Device-only adapter: owned /storage FAT mount; never formats or unlinks.
+// Device-only adapter: owned /storage FAT mount; never formats. It removes only
+// its own hidden ".rc3-upload-*.part" temporaries, via upload_file_discard().
 upload_file_io_t read_pico_upload_io(void);
 bool read_pico_upload_begin(upload_file_t *file, const char *directory, char *path, size_t capacity,
                             size_t limit);

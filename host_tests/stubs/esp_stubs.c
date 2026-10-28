@@ -1,3 +1,4 @@
+#include <string.h>
 // Host-test stub implementations for the ESP-IDF symbols image_processor.c
 // links against.
 #include <stddef.h>
@@ -41,6 +42,18 @@ esp_err_t color_palette_load(color_palette_t *palette)
 }
 
 unsigned test_palette_load_calls;
+
+// Measured GC16 ramp: absent unless a test sets it.
+float test_gray_levels[COLOR_PALETTE_GRAY_LEVELS];
+bool test_gray_levels_present;
+esp_err_t test_gray_levels_error;
+esp_err_t color_palette_load_gray_levels(float levels[COLOR_PALETTE_GRAY_LEVELS], bool *present)
+{
+    if (test_gray_levels_error != ESP_OK) return test_gray_levels_error;
+    *present = test_gray_levels_present;
+    if (test_gray_levels_present) memcpy(levels, test_gray_levels, sizeof(test_gray_levels));
+    return ESP_OK;
+}
 
 esp_err_t esp_jpeg_get_image_info(esp_jpeg_image_cfg_t *cfg, esp_jpeg_image_output_t *img)
 {
