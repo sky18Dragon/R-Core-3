@@ -48,6 +48,7 @@ endif()
 set(SOURCES
     "album_manager.c"
     "cert_pin.c"
+    "http_endpoint.c"
     "color_palette.c"
     "config_manager.c"
     "crash_log.c"
@@ -116,6 +117,7 @@ set(PRIV_REQUIRES
     vfs
     esp_event
     esp_http_client
+    http_parser
     esp_http_server
     esp_https_ota
     esp-tls

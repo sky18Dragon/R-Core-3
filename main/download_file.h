@@ -14,6 +14,8 @@ download_result_t download_file_finish(upload_file_t *owner, bool transport_ok,
                                       int status, bool complete, int64_t content_length);
 // Conservative HTTP origin comparison. Unknown/userinfo URLs are never trusted
 // to receive the configured image-source credentials.
+// Raw whitespace, controls and backslashes anywhere in either URL are rejected;
+// this is not a complete URL grammar validator or an SDK redirect-chain check.
 bool download_same_origin(const char *a, const char *b);
 bool download_redirect_same_origin(const char *origin, const char *location);
 #ifdef __cplusplus

@@ -31,7 +31,7 @@ static char wifi_password[WIFI_PASS_MAX_LEN] = {0};
 // static IP instead of DHCP, and DNS override
 static char ntp_server[NTP_SERVER_MAX_LEN] = {0};
 #if CONFIG_BOARD_DRIVER_READ_PICO
-// Protect checked name/network/time/revision and loading, not all caches/libc.
+// Protect checked name/network/time/revision/download and loading, not all caches/libc.
 static atomic_flag time_config_control = ATOMIC_FLAG_INIT;
 static bool timezone_applied;
 static bool device_hostnames_confirmed;
@@ -1417,7 +1417,12 @@ void config_manager_set_rotation_mode(rotation_mode_t mode)
 
 rotation_mode_t config_manager_get_rotation_mode(void)
 {
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Effective R1 policy only: preserve the stored preference for later versions.
+    return ROTATION_MODE_STORAGE;
+#else
     return rotation_mode;
+#endif
 }
 // ============================================================================
 // Auto Rotate - SDCARD
@@ -1464,8 +1469,218 @@ int32_t config_manager_get_last_index(void)
 // Auto Rotate - URL
 // ============================================================================
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static void download_cache_locked(download_config_t *out)
+{
+    memcpy(out->url, image_url, sizeof(out->url));
+    memcpy(out->token, access_token, sizeof(out->token));
+    memcpy(out->header_key, http_header_key, sizeof(out->header_key));
+    memcpy(out->header_value, http_header_value, sizeof(out->header_value));
+    memcpy(out->etag, image_etag, sizeof(out->etag));
+    out->certificate = ca_cert_der;
+    out->certificate_length = ca_cert_der_len;
+}
+
+void config_manager_release_download(download_config_t *snapshot)
+{
+    if (!snapshot) return;
+    free(snapshot->certificate);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+esp_err_t config_manager_copy_download(download_config_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = ESP_OK;
+    uint8_t *certificate = NULL;
+    if (!memchr(image_url, 0, sizeof(image_url)) || !memchr(access_token, 0, sizeof(access_token)) ||
+        !memchr(http_header_key, 0, sizeof(http_header_key)) ||
+        !memchr(http_header_value, 0, sizeof(http_header_value)) ||
+        !memchr(image_etag, 0, sizeof(image_etag)) || ca_cert_der_len > CA_CERT_MAX_LEN ||
+        ((ca_cert_der != NULL) != (ca_cert_der_len != 0))) {
+        err = ESP_ERR_INVALID_RESPONSE;
+    } else if (ca_cert_der_len) {
+        certificate = malloc(ca_cert_der_len);
+        if (!certificate) err = ESP_ERR_NO_MEM;
+        else memcpy(certificate, ca_cert_der, ca_cert_der_len);
+    }
+    if (err == ESP_OK) {
+        download_cache_locked(out);
+        out->certificate = certificate;
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+static esp_err_t download_copy_text(char *out, size_t capacity, const char *value)
+{
+    if (!value) return ESP_ERR_INVALID_ARG;
+    size_t length = strnlen(value, capacity);
+    if (length == capacity) return ESP_ERR_INVALID_SIZE;
+    memset(out, 0, capacity);
+    memcpy(out, value, length);
+    return ESP_OK;
+}
+
+static esp_err_t download_erase(nvs_handle_t handle, const char *key)
+{
+    esp_err_t err = nvs_erase_key(handle, key);
+    return err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err;
+}
+
+static bool download_identity_locked(const download_config_t *value)
+{
+    return !strncmp(value->url, image_url, sizeof(image_url)) &&
+        !strncmp(value->token, access_token, sizeof(access_token)) &&
+        !strncmp(value->header_key, http_header_key, sizeof(http_header_key)) &&
+        !strncmp(value->header_value, http_header_value, sizeof(http_header_value)) &&
+        value->certificate_length == ca_cert_der_len &&
+        (!ca_cert_der_len || (value->certificate &&
+                             !memcmp(value->certificate, ca_cert_der, ca_cert_der_len)));
+}
+
+static esp_err_t patch_download_locked(uint32_t fields, const download_config_t *patch)
+{
+    const uint32_t all = DOWNLOAD_CONFIG_URL | DOWNLOAD_CONFIG_TOKEN | DOWNLOAD_CONFIG_HEADER_KEY |
+        DOWNLOAD_CONFIG_HEADER_VALUE | DOWNLOAD_CONFIG_CERTIFICATE | DOWNLOAD_CONFIG_ETAG;
+    if (!patch || !fields || (fields & ~all) ||
+        ((fields & DOWNLOAD_CONFIG_ETAG) && fields != DOWNLOAD_CONFIG_ETAG)) return ESP_ERR_INVALID_ARG;
+    download_config_t *candidate = malloc(sizeof(*candidate));
+    if (!candidate) return ESP_ERR_NO_MEM;
+    download_cache_locked(candidate);
+    esp_err_t err = ESP_OK;
+#define COPY_DOWNLOAD(flag, field) do { if ((fields & flag) && err == ESP_OK) \
+    err = download_copy_text(candidate->field, sizeof(candidate->field), patch->field); } while (0)
+    COPY_DOWNLOAD(DOWNLOAD_CONFIG_URL, url);
+    COPY_DOWNLOAD(DOWNLOAD_CONFIG_TOKEN, token);
+    COPY_DOWNLOAD(DOWNLOAD_CONFIG_HEADER_KEY, header_key);
+    COPY_DOWNLOAD(DOWNLOAD_CONFIG_HEADER_VALUE, header_value);
+    COPY_DOWNLOAD(DOWNLOAD_CONFIG_ETAG, etag);
+#undef COPY_DOWNLOAD
+    if (err != ESP_OK) { free(candidate); return err; }
+    if (fields & DOWNLOAD_CONFIG_CERTIFICATE) {
+        if (patch->certificate_length > CA_CERT_MAX_LEN) { free(candidate); return ESP_ERR_INVALID_SIZE; }
+        if ((patch->certificate != NULL) != (patch->certificate_length != 0)) {
+            free(candidate); return ESP_ERR_INVALID_ARG;
+        }
+        candidate->certificate = NULL;
+        candidate->certificate_length = patch->certificate_length;
+        if (candidate->certificate_length) {
+            candidate->certificate = malloc(candidate->certificate_length);
+            if (!candidate->certificate) { free(candidate); return ESP_ERR_NO_MEM; }
+            memcpy(candidate->certificate, patch->certificate, candidate->certificate_length);
+        }
+    }
+    bool invalidate_etag = !download_identity_locked(candidate);
+    if (invalidate_etag) memset(candidate->etag, 0, sizeof(candidate->etag));
+    nvs_handle_t handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        if (fields & DOWNLOAD_CONFIG_URL)
+            err = candidate->url[0] ? nvs_set_str(handle, NVS_IMAGE_URL_KEY, candidate->url) :
+                                    download_erase(handle, NVS_IMAGE_URL_KEY);
+#define STORE_DOWNLOAD(flag, key, field) do { if ((fields & flag) && err == ESP_OK) \
+    err = nvs_set_str(handle, key, candidate->field); } while (0)
+        STORE_DOWNLOAD(DOWNLOAD_CONFIG_TOKEN, NVS_ACCESS_TOKEN_KEY, token);
+        STORE_DOWNLOAD(DOWNLOAD_CONFIG_HEADER_KEY, NVS_HTTP_HEADER_KEY_KEY, header_key);
+        STORE_DOWNLOAD(DOWNLOAD_CONFIG_HEADER_VALUE, NVS_HTTP_HEADER_VALUE_KEY, header_value);
+#undef STORE_DOWNLOAD
+        if ((fields & DOWNLOAD_CONFIG_CERTIFICATE) && err == ESP_OK)
+            err = candidate->certificate ? nvs_set_blob(handle, NVS_CA_CERT_KEY, candidate->certificate,
+                                                      candidate->certificate_length) :
+                                          download_erase(handle, NVS_CA_CERT_KEY);
+        if ((invalidate_etag || (fields & DOWNLOAD_CONFIG_ETAG)) && err == ESP_OK)
+            err = candidate->etag[0] ? nvs_set_str(handle, NVS_IMAGE_ETAG_KEY, candidate->etag) :
+                                     download_erase(handle, NVS_IMAGE_ETAG_KEY);
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (err == ESP_OK) {
+        memcpy(image_url, candidate->url, sizeof(image_url));
+        memcpy(access_token, candidate->token, sizeof(access_token));
+        memcpy(http_header_key, candidate->header_key, sizeof(http_header_key));
+        memcpy(http_header_value, candidate->header_value, sizeof(http_header_value));
+        memcpy(image_etag, candidate->etag, sizeof(image_etag));
+        if (fields & DOWNLOAD_CONFIG_CERTIFICATE) {
+            free(ca_cert_der);
+            ca_cert_der = candidate->certificate;
+            ca_cert_der_len = candidate->certificate_length;
+        }
+    } else if (fields & DOWNLOAD_CONFIG_CERTIFICATE) free(candidate->certificate);
+    free(candidate);
+    return err;
+}
+
+esp_err_t config_manager_patch_download_checked(uint32_t fields, const download_config_t *patch)
+{
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = patch_download_locked(fields, patch);
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+esp_err_t config_manager_set_image_source_checked(const char *url, const uint8_t *der, size_t length)
+{
+    download_config_t *patch = malloc(sizeof(*patch));
+    if (!patch) return ESP_ERR_NO_MEM;
+    memset(patch, 0, sizeof(*patch));
+    esp_err_t err = download_copy_text(patch->url, sizeof(patch->url), url);
+    if (err == ESP_OK) {
+        patch->certificate = (uint8_t *)der; patch->certificate_length = length;
+        err = config_manager_patch_download_checked(DOWNLOAD_CONFIG_URL | DOWNLOAD_CONFIG_CERTIFICATE, patch);
+    }
+    free(patch); // Input certificate is borrowed; only the patch allocation is ours.
+    return err;
+}
+
+esp_err_t config_manager_accept_download_etag(const download_config_t *request, const char *etag)
+{
+    if (!request) return ESP_ERR_INVALID_ARG;
+    char candidate[HTTP_ETAG_MAX_LEN];
+    esp_err_t err = download_copy_text(candidate, sizeof(candidate), etag);
+    if (err != ESP_OK) return err;
+    if (atomic_flag_test_and_set(&time_config_control)) return ESP_ERR_INVALID_STATE;
+    if (download_identity_locked(request) && strcmp(image_etag, candidate)) {
+        download_config_t *patch = malloc(sizeof(*patch));
+        if (!patch) err = ESP_ERR_NO_MEM;
+        else {
+            memset(patch, 0, sizeof(*patch));
+            memcpy(patch->etag, candidate, sizeof(candidate));
+            err = patch_download_locked(DOWNLOAD_CONFIG_ETAG, patch);
+            free(patch);
+        }
+    }
+    atomic_flag_clear(&time_config_control);
+    return err;
+}
+
+static void download_compatibility_set(uint32_t field, const char *text, const uint8_t *der, size_t size)
+{
+    download_config_t *patch = malloc(sizeof(*patch));
+    if (!patch) { ESP_LOGE(TAG, "Download configuration allocation failed"); return; }
+    memset(patch, 0, sizeof(*patch));
+    esp_err_t err = ESP_OK;
+    switch (field) {
+    case DOWNLOAD_CONFIG_URL: err = download_copy_text(patch->url, sizeof(patch->url), text); break;
+    case DOWNLOAD_CONFIG_TOKEN: err = download_copy_text(patch->token, sizeof(patch->token), text); break;
+    case DOWNLOAD_CONFIG_HEADER_KEY: err = download_copy_text(patch->header_key, sizeof(patch->header_key), text); break;
+    case DOWNLOAD_CONFIG_HEADER_VALUE: err = download_copy_text(patch->header_value, sizeof(patch->header_value), text); break;
+    case DOWNLOAD_CONFIG_ETAG: err = download_copy_text(patch->etag, sizeof(patch->etag), text); break;
+    case DOWNLOAD_CONFIG_CERTIFICATE: patch->certificate = (uint8_t *)der; patch->certificate_length = size; break;
+    default: err = ESP_ERR_INVALID_ARG; break;
+    }
+    if (err == ESP_OK) err = config_manager_patch_download_checked(field, patch);
+    free(patch);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Download configuration save not confirmed: %s", esp_err_to_name(err));
+}
+#endif
+
 void config_manager_set_image_url(const char *url)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_URL, url ? url : "", NULL, 0);
+#else
     const char *new_url = url ? url : "";
     bool url_changed = strcmp(image_url, new_url) != 0;
 
@@ -1488,6 +1703,7 @@ void config_manager_set_image_url(const char *url)
     }
 
     ESP_LOGI(TAG, "Image URL set to: %s", image_url[0] ? image_url : "(empty)");
+#endif
 }
 const char *config_manager_get_image_url(void)
 {
@@ -1496,6 +1712,9 @@ const char *config_manager_get_image_url(void)
 
 void config_manager_set_ca_cert_der(const uint8_t *der, size_t len)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_CERTIFICATE, NULL, der, len);
+#else
     free(ca_cert_der);
     ca_cert_der = NULL;
     ca_cert_der_len = 0;
@@ -1521,6 +1740,7 @@ void config_manager_set_ca_cert_der(const uint8_t *der, size_t len)
 
     ESP_LOGI(TAG, "CA certificate %s (%zu bytes)", ca_cert_der ? "set" : "cleared",
              ca_cert_der_len);
+#endif
 }
 
 const uint8_t *config_manager_get_ca_cert_der(size_t *out_len)
@@ -1533,6 +1753,9 @@ const uint8_t *config_manager_get_ca_cert_der(size_t *out_len)
 
 void config_manager_set_access_token(const char *token)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_TOKEN, token, NULL, 0);
+#else
     if (token == NULL) {
         return;
     }
@@ -1548,6 +1771,7 @@ void config_manager_set_access_token(const char *token)
     }
 
     ESP_LOGI(TAG, "Access token set (length: %zu)", strlen(access_token));
+#endif
 }
 const char *config_manager_get_access_token(void)
 {
@@ -1593,6 +1817,9 @@ const char *config_manager_get_http_password(void)
 
 void config_manager_set_http_header_key(const char *key)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_HEADER_KEY, key, NULL, 0);
+#else
     if (key == NULL) {
         return;
     }
@@ -1608,6 +1835,7 @@ void config_manager_set_http_header_key(const char *key)
     }
 
     ESP_LOGI(TAG, "HTTP header key set to: %s", http_header_key);
+#endif
 }
 const char *config_manager_get_http_header_key(void)
 {
@@ -1616,6 +1844,9 @@ const char *config_manager_get_http_header_key(void)
 
 void config_manager_set_http_header_value(const char *value)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_HEADER_VALUE, value, NULL, 0);
+#else
     if (value == NULL) {
         return;
     }
@@ -1631,6 +1862,7 @@ void config_manager_set_http_header_value(const char *value)
     }
 
     ESP_LOGI(TAG, "HTTP header value set (length: %zu)", strlen(http_header_value));
+#endif
 }
 const char *config_manager_get_http_header_value(void)
 {
@@ -1658,6 +1890,9 @@ bool config_manager_get_save_downloaded_images(void)
 
 void config_manager_set_image_etag(const char *etag)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_compatibility_set(DOWNLOAD_CONFIG_ETAG, etag ? etag : "", NULL, 0);
+#else
     const char *new_etag = etag ? etag : "";
 
     // No-op if value unchanged — avoids NVS wear when the server does not send
@@ -1679,6 +1914,7 @@ void config_manager_set_image_etag(const char *etag)
         nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
     }
+#endif
 }
 
 const char *config_manager_get_image_etag(void)
@@ -1715,7 +1951,11 @@ void config_manager_set_ha_url(const char *url)
 }
 const char *config_manager_get_ha_url(void)
 {
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    return ""; // No remote notifications/configuration in the local-only product.
+#else
     return ha_url;
+#endif
 }
 
 // ============================================================================
@@ -1786,7 +2026,11 @@ void config_manager_set_deep_sleep_enabled(bool enabled)
 
 bool config_manager_get_deep_sleep_enabled(void)
 {
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    return false; // Keep Web access and active rotation alive without NVS migration.
+#else
     return deep_sleep_enabled;
+#endif
 }
 
 void config_manager_set_debug_log_enabled(bool enabled)

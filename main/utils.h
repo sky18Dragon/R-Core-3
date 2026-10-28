@@ -54,6 +54,9 @@ const char *utils_consume_config_error(void);
 // On HTTP 304 Not Modified, *not_modified (if non-NULL) is set to true and
 // the eInk keeps the image it already holds. not_modified may be NULL if the
 // caller doesn't care.
+// Read Pico: NULL selects the configured URL from the owned request snapshot.
+// Explicit URLs must remain valid for the call; credentials are only sent to
+// the configured origin and ETags only to the exact configured URL.
 esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified);
 
 // Trigger image rotation based on configured rotation mode

@@ -151,6 +151,16 @@ menu "Board Configuration"
             Boot entry refuses product startup pending hardware/data migration
             and physical white-reference acceptance. Never a release/flash profile.
 
+    config READ_PICO_LOCAL_FRAME
+        bool "Read Pico R1 local Web/SD frame candidate"
+        depends on READ_PICO_PHOTOFRAME_INTEGRATION
+        default n
+        help
+            Identifies the isolated local upload/display/rotation candidate.
+            Uses the existing factory layout; no automatic flash or migration.
+            Starts the local product with an automatic boot clear. Requires
+            separate hardware deployment approval; not a diagnostic profile.
+
     config READ_PICO_PHOTO_VALIDATION
         bool "Read Pico single-photo diagnostic (explicit hardware authorization required)"
         depends on BOARD_DRIVER_READ_PICO

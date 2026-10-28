@@ -45,6 +45,9 @@
 #include "read_pico_board.h"
 #include "read_pico_background.h"
 #include "read_pico_sntp.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_epaper.h"
+#endif
 #endif
 #include "splash_screen.h"
 #include "storage.h"
@@ -316,6 +319,10 @@ static void startup_online_work(void)
     ESP_LOGI(TAG, "Sending online notification to Home Assistant");
     ha_notify_online(NULL);
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // OTA is unsupported on this board and outside R1: no delayed check.
+    return;
+#endif
     // Delay OTA check to avoid competing with boot-time network activity
     vTaskDelay(pdMS_TO_TICKS(10000));
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -361,10 +368,15 @@ static void late_wifi_task(void *arg)
     ESP_LOGI(TAG, "WiFi came up late - running startup network tasks");
 #if CONFIG_BOARD_DRIVER_READ_PICO
     esp_err_t periodic = periodic_tasks_check_and_run();
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    if (periodic != ESP_OK)
+        ESP_LOGW(TAG, "R1: late time sync unavailable (%s); continuing", esp_err_to_name(periodic));
+#else
     if (periodic != ESP_OK) {
         ESP_LOGE(TAG, "Late online startup skipped: periodic batch failed (%s)", esp_err_to_name(periodic));
         return;
     }
+#endif
 #else
     periodic_tasks_check_and_run();
 #endif
@@ -914,7 +926,17 @@ void app_main(void)
 
     ESP_ERROR_CHECK(image_processor_init());
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    esp_err_t display_start = display_manager_init();
+    if (display_start == ESP_OK) display_start = read_pico_epaper_prepare_local_frame();
+    if (display_start != ESP_OK) {
+        ESP_LOGE(TAG, "R1 display startup refused (%s); no Web or rotation startup",
+                 esp_err_to_name(display_start));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(display_manager_init());
+#endif
 
     ESP_ERROR_CHECK(processing_settings_init());
 
@@ -1145,10 +1167,20 @@ void app_main(void)
         ESP_LOGI(TAG, "Checking periodic tasks...");
 #if CONFIG_BOARD_DRIVER_READ_PICO
         esp_err_t periodic = periodic_tasks_check_and_run();
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        // No external RTC: SNTP is forced every boot and fails on a LAN without Internet.
+        // Local Web/SD rotation does not need wall-clock time, so keep starting HTTP; the
+        // forced request stays pending for the hourly worker. Cancellation is still caught
+        // by the background/HTTP readiness checks below.
+        if (periodic != ESP_OK)
+            ESP_LOGW(TAG, "R1: time sync unavailable (%s); continuing with local Web/SD frame",
+                     esp_err_to_name(periodic));
+#else
         if (periodic != ESP_OK) {
             ESP_LOGE(TAG, "Online startup refused: periodic work failed (%s)", esp_err_to_name(periodic));
             return;
         }
+#endif
 #else
         periodic_tasks_check_and_run();
 #endif

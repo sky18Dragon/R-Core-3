@@ -7,6 +7,74 @@
 #include "upload_asset.h"
 #include "download_file.h"
 #include "upload_copy.h"
+#include "text_buffer.h"
+
+TEST(TextBuffer, EveryCapacityTerminatesWithoutTouchingGuards) {
+    for (size_t capacity = 0; capacity <= 20; ++capacity) {
+        char storage[22]; memset(storage, '!', sizeof(storage));
+        text_buffer_message(storage + 1, capacity, "diagnostic");
+        EXPECT_EQ(storage[0], '!');
+        EXPECT_EQ(storage[capacity + 1], '!');
+        if (capacity) {
+            size_t length = std::min(capacity - 1, size_t(10));
+            EXPECT_EQ(memcmp(storage + 1, "diagnostic", length), 0);
+            EXPECT_EQ(storage[length + 1], 0);
+        } else EXPECT_EQ(storage[1], '!');
+    }
+}
+TEST(TextBuffer, OptionalOutputAndEmptyMessageAreSafe) {
+    text_buffer_message(nullptr, 0, "message");
+    text_buffer_message(nullptr, 8, "message");
+    char out[2] = {'!', '!'};
+    text_buffer_message(out, 0, nullptr); EXPECT_EQ(out[0], '!');
+    text_buffer_message(out, sizeof(out), nullptr); EXPECT_EQ(out[0], 0); EXPECT_EQ(out[1], '!');
+    out[0] = '!'; text_buffer_message(out, sizeof(out), ""); EXPECT_EQ(out[0], 0);
+}
+TEST(TextBuffer, ProtocolCopyRejectsOverlengthWithoutPublishingPrefix) {
+    for (size_t capacity : {size_t(1), size_t(128), size_t(512)}) {
+        std::vector<char> output(capacity + 2, '!');
+        std::string fits(capacity - 1, 'a'), exceeds(capacity, 'b');
+        ASSERT_TRUE(text_buffer_copy_exact(output.data() + 1, capacity, fits.c_str()));
+        EXPECT_STREQ(output.data() + 1, fits.c_str());
+        auto before = output;
+        EXPECT_FALSE(text_buffer_copy_exact(output.data() + 1, capacity, exceeds.c_str()));
+        EXPECT_EQ(output, before);
+        EXPECT_FALSE(text_buffer_copy_exact(output.data() + 1, 0, ""));
+        EXPECT_FALSE(text_buffer_copy_exact(output.data() + 1, capacity, nullptr));
+        EXPECT_EQ(output, before);
+        EXPECT_EQ(output.front(), '!'); EXPECT_EQ(output.back(), '!');
+    }
+    EXPECT_FALSE(text_buffer_copy_exact(nullptr, 512, "value"));
+}
+TEST(TextBuffer, SingletonCannotBeReplacedAfterAcceptedOrInvalidValue) {
+    EXPECT_FALSE(text_buffer_claim_once(nullptr));
+    for (const char *value : {"ok", "oversize"}) {
+        bool seen = false; char out[4] = "old";
+        ASSERT_TRUE(text_buffer_claim_once(&seen));
+        bool copied = text_buffer_copy_exact(out, sizeof(out), value);
+        EXPECT_EQ(copied, !strcmp(value, "ok"));
+        std::string before(out);
+        EXPECT_FALSE(text_buffer_claim_once(&seen));
+        EXPECT_STREQ(out, before.c_str());
+        seen = false; // Only a new response resets the singleton state.
+        EXPECT_TRUE(text_buffer_claim_once(&seen));
+    }
+}
+TEST(DownloadOrigin, AbsoluteAndRelativeReferencesRejectEveryUnsafeByte) {
+    for (unsigned byte = 1; byte <= 127; ++byte) {
+        if (byte > 32 && byte != 127 && byte != '\\') continue;
+        for (const char *prefix : {"https://host/", "https://host/?q=", "https://host/#"}) {
+            std::string bad = std::string(prefix) + char(byte) + "suffix";
+            EXPECT_FALSE(download_same_origin("https://host/", bad.c_str()));
+            EXPECT_FALSE(download_same_origin(bad.c_str(), "https://host/"));
+            EXPECT_FALSE(download_redirect_same_origin("https://host/", bad.c_str()));
+            EXPECT_FALSE(download_redirect_same_origin(bad.c_str(), "/safe"));
+        }
+        std::string relative = std::string("/path") + char(byte) + "suffix";
+        EXPECT_FALSE(download_redirect_same_origin("https://host/", relative.c_str()));
+    }
+    EXPECT_TRUE(download_same_origin("https://host/path%20name", "https://HOST/?q=%0A"));
+}
 
 namespace {
 constexpr const char *source = "/storage/.rc3-upload-12345678-00000001.part";

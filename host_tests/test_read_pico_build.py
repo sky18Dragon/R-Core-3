@@ -14,6 +14,58 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ReadPicoBuildTests(unittest.TestCase):
+    def test_absolute_redirect_prepares_host_before_scheduling_and_keeps_downgrade_gate(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        start = source.index('static esp_err_t fetch_prepare_redirect(', source.index('typedef struct {\n    esp_http_client_handle_t client;'))
+        helper = source[start:source.index('static esp_err_t fetch_perform_download(', start)]
+        self.assertLess(helper.index('esp_http_client_get_transport_type(client)'), helper.index('request_redirect_schedule_checked(&ops)'))
+        self.assertIn('strncasecmp(url, "https://", 8)', helper)
+        self.assertIn('return ESP_ERR_INVALID_RESPONSE', helper)
+        self.assertIn('fetch_redirect_url, fetch_redirect_host, fetch_redirect_schedule', helper)
+        self.assertNotIn('strstr(url,', helper)
+
+    def test_initial_host_authority_is_checked_before_perform(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        helper = source[source.index('static esp_err_t fetch_host_header('):source.index('static esp_err_t fetch_perform_download(')]
+        self.assertIn('!strcasecmp(custom_key, "Host")', helper)
+        self.assertIn('http_endpoint_host_header(url, host, sizeof(host))', helper)
+        self.assertIn('fetch_put_header(client, "Host", host)', helper)
+        main = source[source.index('static esp_err_t fetch_perform_download('):source.index('// Fetch the server-provided thumbnail')]
+        self.assertLess(main.index('fetch_host_header(client, url, source->header_key)'), main.index('esp_http_client_perform(client)'))
+        thumb = source[source.index('static bool fetch_download_thumbnail('):]
+        self.assertLess(thumb.index('fetch_host_header(thumb_client, thumbnail_url, source->header_key)'), thumb.index('esp_http_client_perform(thumb_client)'))
+
+    def test_singleton_response_headers_reject_duplicates_before_capture(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        sent = source[source.index('case HTTP_EVENT_HEADERS_SENT:'):source.index('case HTTP_EVENT_ON_DATA:')]
+        for header, field, capture in [('Location', 'location_header_seen', 'strdup('),
+                                       ('X-Thumbnail-URL', 'thumbnail_header_seen', 'text_buffer_copy_exact('),
+                                       ('ETag', 'etag_header_seen', 'text_buffer_copy_exact(')]:
+            self.assertIn(f'ctx->{field} = false;', sent)
+            block = source[source.index(f'strcasecmp(evt->header_key, "{header}")'):]
+            guard = block[:block.index(capture)]
+            self.assertIn(f'text_buffer_claim_once(&ctx->{field})', guard)
+            self.assertIn('ctx->owner->failed = true;', guard)
+        redirect = source[source.index('case HTTP_EVENT_REDIRECT:'):source.index('case HTTP_EVENT_HEADERS_SENT:')]
+        self.assertLess(redirect.index('ctx->owner->failed'), redirect.index('fetch_prepare_redirect('))
+
+    def test_download_endpoint_checks_precede_io_and_metadata_never_truncates(self):
+        # Wiring assertions only: this does not execute the HTTP event loop.
+        source = (ROOT / 'main/utils.c').read_text()
+        main = source[source.index('static esp_err_t fetch_display_from_source('):]
+        self.assertLess(main.index('http_endpoint_valid(url)'), main.index('fetch_perform_download('))
+        self.assertLess(main.index('http_endpoint_valid(url)'), main.index('ESP_LOGI('))
+        thumb = source[source.index('static bool fetch_download_thumbnail('):]
+        self.assertLess(thumb.index('http_endpoint_valid(thumbnail_url)'), thumb.index('read_pico_upload_begin('))
+        self.assertLess(thumb.index('http_endpoint_valid(thumbnail_url)'), thumb.index('ESP_LOGI('))
+        for marker, target, size in [('X-Thumbnail-URL', 'thumbnail_url', '512'),
+                                     ('ETag', 'etag', 'HTTP_ETAG_MAX_LEN')]:
+            block = source[source.index(f'strcasecmp(evt->header_key, "{marker}")'):]
+            checked = block[block.index('#if CONFIG_BOARD_DRIVER_READ_PICO'):block.index('#else')]
+            self.assertIn(f'text_buffer_copy_exact(ctx->{target}, {size}, evt->header_value)', checked)
+            self.assertIn('ctx->owner->failed = true;', checked)
+            self.assertIn('return ESP_ERR_INVALID_RESPONSE;', checked)
+
     def test_request_config_snapshot_and_header_confirmation_precede_http_perform(self):
         source = (ROOT / 'main/utils.c').read_text()
         download = source[source.index('static esp_err_t fetch_perform_download('):source.index('static esp_err_t fetch_perform_download(') + 21000]
@@ -52,6 +104,26 @@ class ReadPicoBuildTests(unittest.TestCase):
         guard = thumbnail[thumbnail.index('if (header_error != ESP_OK)'):thumbnail.index('esp_err_t thumb_err = esp_http_client_perform')]
         self.assertIn('upload_file_abort(owner)', guard)
         self.assertIn('return false;', guard)
+
+    def test_redirect_strips_with_absence_confirmation_and_latches_before_next_hop(self):
+        source = (ROOT / 'main/utils.c').read_text()
+        redirect = source[source.index('case HTTP_EVENT_REDIRECT:'):source.index('case HTTP_EVENT_HEADERS_SENT:')]
+        self.assertIn('if (ctx->redirect_error == ESP_OK)', redirect)
+        self.assertLess(redirect.index('http_redirect_reference_valid(ctx->redirect_url)'),
+                        redirect.index('fetch_strip_credentials('))
+        self.assertIn('ctx->redirect_error = fetch_strip_credentials(evt->client, ctx->credential_header)', redirect)
+        self.assertNotIn('esp_http_client_delete_header(', redirect)
+        self.assertLess(redirect.index('fetch_strip_credentials('), redirect.index('fetch_prepare_redirect('))
+        self.assertIn('ctx->owner->failed = true', redirect)
+        self.assertIn('return ctx->redirect_error', redirect)
+        sent = source[source.index('case HTTP_EVENT_HEADERS_SENT:'):source.index('case HTTP_EVENT_ON_DATA:')]
+        self.assertNotIn('redirect_error =', sent)
+        download = source[source.index('err = esp_http_client_perform(client)'):source.index('// 304 Not Modified:')]
+        self.assertLess(download.index('err = ctx.redirect_error'), download.index('download_file_finish('))
+        self.assertIn('if (err == ESP_OK && received == DOWNLOAD_FAILED)', download)
+        thumbnail = source[source.index('esp_err_t thumb_err = esp_http_client_perform'):source.index('if (thumb_err == ESP_OK && thumb_status')]
+        self.assertLess(thumbnail.index('thumb_err = thumb_ctx.redirect_error'), thumbnail.index('download_file_finish('))
+        self.assertIn('if (thumb_err == ESP_OK && received != DOWNLOAD_COMPLETE)', thumbnail)
 
     def test_image_options_checked_reads_precede_publication_and_streams(self):
         settings = (ROOT / 'main/processing_settings.c').read_text()
@@ -237,6 +309,7 @@ class ReadPicoBuildTests(unittest.TestCase):
         for source in ('main.c', 'storage.c', 'image_processor.c', 'http_server.c'):
             self.assertIn('"' + source + '"', cmake)
         entry = (ROOT / "main/read_pico_integration_entry.c").read_text()
+        entry = entry.split("#else", 1)[1]  # Integration branch; R1 has a separate executable test.
         for unsafe in ('product_entry(', 'photoframe_app_main();', 'board_hal_init(',
                        'storage_init(', 'nvs_flash_init(', 'epd_init('):
             self.assertNotIn(unsafe, entry)
@@ -357,6 +430,7 @@ class ReadPicoBuildTests(unittest.TestCase):
             start = source.index('#if CONFIG_BOARD_DRIVER_READ_PICO', source.index('esp_err_t ' + function))
             self.assertIn('return ESP_ERR_NOT_SUPPORTED;', source[start:source.index('#else', start)])
         entry = (ROOT / 'main/read_pico_integration_entry.c').read_text()
+        entry = entry.split('#else', 1)[1]
         self.assertNotIn('product_entry();', entry)
         self.assertNotIn('photoframe_app_main();', entry)
 
@@ -805,6 +879,22 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertLess(outer.index('fetch_apply_remote_config'), outer.index('*not_modified = true'))
         self.assertIn('if (applied != ESP_OK)', outer)
 
+    def test_embedded_web_assets_revalidate_after_firmware_update(self):
+        # Fixed asset names are embedded in the app image; without revalidation a
+        # browser kept the old index.js after an app-only update (2026-10-25).
+        for path in ('main/http_server.c', 'main/wifi_provisioning.c'):
+            source = (ROOT / path).read_text()
+            helper = source[source.index('static esp_err_t send_webapp_asset('):]
+            helper = helper[:helper.index('\n}\n')]
+            self.assertIn('httpd_resp_set_hdr(req, "Content-Encoding", "gzip")', helper, path)
+            self.assertIn('httpd_resp_set_hdr(req, "Cache-Control", "no-cache")', helper, path)
+            self.assertIn('if (err != ESP_OK) return err;', helper, path)
+            self.assertLess(helper.index('"Cache-Control", "no-cache"'), helper.index('httpd_resp_send('), path)
+            self.assertGreaterEqual(source.count('return send_webapp_asset(req, '), 8, path)
+        http = (ROOT / 'main/http_server.c').read_text()
+        self.assertEqual(http.count('"Content-Encoding", "gzip"'), 1)  # only through the helper
+        self.assertIn('"Cache-Control", "public, max-age=3600"', http)  # image thumbnails keep caching
+
     def test_http_revision_and_palette_load_errors_precede_success(self):
         http = (ROOT / 'main/http_server.c').read_text()
         helper = http[http.index('static esp_err_t send_revision_error'):http.index('static esp_err_t config_handler')]
@@ -812,7 +902,9 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertIn('Configuration changed, but revision save not confirmed', helper)
         self.assertEqual(http.count('esp_err_t revision = touch_config_for_http(req);'), 5)
         palette = http[http.index('static esp_err_t color_palette_handler'):http.index('static esp_err_t register_http_routes')]
-        self.assertEqual(palette.count('if (loaded != ESP_OK)'), 3)
+        # GET palette + GET gray ramp, POST reload, DELETE reload.
+        self.assertEqual(palette.count('if (loaded != ESP_OK)'), 4)
+        self.assertIn('color_palette_save_gray_levels(NULL)', palette)
         manager = (ROOT / 'main/config_manager.c').read_text()
         revision = manager[manager.index('esp_err_t config_manager_touch_config_checked(void)'):]
         self.assertIn('candidate = config_last_updated + 1', revision)
@@ -1168,7 +1260,11 @@ class PhotoBuildTests(unittest.TestCase):
         http = (ROOT / "main/http_server.c").read_text()
         checked = http[http.index("static esp_err_t parse_multipart_checked"):http.index("#endif", http.index("static esp_err_t parse_multipart_checked"))]
         self.assertIn("upload_stream_finish(parser)", checked)
-        self.assertIn("upload_file_abort(&result->files[0])", checked)
+        self.assertIn("discard_upload_files(result)", checked)  # own temporaries only
+        self.assertIn('"415 Unsupported Media Type"', checked)
+        start = checked.index("if (!ok && context.bad_type)")
+        drain = checked[start:checked.index("free(parser); free(buffer);", start)]
+        self.assertIn("esp_timer_get_time() < deadline", drain)  # bounded drain before replying
         self.assertNotIn("unlink(", checked)
         raw = http[http.index("static esp_err_t receive_raw_checked"):http.index("#else", http.index("static esp_err_t receive_raw_checked"))]
         self.assertIn("upload_file_finish(&file, req->content_len)", raw)
@@ -1182,7 +1278,15 @@ class PhotoBuildTests(unittest.TestCase):
         adapter = (ROOT / "main/read_pico_upload.c").read_text()
         self.assertIn("O_WRONLY | O_CREAT | O_EXCL", adapter)
         self.assertIn("retry < 16", adapter)
-        self.assertNotIn("unlink(", adapter)
+        # The only deletion: this request's own hidden .part temporary, path-checked first.
+        self.assertEqual(adapter.count("unlink("), 1)
+        remover = adapter[adapter.index("static int remove_temp("):]
+        remover = remover[:remover.index("\n}\n")]
+        self.assertLess(remover.index("!owned_path(path) || !temp_name(path)"), remover.index("unlink(path)"))
+        self.assertIn('"/.rc3-upload-"', adapter)
+        self.assertIn('".part"', adapter)
+        helper = http[http.index("static void discard_upload_files("):]
+        self.assertIn("upload_file_discard(&result->files[i])", helper[:helper.index("\n}\n")])
 
     def test_owned_display_url_and_snapshot_never_return_to_fixed_slot_cleanup(self):
         flow = (ROOT / "main/display_flow.c").read_text()

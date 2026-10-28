@@ -83,8 +83,17 @@ def idf_py_command():
 
 def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
                    read_pico_display_validation=False, read_pico_storage_validation=False,
-                   read_pico_photoframe_integration=False, read_pico_photo_validation=False):
+                   read_pico_photoframe_integration=False, read_pico_photo_validation=False,
+                   read_pico_local_frame=False):
     """Build firmware with idf.py."""
+    if read_pico_local_frame:
+        if (board != "read_pico" or read_pico_factory_diagnostic
+                or read_pico_display_validation or read_pico_storage_validation
+                or read_pico_photoframe_integration or read_pico_photo_validation):
+            raise ValueError("local frame requires an exclusive Read Pico profile")
+        # Reuse the reviewed layout and full-stack linkage, but never its output directory.
+        read_pico_factory_diagnostic = True
+        read_pico_photoframe_integration = True
     if read_pico_photo_validation and (
         board != "read_pico" or not read_pico_factory_diagnostic
         or read_pico_display_validation or read_pico_storage_validation or read_pico_photoframe_integration
@@ -111,6 +120,8 @@ def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
         sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_photoframe_integration"
     if read_pico_photo_validation:
         sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_photo_validation"
+    if read_pico_local_frame:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_local_frame"
 
     # Boards differ in target chip (the M5Paper is a plain ESP32, everything
     # else is an ESP32-S3). Pass it explicitly: idf.py resolves the target
@@ -140,6 +151,8 @@ def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
             suffix = "-integration"
         if read_pico_photo_validation:
             suffix = "-photo"
+        if read_pico_local_frame:
+            suffix = "-local-frame"
         idf_base += ["-B", f"build-read-pico{suffix}",
                      f"-DSDKCONFIG=.cache/sdkconfig.read_pico{suffix}"]
 
@@ -197,6 +210,11 @@ def main():
         help="Compile/link full PhotoFrame stack with runtime disabled; requires isolated factory profile",
     )
     parser.add_argument(
+        "--read-pico-local-frame",
+        action="store_true",
+        help="Build isolated R1 local-frame candidate; firmware step only; never flash",
+    )
+    parser.add_argument(
         "--read-pico-photo-validation",
         action="store_true",
         help="Compile isolated single-photo diagnostic; requires factory profile; never flash",
@@ -217,6 +235,14 @@ def main():
     args, extra_args = parser.parse_known_args()
 
     steps = args.step if args.step else STEPS
+
+    if args.read_pico_local_frame and (
+        args.board != "read_pico" or steps != ["firmware"]
+        or args.read_pico_factory_diagnostic or args.read_pico_display_validation
+        or args.read_pico_storage_validation or args.read_pico_photoframe_integration
+        or args.read_pico_photo_validation
+    ):
+        parser.error("local frame requires --board read_pico --step firmware and no diagnostic flags")
 
     if args.board == "read_pico" and (args.fullclean or extra_args):
         parser.error("Read Pico P1 only permits building; no fullclean or extra commands")
@@ -260,7 +286,8 @@ def main():
     if "firmware" in steps:
         build_firmware(args.board, extra_args, args.read_pico_factory_diagnostic,
                        args.read_pico_display_validation, args.read_pico_storage_validation,
-                       args.read_pico_photoframe_integration, args.read_pico_photo_validation)
+                       args.read_pico_photoframe_integration, args.read_pico_photo_validation,
+                       args.read_pico_local_frame)
 
 
 if __name__ == "__main__":

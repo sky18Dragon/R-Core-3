@@ -1,4 +1,6 @@
 #include "cert_pin.h"
+#include "text_buffer.h"
+#include "http_endpoint.h"
 
 #include <string.h>
 
@@ -16,45 +18,24 @@ esp_err_t cert_pin_fetch_and_store(const char *url, char *err_out, size_t err_ou
         err_out[0] = '\0';
 
     if (!url || url[0] == '\0') {
-        if (err_out)
-            strncpy(err_out, "URL is empty", err_out_len - 1);
+        text_buffer_message(err_out, err_out_len, "URL is empty");
         return ESP_FAIL;
     }
 
-    // Parse host + port
-    char host[256] = {0};
-    int port = 443;
-    const char *host_start = strstr(url, "://");
-    if (!host_start) {
-        if (err_out)
-            strncpy(err_out, "Invalid URL format", err_out_len - 1);
+    http_endpoint_t endpoint;
+    if (!http_endpoint_parse(url, &endpoint) || !endpoint.tls) {
+        text_buffer_message(err_out, err_out_len, "Invalid HTTPS URL");
         return ESP_FAIL;
     }
-    host_start += 3;
-    const char *host_end = strchr(host_start, '/');
-    if (!host_end)
-        host_end = host_start + strlen(host_start);
-    const char *port_sep = strchr(host_start, ':');
-    if (port_sep && port_sep < host_end) {
-        size_t host_len = port_sep - host_start;
-        if (host_len >= sizeof(host))
-            host_len = sizeof(host) - 1;
-        strncpy(host, host_start, host_len);
-        port = atoi(port_sep + 1);
-    } else {
-        size_t host_len = host_end - host_start;
-        if (host_len >= sizeof(host))
-            host_len = sizeof(host) - 1;
-        strncpy(host, host_start, host_len);
-    }
+    const char *host = endpoint.host;
+    int port = (int)endpoint.port;
 
     ESP_LOGI(TAG, "Fetching TLS certificate from %s:%d", host, port);
 
     esp_tls_cfg_t tls_cfg = {0};
     esp_tls_t *tls = esp_tls_init();
     if (!tls) {
-        if (err_out)
-            strncpy(err_out, "TLS init failed", err_out_len - 1);
+        text_buffer_message(err_out, err_out_len, "TLS init failed");
         return ESP_FAIL;
     }
 
@@ -82,8 +63,7 @@ esp_err_t cert_pin_fetch_and_store(const char *url, char *err_out, size_t err_ou
     const mbedtls_x509_crt *peer_cert = mbedtls_ssl_get_peer_cert(ssl);
     if (!peer_cert) {
         esp_tls_conn_destroy(tls);
-        if (err_out)
-            strncpy(err_out, "No certificate received from server", err_out_len - 1);
+        text_buffer_message(err_out, err_out_len, "No certificate received from server");
         return ESP_FAIL;
     }
 
@@ -93,10 +73,8 @@ esp_err_t cert_pin_fetch_and_store(const char *url, char *err_out, size_t err_ou
     const mbedtls_x509_crt *issuer = peer_cert->next;
     if (!issuer) {
         esp_tls_conn_destroy(tls);
-        if (err_out)
-            strncpy(err_out,
-                    "Server sent only a leaf certificate; pinning requires an intermediate",
-                    err_out_len - 1);
+        text_buffer_message(err_out, err_out_len,
+                            "Server sent only a leaf certificate; pinning requires an intermediate");
         return ESP_FAIL;
     }
 
@@ -104,18 +82,29 @@ esp_err_t cert_pin_fetch_and_store(const char *url, char *err_out, size_t err_ou
     unsigned char *cert_der = malloc(cert_der_len);
     if (!cert_der) {
         esp_tls_conn_destroy(tls);
-        if (err_out)
-            strncpy(err_out, "Out of memory", err_out_len - 1);
+        text_buffer_message(err_out, err_out_len, "Out of memory");
         return ESP_FAIL;
     }
     memcpy(cert_der, issuer->raw.p, cert_der_len);
 
     esp_tls_conn_destroy(tls);
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Publish the URL, trust anchor and ETag invalidation together. The caller
+    // owns the outer configuration transaction/revision update.
+    esp_err_t saved = config_manager_set_image_source_checked(url, cert_der, cert_der_len);
+#else
     config_manager_set_ca_cert_der(cert_der, cert_der_len);
     config_manager_touch_config();
+#endif
 
     free(cert_der);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (saved != ESP_OK) {
+        if (err_out && err_out_len) snprintf(err_out, err_out_len, "Image source save not confirmed");
+        return saved;
+    }
+#endif
 
     ESP_LOGI(TAG, "Pinned issuer cert for %s:%d (%zu bytes)", host, port, cert_der_len);
     return ESP_OK;
@@ -123,6 +112,16 @@ esp_err_t cert_pin_fetch_and_store(const char *url, char *err_out, size_t err_ou
 
 void cert_pin_clear(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    download_config_t *patch = malloc(sizeof(*patch));
+    if (!patch) { ESP_LOGE(TAG, "Certificate clear allocation failed"); return; }
+    memset(patch, 0, sizeof(*patch));
+    esp_err_t err = config_manager_patch_download_checked(DOWNLOAD_CONFIG_CERTIFICATE, patch);
+    free(patch);
+    if (err == ESP_OK) err = config_manager_touch_config_checked();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Certificate clear not confirmed: %s", esp_err_to_name(err));
+#else
     config_manager_set_ca_cert_der(NULL, 0);
     config_manager_touch_config();
+#endif
 }

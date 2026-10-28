@@ -171,6 +171,40 @@ bool config_manager_get_save_downloaded_images(void);
 void config_manager_set_image_etag(const char *etag);
 const char *config_manager_get_image_etag(void);
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+typedef struct {
+    char url[IMAGE_URL_MAX_LEN];
+    char token[ACCESS_TOKEN_MAX_LEN];
+    char header_key[HTTP_HEADER_KEY_MAX_LEN];
+    char header_value[HTTP_HEADER_VALUE_MAX_LEN];
+    char etag[HTTP_ETAG_MAX_LEN];
+    uint8_t *certificate;
+    size_t certificate_length;
+} download_config_t;
+enum {
+    DOWNLOAD_CONFIG_URL = 1u << 0,
+    DOWNLOAD_CONFIG_TOKEN = 1u << 1,
+    DOWNLOAD_CONFIG_HEADER_KEY = 1u << 2,
+    DOWNLOAD_CONFIG_HEADER_VALUE = 1u << 3,
+    DOWNLOAD_CONFIG_CERTIFICATE = 1u << 4,
+    DOWNLOAD_CONFIG_ETAG = 1u << 5,
+};
+// Owned cache snapshot under the same control as all checked/compatibility
+// writers and startup loading. Output is unchanged on error; release before
+// recapturing into a previously successful snapshot.
+esp_err_t config_manager_copy_download(download_config_t *out);
+void config_manager_release_download(download_config_t *snapshot);
+// Selected fields are copied before IO. RAM publishes only after all writes
+// and one commit succeed. NVS can still be partially changed on failure.
+// Source/credential changes also invalidate ETag in that commit. ETag cannot
+// be patched together with source/credential fields.
+esp_err_t config_manager_patch_download_checked(uint32_t fields, const download_config_t *patch);
+esp_err_t config_manager_set_image_source_checked(const char *url, const uint8_t *der, size_t length);
+// Accept an ETag only if the request's source/credentials still match. A
+// changed source returns OK without storing; storage/control errors propagate.
+esp_err_t config_manager_accept_download_etag(const download_config_t *request, const char *etag);
+#endif
+
 // ============================================================================
 // Home Assistant
 // ============================================================================

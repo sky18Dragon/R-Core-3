@@ -6,6 +6,10 @@ typedef struct { const char *host; size_t size; unsigned port; bool tls; } origi
 static bool parse_origin(const char *url, origin_t *out)
 {
     if (!url || strnlen(url, 2048) >= 2048) return false;
+    // Validate the complete reference before authorizing credentials, not only
+    // the authority. Otherwise absolute redirects bypass relative-path checks.
+    for (const unsigned char *p = (const unsigned char *)url; *p; ++p)
+        if (*p <= 32 || *p == 127 || *p == '\\') return false;
     const char *scheme = strstr(url, "://");
     if (!scheme) return false;
     out->tls = scheme - url == 5 && !strncasecmp(url, "https", 5);

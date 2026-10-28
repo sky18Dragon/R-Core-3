@@ -20,6 +20,21 @@ typedef struct {
     esp_err_t (*get)(void *context, const char *key, const char **value);
     esp_err_t (*set)(void *context, const char *key, const char *value);
 } request_header_ops_t;
+typedef struct {
+    void *context;
+    esp_err_t (*prepare_url)(void *context);
+    esp_err_t (*confirm_host)(void *context);
+    esp_err_t (*schedule)(void *context);
+} request_redirect_ops_t;
+// Preparation callbacks must not schedule/send requests. First error stops;
+// only a fully prepared target may reach schedule. No rollback is promised.
+esp_err_t request_redirect_schedule_checked(const request_redirect_ops_t *ops);
+// Confirm absence after removal. Only remove/get callbacks are required.
+esp_err_t request_header_remove_checked(const request_header_ops_t *ops, const char *key);
+// Remove Authorization then the optional custom credential header (NULL/empty
+// means none). Validate first, stop at the first error, never restore secrets.
+esp_err_t request_headers_strip_credentials(const request_header_ops_t *ops,
+                                            const char *custom_key);
 // Nonempty ASCII token key, value without CR/LF/DEL or controls except HTAB.
 // Confirm removal and exact stored value; SDK trimming is not silently accepted.
 // The caller owns valid NUL-terminated key/value for the duration of this call.

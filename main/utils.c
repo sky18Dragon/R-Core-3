@@ -44,6 +44,8 @@
 #include "read_pico_upload.h"
 #include "read_pico_sd.h"
 #include "download_file.h"
+#include "http_endpoint.h"
+#include "text_buffer.h"
 #include "upload_copy.h"
 #endif
 
@@ -175,6 +177,31 @@ static esp_err_t name_wifi(void *context, const char *name)
 static esp_err_t apply_config_values(cJSON *root, bool from_remote)
 {
     cJSON *item;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Reject excluded features before any field in this request is saved or
+    // an image URL triggers certificate discovery. Do not migrate old NVS.
+    if (from_remote) return ESP_ERR_NOT_SUPPORTED;
+    const char *remote_keys[] = {"image_url", "ha_url"};
+    for (size_t i = 0; i < sizeof(remote_keys) / sizeof(remote_keys[0]); ++i) {
+        cJSON *value = cJSON_GetObjectItem(root, remote_keys[i]);
+        if (value && (!cJSON_IsString(value) || *cJSON_GetStringValue(value))) {
+            utils_set_config_error("Remote sources are unavailable in the R1 local frame");
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+    }
+    cJSON *mode = cJSON_GetObjectItem(root, "rotation_mode");
+    if (mode && (!cJSON_IsString(mode) ||
+                 (strcmp(cJSON_GetStringValue(mode), "storage") &&
+                  strcmp(cJSON_GetStringValue(mode), "sdcard")))) {
+        utils_set_config_error("R1 supports local storage rotation only");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    cJSON *sleep = cJSON_GetObjectItem(root, "deep_sleep_enabled");
+    if (sleep && !cJSON_IsFalse(sleep)) {
+        utils_set_config_error("Sleep is unavailable in the R1 always-on frame");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
 
     // General
     item = cJSON_GetObjectItem(root, "device_name");
@@ -513,6 +540,37 @@ static esp_err_t apply_config_values(cJSON *root, bool from_remote)
     item = cJSON_GetObjectItem(root, "image_url");
     if (item && cJSON_IsString(item)) {
         const char *new_url = cJSON_GetStringValue(item);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (strnlen(new_url, IMAGE_URL_MAX_LEN) >= IMAGE_URL_MAX_LEN) {
+            utils_set_config_error("Image URL is too long");
+            return ESP_ERR_INVALID_SIZE;
+        }
+        http_endpoint_t endpoint;
+        if (*new_url && !http_endpoint_parse(new_url, &endpoint)) {
+            utils_set_config_error("Invalid HTTP image URL");
+            return ESP_ERR_INVALID_ARG;
+        }
+        download_config_t *source = malloc(sizeof(*source));
+        if (!source) return ESP_ERR_NO_MEM;
+        esp_err_t source_error = config_manager_copy_download(source);
+        if (source_error != ESP_OK) { free(source); return source_error; }
+        bool url_changed = strcmp(new_url, source->url) != 0;
+        config_manager_release_download(source);
+        free(source);
+        if (url_changed) {
+            if (*new_url && endpoint.tls) {
+                char err_buf[256] = {0};
+                source_error = cert_pin_fetch_and_store(new_url, err_buf, sizeof(err_buf));
+                if (source_error != ESP_OK) utils_set_cert_pin_error(err_buf);
+            } else {
+                source_error = config_manager_set_image_source_checked(new_url, NULL, 0);
+            }
+            if (source_error != ESP_OK) {
+                utils_set_config_error("Image source save not confirmed");
+                return source_error;
+            }
+        }
+#else
         const char *cur_url = config_manager_get_image_url();
         if (!cur_url)
             cur_url = "";
@@ -536,12 +594,61 @@ static esp_err_t apply_config_values(cJSON *root, bool from_remote)
             }
             config_manager_set_image_url(new_url);
         }
+#endif
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (cJSON_GetObjectItem(root, "access_token") || cJSON_GetObjectItem(root, "http_header_key") ||
+        cJSON_GetObjectItem(root, "http_header_value")) {
+        download_config_t *credential_patch = malloc(sizeof(*credential_patch));
+        if (!credential_patch)
+            return ESP_ERR_NO_MEM;
+        memset(credential_patch, 0, sizeof(*credential_patch));
+        const char *credential_names[] = {"access_token", "http_header_key", "http_header_value"};
+        char *credential_values[] = {credential_patch->token, credential_patch->header_key,
+                                     credential_patch->header_value};
+        const size_t credential_capacities[] = {sizeof(credential_patch->token),
+                                                sizeof(credential_patch->header_key),
+                                                sizeof(credential_patch->header_value)};
+        const uint32_t credential_flags[] = {DOWNLOAD_CONFIG_TOKEN, DOWNLOAD_CONFIG_HEADER_KEY,
+                                             DOWNLOAD_CONFIG_HEADER_VALUE};
+        uint32_t credential_fields = 0;
+        for (size_t i = 0; i < 3; ++i) {
+            item = cJSON_GetObjectItem(root, credential_names[i]);
+            if (!item)
+                continue;
+            if (!cJSON_IsString(item)) {
+                free(credential_patch);
+                return ESP_ERR_INVALID_ARG;
+            }
+            const char *value = cJSON_GetStringValue(item);
+            size_t length = strnlen(value, credential_capacities[i]);
+            if (length == credential_capacities[i]) {
+                utils_set_config_error("Download credential is too long");
+                free(credential_patch);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(credential_values[i], value, length + 1);
+            credential_fields |= credential_flags[i];
+        }
+        if (credential_fields) {
+            esp_err_t credential_error =
+                config_manager_patch_download_checked(credential_fields, credential_patch);
+            free(credential_patch);
+            if (credential_error != ESP_OK) {
+                utils_set_config_error("Download credentials save not confirmed");
+                return credential_error;
+            }
+        } else {
+            free(credential_patch);
+        }
+    }
+#else
     item = cJSON_GetObjectItem(root, "access_token");
     if (item && cJSON_IsString(item)) {
         config_manager_set_access_token(cJSON_GetStringValue(item));
     }
+#endif
 
     // Optional password for the device's own HTTP API (#130). Send "" to
     // disable it again. Never echoed back by GET /api/config.
@@ -567,6 +674,7 @@ static esp_err_t apply_config_values(cJSON *root, bool from_remote)
         http_auth_limiter_reset();
     }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
     item = cJSON_GetObjectItem(root, "http_header_key");
     if (item && cJSON_IsString(item)) {
         config_manager_set_http_header_key(cJSON_GetStringValue(item));
@@ -576,6 +684,7 @@ static esp_err_t apply_config_values(cJSON *root, bool from_remote)
     if (item && cJSON_IsString(item)) {
         config_manager_set_http_header_value(cJSON_GetStringValue(item));
     }
+#endif
 
     item = cJSON_GetObjectItem(root, "save_downloaded_images");
     if (item && cJSON_IsBool(item)) {
@@ -671,7 +780,11 @@ typedef struct {
     const char *credential_origin;
     char credential_header[HTTP_HEADER_KEY_MAX_LEN];
     char *redirect_url;
+    esp_err_t redirect_error; // Event callback errors alone do not stop SDK perform.
     bool config_header_seen;
+    bool location_header_seen;
+    bool thumbnail_header_seen;
+    bool etag_header_seen;
 #endif
     int total_read;
     char *content_type;
@@ -679,6 +792,11 @@ typedef struct {
     char *config_payload;  // Optional config JSON from X-Config-Payload header
     char *etag;            // Optional ETag buffer (HTTP_ETAG_MAX_LEN bytes) for 304 caching
 } download_context_t;
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t fetch_strip_credentials(esp_http_client_handle_t client, const char *custom_key);
+static esp_err_t fetch_prepare_redirect(esp_http_client_handle_t client, const char *url, const char *custom_key);
+#endif
 
 // HTTP event handler to write data to file
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -692,18 +810,22 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
         // secrets before a cross-origin request; never restore them mid-chain.
         // Reject/strip before set_redirection schedules the next request;
         // callback errors alone do not stop this SDK's perform loop.
-        bool trusted = download_redirect_same_origin(ctx->credential_origin, ctx->redirect_url);
-        if (!trusted) {
-            esp_err_t removed = esp_http_client_delete_header(evt->client, "Authorization");
-            if (removed != ESP_OK && removed != ESP_ERR_NOT_FOUND)
-                ctx->owner->failed = true;
-            if (*ctx->credential_header) {
-                removed = esp_http_client_delete_header(evt->client, ctx->credential_header);
-                if (removed != ESP_OK && removed != ESP_ERR_NOT_FOUND) ctx->owner->failed = true;
+        if (ctx->redirect_error == ESP_OK) {
+            if (!ctx->redirect_url || ctx->owner->failed ||
+                !http_redirect_reference_valid(ctx->redirect_url)) {
+                ctx->redirect_error = ESP_ERR_INVALID_RESPONSE;
+            } else {
+                bool trusted = download_redirect_same_origin(ctx->credential_origin, ctx->redirect_url);
+                if (!trusted)
+                    ctx->redirect_error = fetch_strip_credentials(evt->client, ctx->credential_header);
+                if (ctx->redirect_error == ESP_OK)
+                    ctx->redirect_error = fetch_prepare_redirect(evt->client, ctx->redirect_url, ctx->credential_header);
             }
         }
-        if (!ctx->redirect_url || ctx->owner->failed ||
-            esp_http_client_set_redirection(evt->client) != ESP_OK) ctx->owner->failed = true;
+        if (ctx->redirect_error != ESP_OK) {
+            ctx->owner->failed = true;
+            return ctx->redirect_error; // Also latch for the caller after perform returns.
+        }
         break;
     }
     case HTTP_EVENT_HEADERS_SENT:
@@ -713,6 +835,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
         if (ctx->thumbnail_url) ctx->thumbnail_url[0] = 0;
         if (ctx->config_payload) ctx->config_payload[0] = 0;
         ctx->config_header_seen = false;
+        ctx->location_header_seen = false;
+        ctx->thumbnail_header_seen = false;
+        ctx->etag_header_seen = false;
         if (ctx->etag) ctx->etag[0] = 0;
         free(ctx->redirect_url);
         ctx->redirect_url = NULL;
@@ -747,11 +872,24 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     case HTTP_EVENT_ON_HEADER:
 #if CONFIG_BOARD_DRIVER_READ_PICO
         if (strcasecmp(evt->header_key, "Location") == 0) {
+            // SDK appends repeated Location values; never validate only the
+            // last callback value then follow a different internal address.
+            if (!text_buffer_claim_once(&ctx->location_header_seen)) {
+                if (ctx->redirect_error == ESP_OK) ctx->redirect_error = ESP_ERR_INVALID_RESPONSE;
+                ctx->owner->failed = true;
+                return ctx->redirect_error;
+            }
             free(ctx->redirect_url);
             ctx->redirect_url = NULL;
-            if (strnlen(evt->header_value, 2048) < 2048)
+            if (evt->header_value && *evt->header_value && strnlen(evt->header_value, 2048) < 2048)
                 ctx->redirect_url = strdup(evt->header_value);
-            if (!ctx->redirect_url) ctx->owner->failed = true;
+            if (!ctx->redirect_url) {
+                if (ctx->redirect_error == ESP_OK)
+                    ctx->redirect_error = evt->header_value && *evt->header_value &&
+                        strnlen(evt->header_value, 2048) < 2048 ? ESP_ERR_NO_MEM : ESP_ERR_INVALID_RESPONSE;
+                ctx->owner->failed = true;
+                return ctx->redirect_error;
+            }
             break;
         }
 #endif
@@ -759,11 +897,22 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             snprintf(ctx->content_type, 128, "%s", evt->header_value);
         } else if (strcasecmp(evt->header_key, "X-Thumbnail-URL") == 0) {
             // Capture thumbnail URL if provided by server (case-insensitive)
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (!text_buffer_claim_once(&ctx->thumbnail_header_seen)) {
+                ctx->owner->failed = true;
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+            if (ctx->thumbnail_url && !text_buffer_copy_exact(ctx->thumbnail_url, 512, evt->header_value)) {
+                ctx->owner->failed = true;
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+#else
             if (ctx->thumbnail_url && strlen(evt->header_value) > 0) {
                 strncpy(ctx->thumbnail_url, evt->header_value, 511);
                 ctx->thumbnail_url[511] = '\0';
                 ESP_LOGI(TAG, "Thumbnail URL provided: %s", ctx->thumbnail_url);
             }
+#endif
         } else if (strcasecmp(evt->header_key, "X-Config-Payload") == 0) {
             // Capture config payload for remote sync
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -791,9 +940,22 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             post_rotate_wait_sec = wait;
             ESP_LOGI(TAG, "Server requested post-rotate wait: %d s", wait);
         } else if (strcasecmp(evt->header_key, "ETag") == 0) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (!text_buffer_claim_once(&ctx->etag_header_seen)) {
+                ctx->owner->failed = true;
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+#endif
             if (ctx->etag) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                if (!text_buffer_copy_exact(ctx->etag, HTTP_ETAG_MAX_LEN, evt->header_value)) {
+                    ctx->owner->failed = true;
+                    return ESP_ERR_INVALID_RESPONSE;
+                }
+#else
                 strncpy(ctx->etag, evt->header_value, HTTP_ETAG_MAX_LEN - 1);
                 ctx->etag[HTTP_ETAG_MAX_LEN - 1] = '\0';
+#endif
             }
         }
         break;
@@ -830,12 +992,59 @@ static esp_err_t fetch_put_header(esp_http_client_handle_t client, const char *k
     request_header_ops_t ops = {client, fetch_header_remove, fetch_header_get, fetch_header_set};
     return request_header_put_checked(&ops, key, value);
 }
+static esp_err_t fetch_strip_credentials(esp_http_client_handle_t client, const char *custom_key)
+{
+    request_header_ops_t ops = {client, fetch_header_remove, fetch_header_get, NULL};
+    return request_headers_strip_credentials(&ops, custom_key);
+}
+static esp_err_t fetch_host_header(esp_http_client_handle_t client, const char *url, const char *custom_key)
+{
+    // Host belongs to the transport target, never a user-defined secret header.
+    if (custom_key && !strcasecmp(custom_key, "Host")) return ESP_ERR_INVALID_ARG;
+    char host[264];
+    if (!http_endpoint_host_header(url, host, sizeof(host))) return ESP_ERR_INVALID_ARG;
+    return fetch_put_header(client, "Host", host);
+}
+typedef struct {
+    esp_http_client_handle_t client;
+    const char *url;
+    const char *custom_key;
+} fetch_redirect_t;
+static esp_err_t fetch_redirect_url(void *context)
+{
+    fetch_redirect_t *r = context;
+    return esp_http_client_set_url(r->client, r->url);
+}
+static esp_err_t fetch_redirect_host(void *context)
+{
+    fetch_redirect_t *r = context;
+    return fetch_host_header(r->client, r->url, r->custom_key);
+}
+static esp_err_t fetch_redirect_schedule(void *context)
+{
+    fetch_redirect_t *r = context;
+    return esp_http_client_set_redirection(r->client);
+}
+static esp_err_t fetch_prepare_redirect(esp_http_client_handle_t client, const char *url, const char *custom_key)
+{
+    // Relative/network-path references retain the SDK's existing interpretation.
+    if (strncasecmp(url, "http://", 7) && strncasecmp(url, "https://", 8))
+        return esp_http_client_set_redirection(client);
+    // Preserve the SDK's downgrade gate BEFORE set_url changes current scheme.
+    if (esp_http_client_get_transport_type(client) == HTTP_TRANSPORT_OVER_SSL &&
+        strncasecmp(url, "https://", 8)) return ESP_ERR_INVALID_RESPONSE;
+    fetch_redirect_t request = {client, url, custom_key};
+    request_redirect_ops_t ops = {&request, fetch_redirect_url, fetch_redirect_host, fetch_redirect_schedule};
+    // The final SDK set_url sees the same hostname, so it does not replace our
+    // confirmed Host. SDK source is fixed; re-audit this assumption on upgrades.
+    return request_redirect_schedule_checked(&ops);
+}
 #endif
 static esp_err_t fetch_perform_download(const char *url, bool *not_modified, image_format_t *format,
                                         char **thumbnail_url_out, char **config_payload_out,
                                         char **etag_out
 #if CONFIG_BOARD_DRIVER_READ_PICO
-                                        , upload_file_t *owner
+                                        , upload_file_t *owner, const download_config_t *source
 #endif
                                         )
 {
@@ -948,13 +1157,18 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
                                   .config_payload = config_payload_buffer,
                                   .etag = etag_buffer};
 #if CONFIG_BOARD_DRIVER_READ_PICO
-        snprintf(ctx.credential_header, sizeof(ctx.credential_header), "%s",
-                 config_manager_get_http_header_key());
+        memcpy(ctx.credential_header, source->header_key, sizeof(ctx.credential_header));
 #endif
 
         // Use custom CA cert for HTTPS if configured
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        size_t pinned_cert_len = source->certificate_length;
+        const uint8_t *pinned_cert = source->certificate;
+        bool source_credentials = download_same_origin(source->url, url);
+#else
         size_t pinned_cert_len = 0;
         const uint8_t *pinned_cert = config_manager_get_ca_cert_der(&pinned_cert_len);
+#endif
 
         esp_http_client_config_t config = {
             .url = url,
@@ -995,7 +1209,12 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
 #define FETCH_HEADER(key, value) (void)esp_http_client_set_header(client, key, value)
 #endif
         // Add Authorization Bearer header if access token is configured
-        const char *access_token = config_manager_get_access_token();
+        const char *access_token =
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            source_credentials ? source->token : "";
+#else
+            config_manager_get_access_token();
+#endif
         if (access_token && strlen(access_token) > 0) {
             char auth_header[ACCESS_TOKEN_MAX_LEN + 20];  // "Bearer " + token + null terminator
             snprintf(auth_header, sizeof(auth_header), "Bearer %s", access_token);
@@ -1012,7 +1231,12 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
 #else
             config_manager_get_http_header_key();
 #endif
-        const char *header_value = config_manager_get_http_header_value();
+        const char *header_value =
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            source_credentials ? source->header_value : "";
+#else
+            config_manager_get_http_header_value();
+#endif
         if (header_key && strlen(header_key) > 0 && header_value && strlen(header_value) > 0) {
             // Skip if trying to set Authorization header when access token is already set
             if (strcasecmp(header_key, "Authorization") == 0 && access_token &&
@@ -1045,7 +1269,12 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
         // Add If-None-Match with stored ETag to enable 304 Not Modified responses.
         // Server may return an opaque ETag header on the previous 200; we echo it
         // back so the server can short-circuit with 304 when content is unchanged.
-        const char *stored_etag = config_manager_get_image_etag();
+        const char *stored_etag =
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            strcmp(source->url, url) == 0 ? source->etag : "";
+#else
+            config_manager_get_image_etag();
+#endif
         if (stored_etag && stored_etag[0] != '\0') {
             FETCH_HEADER("If-None-Match", stored_etag);
         }
@@ -1054,6 +1283,8 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
         // not perform a request after an incomplete/unconfirmed header set.
 #if CONFIG_BOARD_DRIVER_READ_PICO
         request_header_ops_t header_ops = {client, fetch_header_remove, fetch_header_get, fetch_header_set};
+        if (header_error == ESP_OK)
+            header_error = fetch_host_header(client, url, source->header_key);
         if (header_error == ESP_OK)
             header_error = request_config_set_headers(&request_config, &header_ops);
 #else
@@ -1119,11 +1350,13 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
         bool io_failed = owner->failed;
+        if (ctx.redirect_error != ESP_OK) err = ctx.redirect_error;
         if (esp_timer_get_time() - ctx.started_us >= 120000000) owner->failed = true;
         download_result_t received = download_file_finish(owner, err == ESP_OK, status_code,
             esp_http_client_is_complete_data_received(client), content_length);
-        if (esp_http_client_cleanup(client) != ESP_OK || received == DOWNLOAD_FAILED)
-            err = ESP_FAIL;
+        esp_err_t cleaned = esp_http_client_cleanup(client);
+        if (err == ESP_OK && cleaned != ESP_OK) err = cleaned;
+        if (err == ESP_OK && received == DOWNLOAD_FAILED) err = ESP_FAIL;
         free(ctx.redirect_url);
 #else
         fclose(file);
@@ -1259,10 +1492,16 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
 // go on serving that one, not the thumbnail of a picture that never showed.
 static bool fetch_download_thumbnail(const char *thumbnail_url
 #if CONFIG_BOARD_DRIVER_READ_PICO
-                                     , upload_file_t *owner, const char *image_url
+                                     , upload_file_t *owner, const char *image_url, const download_config_t *source
 #endif
                                      )
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!http_endpoint_valid(thumbnail_url)) {
+        ESP_LOGW(TAG, "Invalid thumbnail endpoint; download not started");
+        return false;
+    }
+#endif
     ESP_LOGI(TAG, "Downloading thumbnail from: %s", thumbnail_url);
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -1291,12 +1530,16 @@ static bool fetch_download_thumbnail(const char *thumbnail_url
                                     .config_payload = NULL,
                                     .etag = NULL};
 #if CONFIG_BOARD_DRIVER_READ_PICO
-    snprintf(thumb_ctx.credential_header, sizeof(thumb_ctx.credential_header), "%s",
-             config_manager_get_http_header_key());
+    memcpy(thumb_ctx.credential_header, source->header_key, sizeof(thumb_ctx.credential_header));
 #endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    size_t thumb_cert_len = source->certificate_length;
+    const uint8_t *thumb_cert = source->certificate;
+#else
     size_t thumb_cert_len = 0;
     const uint8_t *thumb_cert = config_manager_get_ca_cert_der(&thumb_cert_len);
+#endif
     esp_http_client_config_t thumb_config = {
         .url = thumbnail_url,
         .timeout_ms = 30000,
@@ -1324,9 +1567,15 @@ static bool fetch_download_thumbnail(const char *thumbnail_url
     // Authenticate the thumbnail fetch the same way as the image fetch --
     // the X-Thumbnail-URL is served by the same host, which may be
     // token-gated.
-    const char *thumb_token = config_manager_get_access_token();
+    const char *thumb_token =
 #if CONFIG_BOARD_DRIVER_READ_PICO
-    bool trusted_thumbnail = download_same_origin(image_url, thumbnail_url);
+        source->token;
+#else
+        config_manager_get_access_token();
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    bool trusted_thumbnail = download_same_origin(image_url, thumbnail_url) &&
+                             download_same_origin(source->url, thumbnail_url);
     if (!trusted_thumbnail) thumb_token = NULL;
 #endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -1347,7 +1596,12 @@ static bool fetch_download_thumbnail(const char *thumbnail_url
 #else
         config_manager_get_http_header_key();
 #endif
-    const char *thumb_hv = config_manager_get_http_header_value();
+    const char *thumb_hv =
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        source->header_value;
+#else
+        config_manager_get_http_header_value();
+#endif
     if (thumb_hk && strlen(thumb_hk) > 0 && thumb_hv && strlen(thumb_hv) > 0 &&
 #if CONFIG_BOARD_DRIVER_READ_PICO
         trusted_thumbnail &&
@@ -1360,6 +1614,8 @@ static bool fetch_download_thumbnail(const char *thumbnail_url
 #endif
     }
 #if CONFIG_BOARD_DRIVER_READ_PICO
+    if (header_error == ESP_OK)
+        header_error = fetch_host_header(thumb_client, thumbnail_url, source->header_key);
     if (header_error != ESP_OK) {
         esp_err_t cleaned = esp_http_client_cleanup(thumb_client);
         upload_file_abort(owner);
@@ -1375,12 +1631,14 @@ static bool fetch_download_thumbnail(const char *thumbnail_url
     int thumb_status = esp_http_client_get_status_code(thumb_client);
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
+    if (thumb_ctx.redirect_error != ESP_OK) thumb_err = thumb_ctx.redirect_error;
     if (esp_timer_get_time() - thumb_ctx.started_us >= 120000000) owner->failed = true;
     download_result_t received = download_file_finish(owner, thumb_err == ESP_OK, thumb_status,
         esp_http_client_is_complete_data_received(thumb_client),
         esp_http_client_get_content_length(thumb_client));
-    if (esp_http_client_cleanup(thumb_client) != ESP_OK || received != DOWNLOAD_COMPLETE)
-        thumb_err = ESP_FAIL;
+    esp_err_t cleaned = esp_http_client_cleanup(thumb_client);
+    if (thumb_err == ESP_OK && cleaned != ESP_OK) thumb_err = cleaned;
+    if (thumb_err == ESP_OK && received != DOWNLOAD_COMPLETE) thumb_err = ESP_FAIL;
     free(thumb_ctx.redirect_url);
     if (thumb_err == ESP_OK && image_processor_detect_format(temp_jpg_path) != IMAGE_FORMAT_JPG)
         thumb_err = ESP_FAIL;
@@ -1870,10 +2128,20 @@ static esp_err_t fetch_present_owned(upload_file_t *image, upload_file_t *previe
 }
 #endif
 
-esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified)
+static esp_err_t fetch_display_from_source(const char *url, bool *not_modified
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                                           , const download_config_t *source
+#endif
+                                           )
 {
     if (!url || !*url || strnlen(url, IMAGE_URL_MAX_LEN) >= IMAGE_URL_MAX_LEN)
         return ESP_ERR_INVALID_ARG;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!http_endpoint_valid(url)) {
+        utils_set_last_fetch_error("Invalid image endpoint; download not started");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
     ESP_LOGI(TAG, "Fetching image from URL: %s", url);
 
     if (not_modified) {
@@ -1896,7 +2164,7 @@ esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified)
     esp_err_t err = fetch_perform_download(fetched_url, &was_not_modified, &image_format, &thumbnail_url,
                                            &config_payload, &etag
 #if CONFIG_BOARD_DRIVER_READ_PICO
-                                           , &image_owner
+                                           , &image_owner, source
 #endif
                                            );
     if (err != ESP_OK) {
@@ -1919,7 +2187,7 @@ esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified)
     if (thumbnail_url && strlen(thumbnail_url) > 0) {
         thumbnail_downloaded = fetch_download_thumbnail(thumbnail_url
 #if CONFIG_BOARD_DRIVER_READ_PICO
-                                                        , &preview_owner, fetched_url
+                                                        , &preview_owner, fetched_url, source
 #endif
                                                         );
     }
@@ -1974,11 +2242,57 @@ esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified)
     // cleared the ETag and this one must not undo that -- offered to the new
     // URL it could match a tag of its own and turn the first fetch there into
     // a 304.
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (shown == ESP_OK && strcmp(source->url, fetched_url) == 0) {
+        esp_err_t saved = config_manager_accept_download_etag(source, etag ? etag : "");
+        if (saved != ESP_OK) {
+            utils_set_last_fetch_error("Displayed, but download cache metadata save failed");
+            shown = saved;
+        }
+    }
+#else
     if (shown == ESP_OK && strcmp(config_manager_get_image_url(), fetched_url) == 0) {
         config_manager_set_image_etag(etag ? etag : "");
     }
+#endif
     free(etag);
     return shown;
+}
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t fetch_capture_source(void *context)
+{
+    return config_manager_copy_download(context);
+}
+#endif
+
+esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified)
+{
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    if (not_modified) *not_modified = false;
+    utils_set_last_fetch_error("URL image sources are unavailable in the R1 local frame");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (not_modified) *not_modified = false;
+    download_config_t *source = malloc(sizeof(*source));
+    if (!source) {
+        utils_set_last_fetch_error("Out of memory for download configuration");
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = config_apply_run(fetch_capture_source, source);
+    if (err == ESP_OK) {
+        // NULL selects the configured URL from this same owned snapshot.
+        err = fetch_display_from_source(url ? url : source->url, not_modified, source);
+        config_manager_release_download(source);
+    } else {
+        utils_set_last_fetch_error("Download configuration unavailable");
+    }
+    free(source);
+    return err;
+#else
+    return fetch_display_from_source(url, not_modified);
+#endif
 }
 
 esp_err_t trigger_image_rotation(void)
@@ -1988,8 +2302,12 @@ esp_err_t trigger_image_rotation(void)
 
     if (rotation_mode == ROTATION_MODE_URL) {
         // URL mode - fetch image from URL
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        const char *image_url = NULL; // Capture URL and credentials together below.
+#else
         const char *image_url = config_manager_get_image_url();
         ESP_LOGI(TAG, "URL rotation mode - downloading from: %s", image_url);
+#endif
 
         bool not_modified = false;
         if (fetch_and_display_image_from_url(image_url, &not_modified) == ESP_OK) {

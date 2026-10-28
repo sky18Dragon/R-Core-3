@@ -29,6 +29,7 @@ char *mutate_ssid, *mutate_password, *mutate_name;
 wifi_network_t *mutate_network;
 int fail_blob_call, blob_calls;
 size_t max_allocation = SIZE_MAX;
+size_t allocation_calls = 0, fail_allocation = 0;
 bool malformed_string;
 std::function<void()> ntp_io_hook;
 std::function<void()> timezone_env_hook;
@@ -68,7 +69,8 @@ protected:
         wrong_environment = force_clock = localtime_failure = false; synthetic_time = 1800000000;
         strftime_failure = false;
         mutate_ssid = mutate_password = mutate_name = nullptr; mutate_network = nullptr;
-        max_allocation = SIZE_MAX; malformed_string = false; fail_blob_call = 0; blob_calls = 0;
+        max_allocation = SIZE_MAX; allocation_calls = fail_allocation = 0;
+        malformed_string = false; fail_blob_call = 0; blob_calls = 0;
         config_manager_set_ca_cert_der(nullptr, 0); // Test-owned RAM from a previous synthetic boot.
         values.clear(); handles.clear(); next_handle = 1;
         opens = write_opens = reads = writes = commits = erases = closes = 0; persistent = true;
@@ -107,7 +109,10 @@ size_t config_load_test_strftime(char *out, size_t capacity, const char *format,
     if (strftime_failure) return 0;
     return strftime(out, capacity, format, local);
 }
-void *config_load_test_malloc(size_t n) { return n > max_allocation ? nullptr : malloc(n); }
+void *config_load_test_malloc(size_t n) {
+    ++allocation_calls;
+    return n > max_allocation || (fail_allocation && allocation_calls == fail_allocation) ? nullptr : malloc(n);
+}
 const char *esp_err_to_name(esp_err_t) { return "synthetic error"; }
 bool storage_has_persistent_storage(void) { return persistent; }
 esp_err_t nvs_open(const char *, int mode, nvs_handle_t *out) {
@@ -162,12 +167,245 @@ esp_err_t nvs_set_i32(nvs_handle_t h, const char *key, int32_t v) { return set(h
 esp_err_t nvs_set_i64(nvs_handle_t h, const char *key, int64_t v) { return set(h, key, {I64, "", v}); }
 esp_err_t nvs_erase_key(nvs_handle_t h, const char *key) {
     EXPECT_EQ(handles.at(h), NVS_READWRITE); ++erases;
+    if (save_error) return save_error;
+    if (key == fail_write_key) return ESP_ERR_NO_MEM;
     return values.erase(key) ? ESP_OK : ESP_ERR_NVS_NOT_FOUND;
 }
 esp_err_t nvs_commit(nvs_handle_t h) { EXPECT_EQ(handles.at(h), NVS_READWRITE); ++commits; return commit_error; }
 }
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
+namespace {
+constexpr uint32_t download_fields = DOWNLOAD_CONFIG_URL | DOWNLOAD_CONFIG_TOKEN |
+    DOWNLOAD_CONFIG_HEADER_KEY | DOWNLOAD_CONFIG_HEADER_VALUE | DOWNLOAD_CONFIG_CERTIFICATE;
+download_config_t download_patch() {
+    download_config_t patch{};
+    strcpy(patch.url, "https://synthetic.invalid/image"); strcpy(patch.token, "synthetic-token");
+    strcpy(patch.header_key, "X-Synthetic-Key"); strcpy(patch.header_value, "synthetic-value");
+    patch.certificate = (uint8_t *)"synthetic-cert"; patch.certificate_length = 14;
+    return patch;
+}
+void expect_download_equal(const download_config_t &a, const download_config_t &b) {
+    EXPECT_STREQ(a.url, b.url); EXPECT_STREQ(a.token, b.token);
+    EXPECT_STREQ(a.header_key, b.header_key); EXPECT_STREQ(a.header_value, b.header_value);
+    EXPECT_STREQ(a.etag, b.etag); ASSERT_EQ(a.certificate_length, b.certificate_length);
+    if (a.certificate_length) EXPECT_EQ(memcmp(a.certificate, b.certificate, a.certificate_length), 0);
+}
+void seed_download() {
+    ASSERT_EQ(config_manager_init(), ESP_OK);
+    auto patch = download_patch();
+    ASSERT_EQ(config_manager_patch_download_checked(download_fields, &patch), ESP_OK);
+    strcpy(patch.etag, "\"old\"");
+    ASSERT_EQ(config_manager_patch_download_checked(DOWNLOAD_CONFIG_ETAG, &patch), ESP_OK);
+}
+}
+#if CONFIG_READ_PICO_LOCAL_FRAME
+TEST_F(ConfigLoad, LocalPolicyMasksOldPreferencesWithoutWritingOrErasingThem) {
+    number(NVS_ROTATION_MODE_KEY, U8, ROTATION_MODE_URL);
+    number(NVS_DEEP_SLEEP_KEY, U8, 1);
+    text(NVS_HA_URL_KEY, "https://example.invalid");
+    ASSERT_EQ(config_manager_init(), ESP_OK);
+    EXPECT_EQ(config_manager_get_rotation_mode(), ROTATION_MODE_STORAGE);
+    EXPECT_FALSE(config_manager_get_deep_sleep_enabled());
+    EXPECT_STREQ(config_manager_get_ha_url(), "");
+    read_only();
+    EXPECT_EQ(values.at(NVS_ROTATION_MODE_KEY).integer, ROTATION_MODE_URL);
+    EXPECT_EQ(values.at(NVS_DEEP_SLEEP_KEY).integer, 1);
+    EXPECT_EQ(values.at(NVS_HA_URL_KEY).text, "https://example.invalid");
+}
+#endif
+
+TEST_F(ConfigLoad, DownloadEveryTemporaryAllocationFailurePreservesCacheAndUnlocks) {
+    seed_download(); download_config_t before{};
+    ASSERT_EQ(config_manager_copy_download(&before), ESP_OK);
+    for (int operation = 0; operation < 4; ++operation) {
+        const size_t allocations = operation == 0 || operation == 3 ? 3 : 2;
+        for (size_t point = 1; point <= allocations; ++point) {
+            auto patch = download_patch(); strcpy(patch.token, "changed");
+            int old_opens = opens;
+            allocation_calls = 0; fail_allocation = point;
+            if (operation == 0)
+                EXPECT_EQ(config_manager_set_image_source_checked("https://next.invalid", (const uint8_t *)"next", 4), ESP_ERR_NO_MEM);
+            else if (operation == 1)
+                EXPECT_EQ(config_manager_accept_download_etag(&before, "new"), ESP_ERR_NO_MEM);
+            else if (operation == 2)
+                EXPECT_EQ(config_manager_patch_download_checked(download_fields, &patch), ESP_ERR_NO_MEM);
+            else
+                config_manager_set_ca_cert_der((const uint8_t *)"next", 4);
+            fail_allocation = 0;
+            EXPECT_EQ(opens, old_opens);
+            download_config_t after{};
+            ASSERT_EQ(config_manager_copy_download(&after), ESP_OK);
+            expect_download_equal(before, after);
+            config_manager_release_download(&after);
+        }
+    }
+    config_manager_release_download(&before);
+}
+TEST_F(ConfigLoad, DownloadSnapshotOwnsAllFieldsAndCertificateAcrossReplacementAndClear) {
+    seed_download(); download_config_t first{}, second{};
+    ASSERT_EQ(config_manager_copy_download(&first), ESP_OK);
+    auto patch = download_patch(); expect_download_equal(first, [&] { auto p = patch; strcpy(p.etag, "\"old\""); return p; }());
+    EXPECT_NE(first.certificate, config_manager_get_ca_cert_der(nullptr));
+    ASSERT_EQ(config_manager_set_image_source_checked("http://other.invalid/image", nullptr, 0), ESP_OK);
+    ASSERT_EQ(config_manager_copy_download(&second), ESP_OK);
+    EXPECT_STREQ(first.url, "https://synthetic.invalid/image"); EXPECT_EQ(first.certificate_length, 14u);
+    EXPECT_EQ(memcmp(first.certificate, "synthetic-cert", 14), 0);
+    EXPECT_STREQ(second.url, "http://other.invalid/image"); EXPECT_EQ(second.certificate, nullptr);
+    EXPECT_EQ(second.etag[0], 0);
+    config_manager_release_download(&first); config_manager_release_download(&first);
+    config_manager_release_download(&second); config_manager_release_download(nullptr);
+    EXPECT_EQ(first.certificate, nullptr); EXPECT_EQ(first.token[0], 0);
+}
+TEST_F(ConfigLoad, DownloadSnapshotAllocationFailureLeavesOutputAndCacheUnchanged) {
+    seed_download(); download_config_t out, before; memset(&out, 0xa5, sizeof(out)); before = out;
+    int old_opens = opens; max_allocation = 0;
+    EXPECT_EQ(config_manager_copy_download(&out), ESP_ERR_NO_MEM);
+    EXPECT_EQ(memcmp(&out, &before, sizeof(out)), 0); EXPECT_EQ(opens, old_opens);
+    EXPECT_EQ(config_manager_copy_download(nullptr), ESP_ERR_INVALID_ARG);
+    max_allocation = SIZE_MAX; ASSERT_EQ(config_manager_copy_download(&out), ESP_OK);
+    EXPECT_STREQ(out.token, "synthetic-token"); config_manager_release_download(&out);
+}
+TEST_F(ConfigLoad, DownloadPatchValidatesSelectedTextBoundariesAndCertificateBeforeIo) {
+    ASSERT_EQ(config_manager_init(), ESP_OK); auto patch = download_patch(); int before = opens;
+    const uint32_t flags[] = {DOWNLOAD_CONFIG_URL, DOWNLOAD_CONFIG_TOKEN, DOWNLOAD_CONFIG_HEADER_KEY,
+                             DOWNLOAD_CONFIG_HEADER_VALUE, DOWNLOAD_CONFIG_ETAG};
+    char *texts[] = {patch.url, patch.token, patch.header_key, patch.header_value, patch.etag};
+    size_t capacities[] = {sizeof(patch.url), sizeof(patch.token), sizeof(patch.header_key),
+                           sizeof(patch.header_value), sizeof(patch.etag)};
+    for (size_t i = 0; i < 5; ++i) {
+        memset(texts[i], 'x', capacities[i]);
+        EXPECT_EQ(config_manager_patch_download_checked(flags[i], &patch), ESP_ERR_INVALID_SIZE);
+        EXPECT_EQ(opens, before); texts[i][capacities[i] - 1] = 0;
+        EXPECT_EQ(config_manager_patch_download_checked(flags[i], &patch), ESP_OK);
+        before = opens;
+    }
+    patch.certificate_length = CA_CERT_MAX_LEN + 1;
+    EXPECT_EQ(config_manager_patch_download_checked(DOWNLOAD_CONFIG_CERTIFICATE, &patch), ESP_ERR_INVALID_SIZE);
+    patch.certificate_length = 0;
+    EXPECT_EQ(config_manager_patch_download_checked(DOWNLOAD_CONFIG_CERTIFICATE, &patch), ESP_ERR_INVALID_ARG);
+    patch.certificate = nullptr; patch.certificate_length = 1;
+    EXPECT_EQ(config_manager_patch_download_checked(DOWNLOAD_CONFIG_CERTIFICATE, &patch), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(config_manager_patch_download_checked(0, &patch), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(config_manager_patch_download_checked(1u << 30, &patch), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(config_manager_patch_download_checked(download_fields | DOWNLOAD_CONFIG_ETAG, &patch), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(config_manager_patch_download_checked(DOWNLOAD_CONFIG_URL, nullptr), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(opens, before);
+}
+TEST_F(ConfigLoad, DownloadPatchEveryWriteEraseCommitFailureKeepsWholeRamSnapshot) {
+    seed_download(); download_config_t before{}; ASSERT_EQ(config_manager_copy_download(&before), ESP_OK);
+    auto patch = download_patch(); strcpy(patch.url, "https://next.invalid/image");
+    strcpy(patch.token, "new-token"); strcpy(patch.header_key, "X-Next"); strcpy(patch.header_value, "new-value");
+    patch.certificate = (uint8_t *)"next-cert"; patch.certificate_length = 9;
+    for (const char *key : {NVS_IMAGE_URL_KEY, NVS_ACCESS_TOKEN_KEY, NVS_HTTP_HEADER_KEY_KEY,
+                           NVS_HTTP_HEADER_VALUE_KEY, NVS_CA_CERT_KEY, NVS_IMAGE_ETAG_KEY, "commit", "open"}) {
+        SCOPED_TRACE(key); fail_write_key = key;
+        commit_error = !strcmp(key, "commit") ? ESP_FAIL : ESP_OK;
+        open_error = !strcmp(key, "open") ? ESP_ERR_INVALID_STATE : ESP_OK;
+        int old_commits = commits;
+        EXPECT_NE(config_manager_patch_download_checked(download_fields, &patch), ESP_OK);
+        download_config_t after{}; ASSERT_EQ(config_manager_copy_download(&after), ESP_OK);
+        expect_download_equal(before, after); config_manager_release_download(&after);
+        EXPECT_EQ(commits - old_commits, !strcmp(key, "commit") ? 1 : 0); EXPECT_TRUE(handles.empty());
+    }
+    fail_write_key.clear(); commit_error = open_error = ESP_OK;
+    ASSERT_EQ(config_manager_patch_download_checked(download_fields, &patch), ESP_OK);
+    download_config_t after{}; ASSERT_EQ(config_manager_copy_download(&after), ESP_OK);
+    EXPECT_STREQ(after.url, patch.url); EXPECT_STREQ(after.token, patch.token); EXPECT_EQ(after.etag[0], 0);
+    config_manager_release_download(&after); config_manager_release_download(&before);
+}
+TEST_F(ConfigLoad, DownloadCertificateAllocationFailureNeverDeletesExistingTrustAnchor) {
+    seed_download(); int old_opens = opens; auto old = config_manager_get_ca_cert_der(nullptr);
+    max_allocation = 0;
+    EXPECT_EQ(config_manager_set_image_source_checked("https://next.invalid", (const uint8_t *)"next", 4), ESP_ERR_NO_MEM);
+    EXPECT_EQ(config_manager_get_ca_cert_der(nullptr), old); EXPECT_EQ(opens, old_opens);
+    EXPECT_STREQ(config_manager_get_image_url(), "https://synthetic.invalid/image");
+    max_allocation = SIZE_MAX;
+}
+TEST_F(ConfigLoad, DownloadPatchCopiesCallerDataBeforeIoAndRejectsReentry) {
+    seed_download(); auto patch = download_patch(); strcpy(patch.url, "https://next.invalid/image");
+    uint8_t cert[] = {1, 2, 3, 4}; patch.certificate = cert; patch.certificate_length = sizeof(cert);
+    ntp_io_hook = [&] {
+        download_config_t out, before; memset(&out, 0xa5, sizeof(out)); before = out;
+        EXPECT_EQ(config_manager_copy_download(&out), ESP_ERR_INVALID_STATE);
+        EXPECT_EQ(memcmp(&out, &before, sizeof(out)), 0);
+        EXPECT_EQ(config_manager_patch_download_checked(download_fields, &patch), ESP_ERR_INVALID_STATE);
+        EXPECT_EQ(config_manager_init(), ESP_ERR_INVALID_STATE);
+        config_manager_set_access_token("nested"); config_manager_set_ca_cert_der(nullptr, 0);
+        memset(patch.url, 0, sizeof(patch.url)); memset(patch.token, 0, sizeof(patch.token)); memset(cert, 9, sizeof(cert));
+    };
+    ASSERT_EQ(config_manager_patch_download_checked(download_fields, &patch), ESP_OK);
+    download_config_t out{}; ASSERT_EQ(config_manager_copy_download(&out), ESP_OK);
+    EXPECT_STREQ(out.url, "https://next.invalid/image"); EXPECT_STREQ(out.token, "synthetic-token");
+    EXPECT_EQ(out.certificate_length, 4u); EXPECT_EQ(out.certificate[0], 1); EXPECT_EQ(out.certificate[3], 4);
+    config_manager_release_download(&out);
+}
+TEST_F(ConfigLoad, DownloadSourceAndCredentialChangesInvalidateEtagButSameValuesKeepIt) {
+    for (uint32_t field : {DOWNLOAD_CONFIG_URL, DOWNLOAD_CONFIG_TOKEN, DOWNLOAD_CONFIG_HEADER_KEY,
+                           DOWNLOAD_CONFIG_HEADER_VALUE, DOWNLOAD_CONFIG_CERTIFICATE}) {
+        seed_download(); auto patch = download_patch();
+        EXPECT_EQ(config_manager_patch_download_checked(field, &patch), ESP_OK);
+        EXPECT_STREQ(config_manager_get_image_etag(), "\"old\"");
+        strcpy(patch.url, "https://next.invalid/image"); strcpy(patch.token, "next");
+        strcpy(patch.header_key, "X-Next"); strcpy(patch.header_value, "next");
+        patch.certificate = (uint8_t *)"next"; patch.certificate_length = 4;
+        EXPECT_EQ(config_manager_patch_download_checked(field, &patch), ESP_OK);
+        EXPECT_STREQ(config_manager_get_image_etag(), ""); EXPECT_FALSE(values.count(NVS_IMAGE_ETAG_KEY));
+    }
+}
+TEST_F(ConfigLoad, DownloadCompletedOldRequestCannotRepopulateEtagAfterSourceOrCredentialChange) {
+    for (uint32_t field : {DOWNLOAD_CONFIG_URL, DOWNLOAD_CONFIG_TOKEN, DOWNLOAD_CONFIG_HEADER_KEY,
+                           DOWNLOAD_CONFIG_HEADER_VALUE, DOWNLOAD_CONFIG_CERTIFICATE}) {
+        seed_download(); download_config_t request{}; ASSERT_EQ(config_manager_copy_download(&request), ESP_OK);
+        auto patch = download_patch(); strcpy(patch.url, "https://next.invalid/image"); strcpy(patch.token, "next");
+        strcpy(patch.header_key, "X-Next"); strcpy(patch.header_value, "next");
+        patch.certificate = nullptr; patch.certificate_length = 0;
+        ASSERT_EQ(config_manager_patch_download_checked(field, &patch), ESP_OK);
+        int old_opens = opens;
+        EXPECT_EQ(config_manager_accept_download_etag(&request, "\"stale\""), ESP_OK);
+        EXPECT_EQ(opens, old_opens); EXPECT_STREQ(config_manager_get_image_etag(), "");
+        config_manager_release_download(&request);
+    }
+}
+TEST_F(ConfigLoad, DownloadEtagSaveErrorsKeepPriorCacheAndRetryChecksSameRequestIdentity) {
+    seed_download(); download_config_t request{}; ASSERT_EQ(config_manager_copy_download(&request), ESP_OK);
+    commit_error = ESP_FAIL;
+    EXPECT_EQ(config_manager_accept_download_etag(&request, "\"next\""), ESP_FAIL);
+    EXPECT_STREQ(config_manager_get_image_etag(), "\"old\"");
+    commit_error = ESP_OK;
+    EXPECT_EQ(config_manager_accept_download_etag(&request, "\"next\""), ESP_OK);
+    int old_opens = opens;
+    EXPECT_EQ(config_manager_accept_download_etag(&request, "\"next\""), ESP_OK);
+    EXPECT_EQ(opens, old_opens);
+    std::string huge(HTTP_ETAG_MAX_LEN, 'x');
+    EXPECT_EQ(config_manager_accept_download_etag(&request, huge.c_str()), ESP_ERR_INVALID_SIZE);
+    EXPECT_EQ(config_manager_accept_download_etag(nullptr, ""), ESP_ERR_INVALID_ARG);
+    config_manager_release_download(&request);
+}
+TEST_F(ConfigLoad, DownloadClearMissingRecordsIsAllowedButEraseFailureRetainsSource) {
+    seed_download(); auto old = config_manager_get_ca_cert_der(nullptr);
+    fail_write_key = NVS_CA_CERT_KEY;
+    EXPECT_EQ(config_manager_set_image_source_checked("", nullptr, 0), ESP_ERR_NO_MEM);
+    EXPECT_EQ(config_manager_get_ca_cert_der(nullptr), old);
+    EXPECT_STREQ(config_manager_get_image_url(), "https://synthetic.invalid/image");
+    fail_write_key.clear(); EXPECT_EQ(config_manager_set_image_source_checked("", nullptr, 0), ESP_OK);
+    EXPECT_EQ(config_manager_set_image_source_checked("", nullptr, 0), ESP_OK);
+    EXPECT_EQ(config_manager_get_ca_cert_der(nullptr), nullptr); EXPECT_STREQ(config_manager_get_image_url(), "");
+}
+TEST_F(ConfigLoad, DownloadCompatibilityWritersDoNotPublishOnFailureOrTruncate) {
+    seed_download(); save_error = ESP_FAIL;
+    config_manager_set_image_url("http://next.invalid"); config_manager_set_access_token("next");
+    config_manager_set_http_header_key("X-Next"); config_manager_set_http_header_value("next");
+    config_manager_set_ca_cert_der(nullptr, 0); config_manager_set_image_etag("\"next\"");
+    EXPECT_STREQ(config_manager_get_image_url(), "https://synthetic.invalid/image");
+    EXPECT_STREQ(config_manager_get_access_token(), "synthetic-token");
+    EXPECT_STREQ(config_manager_get_http_header_key(), "X-Synthetic-Key");
+    EXPECT_STREQ(config_manager_get_http_header_value(), "synthetic-value");
+    EXPECT_STREQ(config_manager_get_image_etag(), "\"old\"");
+    save_error = ESP_OK; int old_opens = opens;
+    std::string huge(ACCESS_TOKEN_MAX_LEN, 'x'); config_manager_set_access_token(huge.c_str());
+    EXPECT_EQ(opens, old_opens); EXPECT_STREQ(config_manager_get_access_token(), "synthetic-token");
+}
 namespace {
 struct NameEffects {
     int mdns_calls = 0, wifi_calls = 0;
