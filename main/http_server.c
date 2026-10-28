@@ -49,6 +49,9 @@
 #include "read_pico_upload.h"
 #include "upload_stream.h"
 #endif
+#if CONFIG_READ_PICO_TOUCH
+#include "read_pico_touch_nav.h"
+#endif
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -3018,6 +3021,29 @@ static esp_err_t send_current_time_checked(httpd_req_t *req, const char *status)
 }
 #endif
 
+#if CONFIG_READ_PICO_TOUCH
+// Read-only touch diagnostics: recent gestures with raw panel coordinates.
+static esp_err_t touch_status_handler(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    if (!response) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    read_pico_touch_nav_describe(response);
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (!json_str) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    return err;
+}
+#endif
+
 static esp_err_t time_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -3339,6 +3365,9 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/system-info", HTTP_GET, system_info_handler);
 
         HTTP_REGISTER("/api/time", HTTP_GET, time_handler);
+#if CONFIG_READ_PICO_TOUCH
+        HTTP_REGISTER("/api/touch", HTTP_GET, touch_status_handler);
+#endif
 
         HTTP_REGISTER("/api/time/sync", HTTP_POST, time_sync_handler);
 

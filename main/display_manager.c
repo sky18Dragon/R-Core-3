@@ -13,6 +13,9 @@
 #include "GUI_EPDGZfile.h"
 #include "GUI_PNGfile.h"
 #include "GUI_Paint.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "image_history.h"
+#endif
 #include "GUI_RawBuffer.h"
 #include "album_manager.h"
 #include "board_hal.h"
@@ -60,6 +63,9 @@ static UWORD display_white_color(void)
 }
 
 static SemaphoreHandle_t display_mutex = NULL;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static image_history_t display_history;  // guarded by display_mutex
+#endif
 static char current_image[DISPLAY_IMAGE_PATH_CAPACITY] = {0};
 #if CONFIG_BOARD_DRIVER_READ_PICO
 static bool current_record_known;
@@ -282,6 +288,7 @@ esp_err_t display_manager_show_image(const char *filename)
     memcpy(current_image, filename, strlen(filename) + 1);
 #if CONFIG_BOARD_DRIVER_READ_PICO
     current_record_known = true;
+    image_history_push(&display_history, filename);
 #endif
 
     bool linked = create_image_link(filename);
@@ -653,6 +660,25 @@ esp_err_t display_manager_show_calibration(void)
     return ESP_OK;
 #endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+bool display_manager_take_previous(char *out, size_t capacity)
+{
+    if (!display_mutex || xSemaphoreTake(display_mutex, 0) != pdTRUE)
+        return false;
+    bool found = image_history_back(&display_history, out, capacity);
+    xSemaphoreGive(display_mutex);
+    return found;
+}
+
+void display_manager_forget_history(const char *path)
+{
+    if (!display_mutex || xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE)
+        return;
+    image_history_forget(&display_history, path);
+    xSemaphoreGive(display_mutex);
+}
+#endif
 
 bool display_manager_is_busy(void)
 {

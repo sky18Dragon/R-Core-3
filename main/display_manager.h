@@ -16,6 +16,11 @@ esp_err_t display_manager_show_image(const char *filename);
 esp_err_t display_manager_show_calibration(void);
 esp_err_t display_manager_clear(void);
 bool display_manager_is_busy(void);
+// Read Pico only: in-RAM display history (not persisted). take_previous steps back one entry
+// and returns its path; false when there is none or the display is busy.
+bool display_manager_take_previous(char *out, size_t capacity);
+// Drop a path that can no longer be shown (deleted/unreadable).
+void display_manager_forget_history(const char *path);
 void display_manager_rotate_from_storage(void);
 esp_err_t display_manager_rotate_from_storage_checked(void);
 const char *display_manager_get_current_image(void);

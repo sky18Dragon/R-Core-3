@@ -161,6 +161,15 @@ menu "Board Configuration"
             Starts the local product with an automatic boot clear. Requires
             separate hardware deployment approval; not a diagnostic profile.
 
+    config READ_PICO_TOUCH
+        bool "Read Pico touch navigation (swipe/keys change image)"
+        depends on READ_PICO_LOCAL_FRAME
+        default y
+        help
+            Polls the CST836U panel on the shared board I2C bus and maps a
+            horizontal swipe or the outer touch keys to next/previous image.
+            Never pulses TP_RST; touch stays disabled if the panel does not answer.
+
     config READ_PICO_PHOTO_VALIDATION
         bool "Read Pico single-photo diagnostic (explicit hardware authorization required)"
         depends on BOARD_DRIVER_READ_PICO

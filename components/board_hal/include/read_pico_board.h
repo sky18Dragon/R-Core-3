@@ -25,6 +25,9 @@ void read_pico_board_unlock(void);
 // Display lease prevents HAL deinit while EPDiy/SY borrow the bus. Caller holds bus lock.
 esp_err_t read_pico_board_display_claim(i2c_master_bus_handle_t *out);
 esp_err_t read_pico_board_display_release(void);
+// Shared I2C bus for other on-board peripherals (touch). Caller holds the
+// board lock for every transaction; refused while the display owns the bus.
+esp_err_t read_pico_board_i2c_bus(i2c_master_bus_handle_t *out);
 // SD owner holds a lease until successful unmount; caller holds the bus lock.
 esp_err_t read_pico_board_storage_claim(void);
 esp_err_t read_pico_board_storage_release(void);

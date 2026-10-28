@@ -671,6 +671,7 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/sleep", "HTTP_POST"),
             ("/api/system-info", "HTTP_GET"),
             ("/api/time", "HTTP_GET"),
+            ("/api/touch", "HTTP_GET"),  # CONFIG_READ_PICO_TOUCH only
             ("/api/time/sync", "HTTP_POST"),
             ("/api/ota/status", "HTTP_GET"),
             ("/api/ota/check", "HTTP_POST"),

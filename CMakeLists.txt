@@ -82,7 +82,8 @@ if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico" OR
     endif()
     list(APPEND EXTRA_COMPONENT_DIRS
         "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/e0470_epaper_waveform"
-        "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/sy7636a")
+        "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/sy7636a"
+        "${CMAKE_SOURCE_DIR}/third_party/read_pico_firmware/components/cst836u")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

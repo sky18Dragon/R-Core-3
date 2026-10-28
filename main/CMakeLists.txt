@@ -97,8 +97,11 @@ if(CONFIG_BOARD_DRIVER_READ_PICO)
     list(APPEND SOURCES "jpeg_metadata.c" "jpeg_stream_probe.c" "jpeg_buffered_source.c"
                         "upload_stream.c" "upload_file.c" "read_pico_upload.c" "upload_asset.c"
                         "download_file.c" "upload_copy.c" "config_read.c" "wifi_text.c"
-                        "provisioning_session.c" "provisioning_apply.c" "wifi_link.c" "wifi_watch.c" "wifi_network.c"
+                        "provisioning_session.c" "provisioning_apply.c" "wifi_link.c" "wifi_watch.c" "wifi_network.c" "touch_gesture.c" "image_history.c"
                         "wifi_provisioning_ap.c" "read_pico_http_service.c" "read_pico_background.c")
+    if(CONFIG_READ_PICO_TOUCH)
+        list(APPEND SOURCES "read_pico_touch_nav.c")
+    endif()
 endif()
 
 set(PRIV_REQUIRES
@@ -112,6 +115,7 @@ set(PRIV_REQUIRES
     esp_psram
     esp_hw_support
     read_pico_display
+    read_pico_touch
     esp_driver_gpio
     esp_driver_usb_serial_jtag
     vfs

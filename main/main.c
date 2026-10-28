@@ -47,6 +47,9 @@
 #include "read_pico_sntp.h"
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "read_pico_epaper.h"
+#if CONFIG_READ_PICO_TOUCH
+#include "read_pico_touch_nav.h"
+#endif
 #endif
 #endif
 #include "splash_screen.h"
@@ -467,6 +470,9 @@ static void button_task(void *arg)
             last_clear_state = current_clear_state;
         }
 
+#if CONFIG_READ_PICO_TOUCH
+        read_pico_touch_nav_poll(esp_timer_get_time() / 1000);
+#endif
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
