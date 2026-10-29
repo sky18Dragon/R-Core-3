@@ -245,7 +245,9 @@ static bool acquire(void *context)
     (void) context;
     if (display_mutex == NULL || xSemaphoreTake(display_mutex, 0) != pdTRUE)
         return false;
-    if (read_pico_board_lock(0) != ESP_OK) {
+    // Other board users (touch polling every 50 ms, SD checks) hold the bus
+    // lock for about a millisecond; wait them out instead of failing busy.
+    if (read_pico_board_lock(READ_PICO_EPAPER_BUS_WAIT_MS) != ESP_OK) {
         xSemaphoreGive(display_mutex);
         return false;
     }

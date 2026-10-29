@@ -176,8 +176,10 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t)
     display_lock = false;
     return pdTRUE;
 }
-esp_err_t read_pico_board_lock(uint32_t)
+uint32_t last_bus_lock_timeout;
+esp_err_t read_pico_board_lock(uint32_t timeout_ms)
 {
+    last_bus_lock_timeout = timeout_ms;
     if (bus_lock)
         return ESP_ERR_TIMEOUT;
     bus_lock = true;
@@ -482,6 +484,17 @@ TEST(ReadPicoNative, AllocationAndHeadroomFailuresFreeBuffersAndLease)
                EXPECT_EQ(read_pico_epaper_init(true), ESP_ERR_NO_MEM); EXPECT_EQ(allocations, 0);
                EXPECT_EQ(devices, 0); EXPECT_FALSE(leased));
 }
+TEST(ReadPicoNative, RefreshWaitsBrieflyForBoardLockInsteadOfFailingBusy)
+{
+    // Touch polling and SD checks hold the board lock for ~1 ms; a 0 ms try
+    // failed 8/100 refreshes on the device.
+    FRESH_BOOT(start(); white(); last_bus_lock_timeout = 0;
+               EXPECT_TRUE(read_pico_epaper_display(source.data(), source.size()).completed);
+               EXPECT_EQ(last_bus_lock_timeout, (uint32_t) READ_PICO_EPAPER_BUS_WAIT_MS);
+               EXPECT_GE(READ_PICO_EPAPER_BUS_WAIT_MS, 100);
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
+
 TEST(ReadPicoNative, FirstFrameRequiresExplicitWhiteReferenceAndReentryIsBusy)
 {
     FRESH_BOOT(start(); EXPECT_EQ(read_pico_epaper_display(source.data(), source.size()).error,

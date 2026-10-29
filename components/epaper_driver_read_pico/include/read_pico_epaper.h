@@ -7,6 +7,10 @@
 extern "C" {
 #endif
 
+// Bounded wait for the shared board lock when a refresh starts. Brief holders
+// (touch polling, SD checks) must not make a refresh fail as busy.
+#define READ_PICO_EPAPER_BUS_WAIT_MS 200
+
 // Explicit capability, supplied only after power-write scope and board identity are approved.
 // The P1 diagnostic always supplies false and does not invoke panel startup.
 esp_err_t read_pico_epaper_init(bool runtime_power_config_authorized);
