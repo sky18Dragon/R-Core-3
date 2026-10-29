@@ -59,8 +59,9 @@ esp_err_t read_pico_touch_read(read_pico_touch_sample_t *out, bool tracking)
     memset(out, 0, sizeof(*out));
     if (s_touch == NULL)
         return ESP_ERR_INVALID_STATE;
-    if (!tracking && !cst836u_int_asserted(s_touch))
-        return ESP_OK;
+    // INT only pulses per report; gating on it missed every touch on the device.
+    // Poll unconditionally like the vendor UI loop.
+    (void) tracking;
     if (read_pico_board_lock(0) != ESP_OK)
         return ESP_ERR_TIMEOUT;
     cst836u_touch_t touch;

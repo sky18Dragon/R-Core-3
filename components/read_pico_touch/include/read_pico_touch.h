@@ -15,9 +15,8 @@ typedef struct {
 // GPIO43). A failure is final until restart; TP_RST is never pulsed here.
 esp_err_t read_pico_touch_start(void);
 bool read_pico_touch_ready(void);
-// Read one sample. When not tracking a contact and INT is idle, returns an
-// untouched sample without bus traffic. ESP_ERR_TIMEOUT: the board lock is
-// busy (e.g. a refresh), no sample taken.
+// Read one sample (polled; INT is not used). ESP_ERR_TIMEOUT: the board lock
+// is busy (e.g. a refresh), no sample taken. tracking is currently unused.
 esp_err_t read_pico_touch_read(read_pico_touch_sample_t *out, bool tracking);
 #ifdef __cplusplus
 }

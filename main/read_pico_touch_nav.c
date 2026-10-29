@@ -32,6 +32,9 @@ static int64_t s_next_start_ms;
 static touch_nav_event_t s_log[TOUCH_NAV_LOG_DEPTH];
 static unsigned s_log_count, s_log_next;
 static portMUX_TYPE s_log_lock = portMUX_INITIALIZER_UNLOCKED;
+// Diagnostics for /api/touch (single writer: the polling task).
+static uint32_t s_reads, s_read_errors, s_busy_skips, s_touched_samples;
+static read_pico_touch_sample_t s_last_touched;
 
 static void record(int64_t now_ms, const touch_gesture_t *gesture, touch_action_t action, esp_err_t result)
 {
@@ -85,8 +88,15 @@ void read_pico_touch_nav_poll(int64_t now_ms)
     }
     read_pico_touch_sample_t sample;
     esp_err_t err = read_pico_touch_read(&sample, touch_tracker_active(&s_tracker));
+    if (err == ESP_ERR_TIMEOUT) ++s_busy_skips;
+    else if (err != ESP_OK) ++s_read_errors;
     if (err != ESP_OK)
         return;  // board busy (refresh) or read error: keep tracking state
+    ++s_reads;
+    if (sample.touched) {
+        ++s_touched_samples;
+        s_last_touched = sample;
+    }
     touch_gesture_t gesture;
     if (!touch_tracker_feed(&s_tracker, sample.touched, sample.count, sample.x, sample.y, now_ms,
                             &gesture))
@@ -119,6 +129,13 @@ void read_pico_touch_nav_describe(cJSON *object)
     next = s_log_next;
     taskEXIT_CRITICAL(&s_log_lock);
     cJSON_AddBoolToObject(object, "ready", read_pico_touch_ready());
+    cJSON_AddNumberToObject(object, "reads", s_reads);
+    cJSON_AddNumberToObject(object, "read_errors", s_read_errors);
+    cJSON_AddNumberToObject(object, "busy_skips", s_busy_skips);
+    cJSON_AddNumberToObject(object, "touched_samples", s_touched_samples);
+    cJSON_AddNumberToObject(object, "last_x", s_last_touched.x);
+    cJSON_AddNumberToObject(object, "last_y", s_last_touched.y);
+    cJSON_AddNumberToObject(object, "last_count", s_last_touched.count);
     cJSON *events = cJSON_AddArrayToObject(object, "events");
     if (!events)
         return;
