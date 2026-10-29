@@ -132,6 +132,14 @@
 - 测完恢复原设置（随机、`0 */12 *`、自动轮播关）并读回确认。测试图留在相册，是否删除由用户决定。
 连同此前在本镜像上的失败路径、无卡启动结果，R1 冒烟闭环在同一候选上完成；热点配网与断电冷启动仍未验证。屏幕观感本轮未单独请用户确认。
 
+## 2026-10-29 · R2 本地 OTA 与可选电池睡眠（仅软件，未上板）
+
+- 本地 OTA：分区表 `boards/partitions.read_pico_ota.csv`（前四行与已核验 factory 表逐字相同，追加 otadata 0x910000/8K、ota_0 0x920000/3M、ota_1 0xC20000/3M；主机测试锁定）；local-frame defaults 改用该表（已生成的 `.cache` sdkconfig 同步改了文件名）。版本号带 `+rplf` 标记（`dev-93b65f6+rplf`）。便携 `ota_local`（镜像头/芯片/应用描述/项目名/标记/大小、试启动策略）主机测试 3 项；`read_pico_ota` 在板级锁下写 flash（不与刷屏重叠）、`esp_ota_end` 校验、记录 pending/previous 后切换启动分区；启动守卫 3 次试启动 + 每次 5 分钟期限，运行 60 秒后确认健康。`POST /api/ota/upload`、`GET /api/ota/local`，网页固件上传卡片（浏览器端预检，中英文）。bootloader 未改（设备原 bootloader 无回滚配置，回退靠应用层守卫）。
+- 可选电池睡眠：`CONFIG_READ_PICO_PMU_SLEEP`（默认关，单独构建变体与输出目录）。便携 `read_pico_pmu_command`（请求/响应帧、TIME_SYNC/ALARM_SET 载荷与范围）5 项、`sleep_policy` 4 项主机测试；`read_pico_pmu_session` 只发 HOST_READY / ALARM_SET(单次) / HOST_SOFT_SLEEP，不写 VCOM/配置；`frame_sleep` 独立 NVS 开关，上游 deep_sleep 仍关；闹钟唤醒先换一张图；`GET/POST /api/power` 与网页“电池睡眠”卡片。供电判定：充电=外接，NOT_CHARGING 且充电脚低且电池有效=电池，其余未知（未知不睡）——待实测。
+- 主机：T0+ASan 各 1362/1362，Python 构建测试含睡眠变体规则；网页 71 项。
+- 编译：默认 local-frame `afc72c80…`（1,981,104 字节）；睡眠变体 `d01b0d21…`（1,985,536 字节）；两者分区表 `a8641264…`（新 OTA 表）。均未上板，分区表未写。
+- 未验证：分区迁移、OTA 实际写入/切换/回退、PMU 命令应答与睡眠唤醒、供电判定、功耗。
+
 ## 2026-10-29 · R2 触摸导航、开机清理临时文件、压测脚本（仅软件，未上板）
 
 - 触摸：新组件 `read_pico_touch`（厂家 CST836U 驱动原样使用，共享板级 I2C，持板级锁，INT=GPIO43，不拉 TP_RST），便携 `touch_gesture`（滑动/点击/三触摸键，阈值参考厂家 UI）与 `image_history`（16 条上一张历史）；`read_pico_touch_nav` 在按键任务中每 50ms 轮询。`GET /api/touch` 只读诊断。Kconfig `READ_PICO_TOUCH`（local-frame 默认开）。
