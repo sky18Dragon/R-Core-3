@@ -4,6 +4,7 @@
 
 #include "display_manager.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,10 +13,12 @@
 #include "read_pico_ota.h"
 #include "read_pico_pmu_session.h"
 #include "read_pico_sd.h"
+#include "sleep_log.h"
 #include "sleep_policy.h"
 
 #define SLEEP_NVS_NAMESPACE "rp_sleep"
 #define SLEEP_NVS_ENABLED "enabled"
+#define SLEEP_NVS_LOG "log"
 #define SLEEP_CHECK_PERIOD_MS 5000
 #define SLEEP_RETRY_AFTER_FAILURE_MS (5 * 60 * 1000)
 #define PMU_WAKE_REASON_ALARM 6
@@ -30,10 +33,36 @@ static int64_t s_next_check_ms;
 static read_pico_pmu_state_t s_state;
 static bool s_state_valid;
 static const char *s_last_decision = "not evaluated";
+static sleep_log_t s_log;  // written only from frame_sleep_boot/tick (one task each, never concurrent)
 
 static int64_t uptime_ms(void)
 {
     return esp_timer_get_time() / 1000;
+}
+
+static void log_load(void)
+{
+    nvs_handle_t nvs;
+    size_t size = sizeof(s_log);
+    bool ok = nvs_open(SLEEP_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK;
+    if (ok) {
+        ok = nvs_get_blob(nvs, SLEEP_NVS_LOG, &s_log, &size) == ESP_OK && size == sizeof(s_log);
+        nvs_close(nvs);
+    }
+    if (!ok || !sleep_log_valid(&s_log))
+        sleep_log_reset(&s_log);
+}
+
+// Persist before anything that may cut power, so the event survives it.
+static void log_event(sleep_event_kind_t kind, uint8_t detail, uint32_t arg, int battery_mv)
+{
+    sleep_log_push(&s_log, kind, detail, (uint32_t) (uptime_ms() / 1000), arg, battery_mv);
+    nvs_handle_t nvs;
+    if (nvs_open(SLEEP_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK)
+        return;
+    if (nvs_set_blob(nvs, SLEEP_NVS_LOG, &s_log, sizeof(s_log)) == ESP_OK)
+        nvs_commit(nvs);
+    nvs_close(nvs);
 }
 
 void frame_sleep_boot(void)
@@ -46,10 +75,15 @@ void frame_sleep_boot(void)
         nvs_close(nvs);
     }
     read_pico_pmu_state_t state;
+    int battery_mv = -1;
     if (read_pico_pmu_session_read(&state) == ESP_OK) {
         s_wake_reason = state.wake_reason;
         s_woke_by_alarm = state.wake_reason == PMU_WAKE_REASON_ALARM;
+        battery_mv = state.battery_mv;
     }
+    log_load();
+    sleep_log_new_boot(&s_log);
+    log_event(SLEEP_EVENT_BOOT, s_wake_reason, (uint32_t) esp_reset_reason(), battery_mv);
     esp_err_t err = read_pico_pmu_session_ready();
     s_host_ready = err == ESP_OK;
     ESP_LOGI(TAG, "PMU wake reason %u, HOST_READY %s, frame sleep %s", s_wake_reason,
@@ -126,14 +160,19 @@ void frame_sleep_tick(int64_t now_ms)
     }
     ESP_LOGW(TAG, "Sleeping on battery (%d mV); wake in %lu s%s", s_state.battery_mv,
              (unsigned long) decision.alarm_seconds, decision.alarm_seconds ? "" : " (key only)");
+    log_event(SLEEP_EVENT_ATTEMPT, 0, decision.alarm_seconds, s_state.battery_mv);
+    s_last_decision = "sleeping";
+    // Returns only if power was not cut (the board lock is released again).
     esp_err_t err = read_pico_pmu_session_sleep(decision.alarm_seconds);
-    if (err == ESP_OK) {
-        // The PMU drops EN about 100 ms after latching; the board lock stays held.
-        s_last_decision = "sleeping";
-        vTaskDelay(portMAX_DELAY);
+    if (err == ESP_ERR_INVALID_STATE) {
+        log_event(SLEEP_EVENT_NOT_CUT, 0, 0, s_state.battery_mv);
+        s_last_decision = "PMU latched sleep but kept power on";
+    } else {
+        log_event(SLEEP_EVENT_NOT_LATCHED, (uint8_t) (err & 0xff), (uint32_t) err, s_state.battery_mv);
+        s_last_decision = "sleep refused by PMU";
     }
-    s_last_decision = "sleep refused by PMU";
-    s_next_check_ms = now_ms + SLEEP_RETRY_AFTER_FAILURE_MS;
+    frame_sleep_note_activity();  // stay awake the full activity window before retrying
+    s_next_check_ms = uptime_ms() + SLEEP_RETRY_AFTER_FAILURE_MS;
 }
 
 void frame_sleep_describe(cJSON *object)
@@ -142,6 +181,21 @@ void frame_sleep_describe(cJSON *object)
     cJSON_AddBoolToObject(object, "host_ready", s_host_ready);
     cJSON_AddNumberToObject(object, "wake_reason", s_wake_reason);
     cJSON_AddStringToObject(object, "last_decision", s_last_decision);
+    sleep_log_entry_t entries[SLEEP_LOG_DEPTH];
+    size_t n = sleep_log_copy(&s_log, entries, SLEEP_LOG_DEPTH);
+    cJSON *events = cJSON_AddArrayToObject(object, "events");
+    for (size_t i = 0; events && i < n; ++i) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item)
+            break;
+        cJSON_AddNumberToObject(item, "boot", entries[i].boot);
+        cJSON_AddStringToObject(item, "event", sleep_event_name(entries[i].kind));
+        cJSON_AddNumberToObject(item, "detail", entries[i].detail);
+        cJSON_AddNumberToObject(item, "uptime_s", entries[i].uptime_s);
+        cJSON_AddNumberToObject(item, "arg", entries[i].arg);
+        cJSON_AddNumberToObject(item, "battery_mv", entries[i].battery_mv);
+        cJSON_AddItemToArray(events, item);
+    }
     if (!s_state_valid)
         return;
     static const char *const supply[] = {"unknown", "external", "battery"};

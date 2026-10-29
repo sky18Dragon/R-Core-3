@@ -28,7 +28,10 @@ esp_err_t read_pico_pmu_session_read(read_pico_pmu_state_t *out);
 // HOST_READY (boot_reason 0) unless already RUNNING; waits up to 1 s for RUNNING.
 esp_err_t read_pico_pmu_session_ready(void);
 // alarm_seconds 0: no alarm (key wake only); otherwise 10 s .. 31 days.
-// Returns ESP_OK once the PMU latched SOFT_SLEEP; power is cut ~100 ms later.
+// Does not return when the PMU cuts power. Returns ESP_ERR_INVALID_STATE when
+// SOFT_SLEEP latched but power stayed on for 5 s (pending sleep cancelled with
+// HOST_READY), or another error when it was never latched. The board lock is
+// released on every return.
 esp_err_t read_pico_pmu_session_sleep(uint32_t alarm_seconds);
 #ifdef __cplusplus
 }

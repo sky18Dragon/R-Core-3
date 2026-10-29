@@ -15,6 +15,8 @@
 #define RESPONSE_POLLS 5
 #define RESPONSE_POLL_MS 30
 #define STATE_WAIT_MS 1000
+// The PMU drops EN ~100 ms after latching; still running after this means it did not.
+#define POWER_CUT_GRACE_MS 5000
 
 static const char *TAG = "pmu_session";
 
@@ -189,11 +191,18 @@ esp_err_t read_pico_pmu_session_sleep(uint32_t alarm_seconds)
         err = command_locked(pmu, PMU_CMD_HOST_SOFT_SLEEP, NULL, 0, &code);
     if (err == ESP_OK)
         err = wait_power_locked(pmu, PMU_PWR_SOFT_SLEEP);
-    if (err != ESP_OK)
+    if (err != ESP_OK) {
         ESP_LOGW(TAG, "Soft sleep not latched: %s status=0x%04x", esp_err_to_name(err), code);
-    // Keep the lock on success: nothing may start a refresh or SD write
-    // before the PMU drops EN (~100 ms after latching).
-    if (err != ESP_OK)
         read_pico_board_unlock();
-    return err;
+        return err;
+    }
+    // Keep the lock: nothing may start a refresh or SD write before EN drops.
+    vTaskDelay(pdMS_TO_TICKS(POWER_CUT_GRACE_MS));
+    // Still running: the PMU latched SOFT_SLEEP but never cut power. While EN
+    // is high, HOST_READY cancels the pending power-down and returns RUNNING.
+    esp_err_t cancel = ready_locked(pmu);
+    ESP_LOGE(TAG, "SOFT_SLEEP latched but power not cut after %d ms; cancel: %s", POWER_CUT_GRACE_MS,
+             esp_err_to_name(cancel));
+    read_pico_board_unlock();
+    return ESP_ERR_INVALID_STATE;
 }

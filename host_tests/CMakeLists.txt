@@ -625,6 +625,11 @@ target_include_directories(read_pico_pmu_command_test PRIVATE
 target_link_libraries(read_pico_pmu_command_test GTest::gtest_main)
 gtest_discover_tests(read_pico_pmu_command_test)
 
+add_executable(sleep_log_test test_sleep_log.cpp ../main/sleep_log.c)
+target_include_directories(sleep_log_test PRIVATE ../main)
+target_link_libraries(sleep_log_test GTest::gtest_main)
+gtest_discover_tests(sleep_log_test)
+
 add_executable(sleep_policy_test test_sleep_policy.cpp ../main/sleep_policy.c)
 target_include_directories(sleep_policy_test PRIVATE ../main)
 target_link_libraries(sleep_policy_test GTest::gtest_main)
