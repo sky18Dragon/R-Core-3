@@ -143,6 +143,14 @@
 - 100 次连续换图（`3defa58a`）：8/100 失败，均为 `READ_PICO_REFRESH_BUSY`——刷屏开始时以 0ms 取板级锁，恰逢每 50ms 一次的触摸读取持锁。改为最多等 200ms（`e129a48`，主机测试 1363/1363）。复测（`d34b9199`）：**100/100 成功**，在线检查全通过，中位 2.42 秒、最长 3.82 秒，无崩溃记录。
 - 未做：Wi-Fi 断网恢复（用户决定跳过：当前 AP 不便断开）、分区迁移与 OTA、电池睡眠。主机测试另有一次 `Gc16PipelineTest.RampRendersVerbatim` 偶发失败（单独重跑 3 次通过），记录待查。当前设备运行 `d34b9199`，网络 `xinbao-ap`。
 
+## 2026-10-29 · R2 电池睡眠实机测试（异常，已暂停）
+
+- 烧写睡眠变体 `4f2a9252`（app-only，全长回读一致，分区表不变）。开机 HOST_READY 成功，PMU power_state=3（RUNNING），wake_reason=2。
+- 供电判定实测：接 USB 时 charge_state=3（满电推断）、flags 0x2551（含充电脚高 0x10）→ 判为未知，不睡；拔 USB 后 charge_state=1、flags 0x2541（充电脚位清零）→ 判为电池。**判定规则与实测一致。**
+- 开启 5 分钟顺序轮播（`*/5 * *`）与“电池睡眠”，拔 USB 后：16:46 起 HTTP 无响应，ping 15 分钟一直在线（未见断电睡眠），用户看到屏幕至少换过一次图。插回 USB 后 Mac 看不到设备串口（USB 树中无 Espressif 设备）。长按 10 秒断电再开机后：设备重新上线（ping 通、MAC 正确），但 80 端口拒绝连接，USB 仍不枚举。原因未明，未拿到日志。
+- 疑点：睡眠路径在 PMU“已锁存 SOFT_SLEEP”后永久等待且持有板级锁，若 PMU 实际未断电会使依赖板级锁的服务卡住（与厂家固件做法相同，但缺少超时与恢复）；重启后 HTTP 仍不起、USB 不枚举则不能由此解释，需日志。
+- 设备当前状态：运行睡眠变体，NVS 中“电池睡眠”已开启，轮播为每 5 分钟顺序（测试前为关闭、随机、`0 */12 *`），均待恢复。
+
 ## 2026-10-29 · R2 本地 OTA 与可选电池睡眠（仅软件，未上板）
 
 - 本地 OTA：分区表 `boards/partitions.read_pico_ota.csv`（前四行与已核验 factory 表逐字相同，追加 otadata 0x910000/8K、ota_0 0x920000/3M、ota_1 0xC20000/3M；主机测试锁定）；local-frame defaults 改用该表（已生成的 `.cache` sdkconfig 同步改了文件名）。版本号带 `+rplf` 标记（`dev-93b65f6+rplf`）。便携 `ota_local`（镜像头/芯片/应用描述/项目名/标记/大小、试启动策略）主机测试 3 项；`read_pico_ota` 在板级锁下写 flash（不与刷屏重叠）、`esp_ota_end` 校验、记录 pending/previous 后切换启动分区；启动守卫 3 次试启动 + 每次 5 分钟期限，运行 60 秒后确认健康。`POST /api/ota/upload`、`GET /api/ota/local`，网页固件上传卡片（浏览器端预检，中英文）。bootloader 未改（设备原 bootloader 无回滚配置，回退靠应用层守卫）。
