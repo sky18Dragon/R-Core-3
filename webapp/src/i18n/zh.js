@@ -366,4 +366,13 @@ export default {
   "Firmware is not for ESP32-S3": "固件不是 ESP32-S3 版本",
   "Firmware is not for this photo frame": "固件不属于本相框项目",
   "Firmware is not a Read Pico local-frame build": "固件不是小纸 Pico 本地相框版本",
+  Battery: "电池",
+  "Charging / external power": "充电 / 外接电源",
+  "Battery sleep": "电池睡眠",
+  "On battery the frame sleeps between rotations and wakes to show the next image. While asleep the web page is unreachable; press the power key to wake it. On USB power it stays awake.":
+    "使用电池时，相框在两次轮播之间睡眠，到点醒来显示下一张。睡眠期间网页打不开，按电源键可唤醒。接 USB 时保持常亮在线。",
+  "Sleep between rotations on battery": "电池供电时在轮播间隔睡眠",
+  "Power source": "供电",
+  "Last decision": "最近判断",
+  "Failed to save: ": "保存失败：",
 };

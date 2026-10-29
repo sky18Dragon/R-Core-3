@@ -237,6 +237,11 @@ esp_err_t read_pico_ota_receive(httpd_req_t *req)
     return err;
 }
 
+bool read_pico_ota_busy(void)
+{
+    return atomic_load(&s_busy);
+}
+
 void read_pico_ota_describe(cJSON *object)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();

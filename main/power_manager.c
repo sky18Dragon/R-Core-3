@@ -32,6 +32,9 @@
 #include "read_pico_ota.h"
 #define OTA_HEALTHY_AFTER_US (60LL * 1000 * 1000)
 #endif
+#if CONFIG_READ_PICO_PMU_SLEEP
+#include "read_pico_frame_sleep.h"
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
 #include "read_pico_background.h"
 #include "http_server.h"
@@ -127,6 +130,20 @@ static void rotation_timer_task(void *arg)
             read_pico_ota_mark_healthy();
             ota_confirmed = true;
         }
+#if CONFIG_READ_PICO_PMU_SLEEP
+        // A timed PMU wake exists to show the next image: do it once, then
+        // let the sleep decision take over.
+        static bool alarm_rotation_done;
+        if (!alarm_rotation_done) {
+            alarm_rotation_done = true;
+            if (frame_sleep_woke_by_alarm() && config_manager_get_auto_rotate()) {
+                ESP_LOGI(TAG, "Woken by PMU alarm: rotating");
+                trigger_image_rotation();
+                power_manager_reset_rotate_timer();
+            }
+        }
+        frame_sleep_tick(esp_timer_get_time() / 1000);
+#endif
 #endif
 #endif
 
@@ -603,6 +620,9 @@ void power_manager_enter_sleep(void)
 void power_manager_reset_sleep_timer(void)
 {
     next_sleep_time = esp_timer_get_time() + ((int64_t) auto_sleep_timeout_sec * 1000000LL);
+#if CONFIG_READ_PICO_PMU_SLEEP
+    frame_sleep_note_activity();
+#endif
 }
 
 void power_manager_set_auto_sleep_timeout(uint32_t seconds)
@@ -610,6 +630,14 @@ void power_manager_set_auto_sleep_timeout(uint32_t seconds)
     auto_sleep_timeout_sec = seconds;
     next_sleep_time = 0;  // re-init on next tick so the new timeout takes effect
     ESP_LOGI(TAG, "Auto-sleep timeout set to %lu seconds", (unsigned long) seconds);
+}
+
+int64_t power_manager_seconds_to_next_rotation(void)
+{
+    if (!config_manager_get_auto_rotate() || next_rotation_time == 0)
+        return -1;
+    int64_t remaining = (next_rotation_time - esp_timer_get_time()) / 1000000LL;
+    return remaining > 0 ? remaining : 0;
 }
 
 void power_manager_reset_rotate_timer(void)

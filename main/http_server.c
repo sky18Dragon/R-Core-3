@@ -55,6 +55,9 @@
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "read_pico_ota.h"
 #endif
+#if CONFIG_READ_PICO_PMU_SLEEP
+#include "read_pico_frame_sleep.h"
+#endif
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -3076,6 +3079,45 @@ static esp_err_t ota_local_status_handler(httpd_req_t *req)
 }
 #endif
 
+#if CONFIG_READ_PICO_PMU_SLEEP
+// Battery sleep: GET reports supply/PMU state; POST {"frame_sleep_enabled": bool}.
+static esp_err_t power_handler(httpd_req_t *req)
+{
+    power_manager_reset_sleep_timer();
+    if (req->method == HTTP_POST) {
+        char body[64];
+        int len = req->content_len > 0 && req->content_len < (int) sizeof(body)
+                      ? httpd_req_recv(req, body, req->content_len)
+                      : -1;
+        cJSON *root = len > 0 ? cJSON_ParseWithLength(body, (size_t) len) : NULL;
+        cJSON *item = root ? cJSON_GetObjectItem(root, "frame_sleep_enabled") : NULL;
+        esp_err_t err = item && cJSON_IsBool(item) ? frame_sleep_set_enabled(cJSON_IsTrue(item))
+                                                    : ESP_ERR_INVALID_ARG;
+        cJSON_Delete(root);
+        if (err != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected {\"frame_sleep_enabled\": true|false}");
+            return ESP_FAIL;
+        }
+    }
+    cJSON *response = cJSON_CreateObject();
+    if (!response) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    frame_sleep_describe(response);
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (!json_str) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    return err;
+}
+#endif
+
 static esp_err_t time_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -3399,6 +3441,10 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/time", HTTP_GET, time_handler);
 #if CONFIG_READ_PICO_TOUCH
         HTTP_REGISTER("/api/touch", HTTP_GET, touch_status_handler);
+#endif
+#if CONFIG_READ_PICO_PMU_SLEEP
+        HTTP_REGISTER("/api/power", HTTP_GET, power_handler);
+        HTTP_REGISTER("/api/power", HTTP_POST, power_handler);
 #endif
 
         HTTP_REGISTER("/api/time/sync", HTTP_POST, time_sync_handler);

@@ -52,6 +52,9 @@
 #include "read_pico_ota.h"
 #define UPLOAD_SWEEP_MAX_PER_BOOT 64
 #endif
+#if CONFIG_READ_PICO_PMU_SLEEP
+#include "read_pico_frame_sleep.h"
+#endif
 #if CONFIG_READ_PICO_TOUCH
 #include "read_pico_touch_nav.h"
 #endif
@@ -810,6 +813,9 @@ void app_main(void)
     // Initialize Board HAL
     ESP_LOGI(TAG, "Initializing Board HAL...");
     ESP_ERROR_CHECK(board_hal_init());
+#if CONFIG_READ_PICO_PMU_SLEEP
+    frame_sleep_boot();  // HOST_READY + wake reason (opt-in sleep builds only)
+#endif
 
     // Initialize the storage subsystem (handles SD, LittleFS, MemFS fallbacks)
     ESP_LOGI(TAG, "Initializing storage subsystem...");

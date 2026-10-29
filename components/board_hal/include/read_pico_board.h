@@ -28,6 +28,9 @@ esp_err_t read_pico_board_display_release(void);
 // Shared I2C bus for other on-board peripherals (touch). Caller holds the
 // board lock for every transaction; refused while the display owns the bus.
 esp_err_t read_pico_board_i2c_bus(i2c_master_bus_handle_t *out);
+// PMU device handle for the opt-in sleep session (CONFIG_READ_PICO_PMU_SLEEP);
+// caller holds the board lock.
+esp_err_t read_pico_board_pmu_device(i2c_master_dev_handle_t *out);
 // SD owner holds a lease until successful unmount; caller holds the bus lock.
 esp_err_t read_pico_board_storage_claim(void);
 esp_err_t read_pico_board_storage_release(void);

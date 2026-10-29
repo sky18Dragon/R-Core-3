@@ -21,6 +21,8 @@ void read_pico_ota_mark_healthy(void);
 // Stream a raw image from the request body (application/octet-stream) into
 // the next OTA slot, select it and schedule a restart. Sends the response.
 esp_err_t read_pico_ota_receive(httpd_req_t *req);
+// True while a firmware upload is being received or written.
+bool read_pico_ota_busy(void);
 // Adds supported/running/next/pending/version fields to object.
 void read_pico_ota_describe(cJSON *object);
 #ifdef __cplusplus

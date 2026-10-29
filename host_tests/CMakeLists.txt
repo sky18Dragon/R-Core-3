@@ -612,6 +612,24 @@ target_include_directories(read_pico_pmu_test PRIVATE
 target_link_libraries(read_pico_pmu_test GTest::gtest_main)
 gtest_discover_tests(read_pico_pmu_test)
 
+# State-changing PMU commands for the opt-in sleep path (portable codec only).
+add_executable(read_pico_pmu_command_test
+  test_read_pico_pmu_command.cpp
+  ../components/board_hal/src/read_pico_pmu_command.c
+  ../components/board_hal/src/read_pico_pmu_codec.c
+)
+target_include_directories(read_pico_pmu_command_test PRIVATE
+  ../components/board_hal/include
+  ../third_party/read_pico_firmware/components/read_pico_pmu/include
+)
+target_link_libraries(read_pico_pmu_command_test GTest::gtest_main)
+gtest_discover_tests(read_pico_pmu_command_test)
+
+add_executable(sleep_policy_test test_sleep_policy.cpp ../main/sleep_policy.c)
+target_include_directories(sleep_policy_test PRIVATE ../main)
+target_link_libraries(sleep_policy_test GTest::gtest_main)
+gtest_discover_tests(sleep_policy_test)
+
 add_executable(read_pico_board_test
   test_read_pico_board.cpp
   ../components/board_hal/src/driver_read_pico.c

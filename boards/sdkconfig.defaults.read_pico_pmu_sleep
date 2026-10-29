@@ -1,0 +1,3 @@
+# Opt-in battery sleep variant of the local frame (unverified on the device).
+# Separate build directory and sdkconfig; the default local frame never sleeps.
+CONFIG_READ_PICO_PMU_SLEEP=y

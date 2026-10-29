@@ -129,7 +129,24 @@ class LocalFrameBuildTests(unittest.TestCase):
         with patch.object(sys, "argv", argv), patch.object(build, "build_firmware") as call:
             build.main()
         self.assertEqual(call.call_args.args, ("read_pico", [], False, False, False,
-                                               False, False, True))
+                                               False, False, True, False))
+
+    def test_pmu_sleep_is_an_opt_in_local_frame_variant(self):
+        self.assertNotIn("PMU_SLEEP", (ROOT / "boards/sdkconfig.defaults.read_pico_local_frame").read_text())
+        with patch.object(build.subprocess, "run") as run:
+            build.build_firmware("read_pico", [], read_pico_local_frame=True, read_pico_pmu_sleep=True)
+        argv = run.call_args.args[0]
+        self.assertIn("build-read-pico-local-frame-sleep", argv)
+        self.assertIn("-DSDKCONFIG=.cache/sdkconfig.read_pico-local-frame-sleep", argv)
+        defaults = next(arg for arg in argv if arg.startswith("-DSDKCONFIG_DEFAULTS="))
+        self.assertTrue(defaults.endswith("read_pico_local_frame;boards/sdkconfig.defaults.read_pico_pmu_sleep"))
+        with patch.object(build.subprocess, "run") as run, self.assertRaises(ValueError):
+            build.build_firmware("read_pico", [], read_pico_pmu_sleep=True)
+        run.assert_not_called()
+        result = subprocess.run([sys.executable, str(ROOT / "build.py"), "--board", "read_pico", "--step",
+                                 "firmware", "--read-pico-pmu-sleep"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Running:", result.stdout)
 
 
 if __name__ == "__main__":

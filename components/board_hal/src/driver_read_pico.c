@@ -87,6 +87,18 @@ esp_err_t read_pico_board_i2c_bus(i2c_master_bus_handle_t *out)
     return ESP_OK;
 }
 
+// PMU device for the opt-in sleep session; caller holds the board lock.
+esp_err_t read_pico_board_pmu_device(i2c_master_dev_handle_t *out)
+{
+    if (out == NULL)
+        return ESP_ERR_INVALID_ARG;
+    *out = NULL;
+    if (!bus_access() || pmu == NULL || display_claimed)
+        return ESP_ERR_INVALID_STATE;
+    *out = pmu;
+    return ESP_OK;
+}
+
 esp_err_t read_pico_board_display_release(void)
 {
     if (!display_access())

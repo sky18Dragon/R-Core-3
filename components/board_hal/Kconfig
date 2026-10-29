@@ -170,6 +170,17 @@ menu "Board Configuration"
             horizontal swipe or the outer touch keys to next/previous image.
             Never pulses TP_RST; touch stays disabled if the panel does not answer.
 
+    config READ_PICO_PMU_SLEEP
+        bool "Read Pico PMU soft sleep on battery (unverified, opt-in)"
+        depends on READ_PICO_LOCAL_FRAME
+        default n
+        help
+            Sends HOST_READY at boot and, when the user enabled frame sleep and
+            the PMU reports battery power, ALARM_SET + HOST_SOFT_SLEEP so the
+            PMU cuts power until the next rotation or a key press. The web page
+            is unreachable while asleep. Never writes VCOM or PMU configuration.
+            Battery/USB detection is an assumption until measured on the device.
+
     config READ_PICO_PHOTO_VALIDATION
         bool "Read Pico single-photo diagnostic (explicit hardware authorization required)"
         depends on BOARD_DRIVER_READ_PICO
