@@ -74,11 +74,12 @@ touch_action_t touch_action_for(const touch_gesture_t *g, bool landscape, bool r
     if (!g) return TOUCH_ACTION_NONE;
     if (g->kind == TOUCH_GESTURE_KEY) {
         if (g->key != 0 && g->key != TOUCH_KEY_COUNT - 1) return TOUCH_ACTION_NONE;
+        // Measured 2026-10-29 at 180 deg: key 0 is the viewer's leftmost key.
         bool first = g->key == 0;
-        return first != rotated_180 ? TOUCH_ACTION_PREVIOUS : TOUCH_ACTION_NEXT;
+        return first == rotated_180 ? TOUCH_ACTION_PREVIOUS : TOUCH_ACTION_NEXT;
     }
-    // Assumption: landscape puts the viewer's horizontal on the native y axis
-    // and portrait on native x, both increasing to the viewer's right at 0 deg.
+    // Landscape: the viewer's horizontal is the native y axis (measured at
+    // 180 deg: a left swipe increases y). Portrait (native x) is unmeasured.
     touch_gesture_kind_t toward_left = landscape ? TOUCH_GESTURE_SWIPE_Y_NEG : TOUCH_GESTURE_SWIPE_X_NEG;
     touch_gesture_kind_t toward_right = landscape ? TOUCH_GESTURE_SWIPE_Y_POS : TOUCH_GESTURE_SWIPE_X_POS;
     if (rotated_180) {

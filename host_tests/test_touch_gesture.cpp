@@ -107,10 +107,12 @@ TEST(TouchGesture, ActionMappingFollowsLayoutAndRotation)
     g.kind = TOUCH_GESTURE_TAP;
     EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NONE);
     g.kind = TOUCH_GESTURE_KEY;
-    g.key = 0; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_PREVIOUS);
-    g.key = 1; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NONE);
-    g.key = 2; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NEXT);
-    g.key = 2; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_PREVIOUS);
+    // Measured at 180 deg: key 0 is the viewer's leftmost (previous).
+    g.key = 0; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_PREVIOUS);
+    g.key = 1; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NONE);
+    g.key = 2; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NEXT);
+    g.key = 0; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NEXT);
+    g.key = 2; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_PREVIOUS);
     EXPECT_EQ(touch_action_for(nullptr, true, false), TOUCH_ACTION_NONE);
     EXPECT_STREQ(touch_action_name(TOUCH_ACTION_NEXT), "next");
     EXPECT_STREQ(touch_gesture_name((touch_gesture_kind_t) 99), "unknown");

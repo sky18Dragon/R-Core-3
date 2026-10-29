@@ -54,8 +54,8 @@ bool touch_tracker_feed(touch_tracker_t *tracker, bool touched, uint8_t count, u
                         uint16_t y, int64_t now_ms, touch_gesture_t *out);
 // Map a gesture to a frame action for the configured display layout.
 // Swipe left (as the viewer sees it) = next, swipe right = previous; keys:
-// first = previous, last = next, middle unused. The native-to-viewer axis
-// mapping is a documented assumption until confirmed on the device.
+// viewer's leftmost = previous, rightmost = next, middle unused. Landscape at
+// 180 deg was measured on the device; other layouts follow by symmetry.
 touch_action_t touch_action_for(const touch_gesture_t *gesture, bool landscape, bool rotated_180);
 const char *touch_gesture_name(touch_gesture_kind_t kind);
 const char *touch_action_name(touch_action_t action);
