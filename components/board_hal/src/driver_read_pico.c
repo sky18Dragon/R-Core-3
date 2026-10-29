@@ -81,7 +81,9 @@ esp_err_t read_pico_board_i2c_bus(i2c_master_bus_handle_t *out)
     if (out == NULL)
         return ESP_ERR_INVALID_ARG;
     *out = NULL;
-    if (!bus_access() || bus == NULL || display_claimed)
+    // The display keeps its lease for its whole lifetime; holding the board
+    // lock is what excludes a refresh, so the lease is not checked here.
+    if (!bus_access() || bus == NULL)
         return ESP_ERR_INVALID_STATE;
     *out = bus;
     return ESP_OK;
@@ -93,7 +95,7 @@ esp_err_t read_pico_board_pmu_device(i2c_master_dev_handle_t *out)
     if (out == NULL)
         return ESP_ERR_INVALID_ARG;
     *out = NULL;
-    if (!bus_access() || pmu == NULL || display_claimed)
+    if (!bus_access() || pmu == NULL)
         return ESP_ERR_INVALID_STATE;
     *out = pmu;
     return ESP_OK;
