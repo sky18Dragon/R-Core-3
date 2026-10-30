@@ -183,6 +183,59 @@ const saveSuccess = ref(false);
 const saveMessage = ref("");
 const saveError = ref(false);
 
+// Format the storage card: the one action that erases every photo, so it lives
+// here (not next to the upload button) and asks for a typed confirmation.
+const showFormatDialog = ref(false);
+const formatConfirm = ref("");
+const formatting = ref(false);
+const hasStorage = computed(
+  () => appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage
+);
+const photoCount = computed(() =>
+  appStore.albums.reduce((sum, a) => sum + (Number.isFinite(a.image_count) ? a.image_count : 0), 0)
+);
+const formatWord = computed(() => t("FORMAT"));
+
+function openFormatDialog() {
+  formatConfirm.value = "";
+  showFormatDialog.value = true;
+}
+
+async function performFormat() {
+  formatting.value = true;
+  try {
+    const response = await fetch("/api/format-storage", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    saveSuccess.value = true;
+    saveError.value = false;
+    saveMessage.value = t("Storage formatted successfully");
+    setTimeout(() => (saveSuccess.value = false), 4000);
+    await appStore.loadSystemInfo();
+    await appStore.loadAlbums();
+    appStore.selectAlbum("Default");
+  } catch (error) {
+    saveError.value = true;
+    saveSuccess.value = false;
+    saveMessage.value = t("Format failed: {msg}", { msg: error.message });
+    setTimeout(() => (saveError.value = false), 6000);
+  } finally {
+    formatting.value = false;
+    showFormatDialog.value = false;
+  }
+}
+
+const aboutRows = computed(() => {
+  const info = appStore.systemInfo;
+  return [
+    [t("Firmware"), info.project_name],
+    [t("Build"), [info.version, info.compile_date, info.compile_time].filter(Boolean).join(" ")],
+    ["ESP-IDF", info.idf_version],
+    [t("Board"), info.board_name],
+    [t("Device ID"), info.device_id],
+    [t("Screen"), info.width && info.height ? `${info.width}×${info.height}` : ""],
+  ].filter(([, value]) => value);
+});
+
 const showFactoryResetDialog = ref(false);
 const resetting = ref(false);
 const showImportDialog = ref(false);
@@ -881,6 +934,22 @@ function onDrawerToggle(open) {
                   </v-btn>
                 </v-col>
               </v-row>
+
+              <v-divider class="my-6" />
+
+              <div class="text-subtitle-1 mb-2">{{ t("Format storage") }}</div>
+              <div class="text-body-2 text-medium-emphasis mb-3">
+                {{ t("Erases every photo and album on the card. This cannot be undone.") }}
+              </div>
+              <v-btn
+                color="error"
+                variant="outlined"
+                :disabled="!hasStorage"
+                @click="openFormatDialog"
+              >
+                <v-icon start>mdi-delete-sweep</v-icon>
+                {{ t("Format storage") }}
+              </v-btn>
             </v-expansion-panel-text>
           </v-expansion-panel>
 
@@ -1049,6 +1118,22 @@ function onDrawerToggle(open) {
               </v-expand-transition>
             </v-expansion-panel-text>
           </v-expansion-panel>
+          <v-expansion-panel value="about">
+            <v-expansion-panel-title>
+              <v-icon icon="mdi-information-outline" class="mr-3" />
+              {{ t("About") }}
+            </v-expansion-panel-title>
+            <v-expansion-panel-text>
+              <v-table density="compact">
+                <tbody>
+                  <tr v-for="[label, value] in aboutRows" :key="label">
+                    <td class="text-medium-emphasis">{{ label }}</td>
+                    <td class="text-break">{{ value }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
         </v-expansion-panels>
       </div>
 
@@ -1086,6 +1171,49 @@ function onDrawerToggle(open) {
         </v-tooltip>
       </div>
     </div>
+
+    <!-- Format storage: type the word to confirm -->
+    <v-dialog v-model="showFormatDialog" max-width="440">
+      <v-card>
+        <v-card-title class="text-error">
+          <v-icon icon="mdi-alert" class="mr-2" />
+          {{ t("Format storage") }}
+        </v-card-title>
+        <v-card-text>
+          <v-alert type="error" variant="tonal" class="mb-4">
+            {{
+              t(
+                "This will erase all {n} photos on the card and every album. It cannot be undone.",
+                {
+                  n: photoCount,
+                }
+              )
+            }}
+          </v-alert>
+          <v-text-field
+            v-model="formatConfirm"
+            :label="t('Type {word} to confirm', { word: formatWord })"
+            variant="outlined"
+            density="compact"
+            autocomplete="off"
+            hide-details
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="showFormatDialog = false">{{ t("Cancel") }}</v-btn>
+          <v-btn
+            color="error"
+            variant="flat"
+            :loading="formatting"
+            :disabled="formatConfirm.trim().toUpperCase() !== formatWord.toUpperCase()"
+            @click="performFormat"
+          >
+            {{ t("Format") }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- Unsaved-changes dialog -->
     <v-dialog v-model="showDiscardDialog" max-width="400">

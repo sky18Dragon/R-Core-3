@@ -36,6 +36,10 @@ export const useAppStore = defineStore("app", () => {
     systemInfo: false,
   });
 
+  // Bumped whenever the picture on the panel changes, so views that show it
+  // ("now showing") know to fetch it again.
+  const displayVersion = ref(0);
+
   // API base URL (empty for same-origin)
   const API_BASE = "";
 
@@ -204,6 +208,7 @@ export const useAppStore = defineStore("app", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filepath: fullPath }),
       });
+      if (response.ok) displayVersion.value++;
       return response.ok;
     } catch (error) {
       console.error("Failed to display image:", error);
@@ -224,6 +229,7 @@ export const useAppStore = defineStore("app", () => {
   async function rotateNow() {
     try {
       const response = await fetch(`${API_BASE}/api/rotate`, { method: "POST" });
+      if (response.ok) displayVersion.value++;
       return response.ok;
     } catch (error) {
       console.error("Failed to rotate:", error);
@@ -263,6 +269,7 @@ export const useAppStore = defineStore("app", () => {
     battery,
     systemInfo,
     loading,
+    displayVersion,
     // Getters
     sortedAlbums,
     currentAlbumImages,

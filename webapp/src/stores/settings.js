@@ -502,10 +502,10 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   const processingDirty = computed(() => configLoaded.value && hasProcessingSettingsChanged());
+  // Unsaved slideshow edits (the panel beside the albums). Processing defaults
+  // are tracked separately by processingDirty: they belong to the upload page.
   const imageDirty = computed(
-    () =>
-      configLoaded.value &&
-      (Object.keys(changedConfig("image")).length > 0 || hasProcessingSettingsChanged())
+    () => configLoaded.value && Object.keys(changedConfig("image")).length > 0
   );
 
   async function saveSettings() {
@@ -578,19 +578,9 @@ export const useSettingsStore = defineStore("settings", () => {
     });
   }
 
-  // Save the image panel: processing defaults first, then the slideshow fields.
-  // Not in parallel, as in the system save (the device may refuse requests that
-  // are still in flight when its settings change).
+  // Save the slideshow panel (device config, image-scope fields only)
   async function saveImageSettings() {
-    const processingSuccess = await saveSettings();
-    const deviceResult = await saveDeviceSettings("image");
-    if (deviceResult.success && processingSuccess) {
-      return { success: true, message: deviceResult.message };
-    }
-    return {
-      success: false,
-      message: deviceResult.success ? "Failed to save processing settings" : deviceResult.message,
-    };
+    return saveDeviceSettings("image");
   }
 
   return {

@@ -2,7 +2,6 @@
 import { t } from "../i18n";
 import { ref, computed } from "vue";
 import { useSettingsStore, useAppStore } from "../stores";
-import ProcessingControls from "./ProcessingControls.vue";
 import RotationSchedule from "./RotationSchedule.vue";
 import { isValidCron } from "../utils/cron";
 
@@ -28,16 +27,6 @@ const sdRotationModeOptions = [
 const hasStorage = computed(
   () => appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage
 );
-
-function onPresetChange(preset) {
-  if (preset !== "custom") {
-    settingsStore.applyPreset(preset);
-  }
-}
-
-function onParamsUpdate(newParams) {
-  Object.assign(settingsStore.params, newParams);
-}
 
 const saving = ref(false);
 const saveSuccess = ref(false);
@@ -65,11 +54,6 @@ async function save() {
 
 <template>
   <v-sheet border rounded class="image-settings pa-4">
-    <div class="text-subtitle-1 mb-2">
-      <v-icon icon="mdi-slideshow" size="small" class="mr-1" />
-      {{ t("Slideshow") }}
-    </div>
-
     <v-alert
       v-if="settingsStore.deviceSettings.rotationMode === 'url'"
       type="info"
@@ -111,29 +95,6 @@ async function save() {
         :disabled="!settingsStore.deviceSettings.autoRotate"
       />
     </div>
-
-    <v-divider class="my-4" />
-
-    <v-expansion-panels variant="accordion" elevation="0">
-      <v-expansion-panel elevation="0">
-        <v-expansion-panel-title>
-          <v-icon icon="mdi-image-edit-outline" class="mr-3" />
-          {{ t("Upload defaults") }}
-          <span class="text-caption text-medium-emphasis ml-3">
-            {{ t("Applied to every new photo; adjust a single photo while uploading") }}
-          </span>
-        </v-expansion-panel-title>
-        <v-expansion-panel-text>
-          <ProcessingControls
-            :params="settingsStore.params"
-            :preset="settingsStore.preset"
-            @update:params="onParamsUpdate"
-            @update:preset="settingsStore.preset = $event"
-            @preset-change="onPresetChange"
-          />
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-    </v-expansion-panels>
 
     <div class="d-flex align-center flex-wrap ga-2 mt-4">
       <v-chip v-if="settingsStore.imageDirty" color="warning" variant="tonal" size="small">

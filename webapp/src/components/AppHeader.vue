@@ -1,11 +1,14 @@
 <script setup>
 import { ref, computed, watch } from "vue";
+import { useDisplay } from "vuetify";
 import { useAppStore, useSettingsStore } from "../stores";
 import { t } from "../i18n";
+import { currentView, goTo } from "../utils/viewState";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
 const rotating = ref(false);
+const { xs } = useDisplay();
 
 const deviceTitle = computed(
   () => settingsStore.deviceSettings.deviceName?.trim() || "ESP32 PhotoFrame"
@@ -56,7 +59,7 @@ function openSystemSettings() {
         <v-icon>mdi-skip-next</v-icon>
       </v-btn>
 
-      <!-- Battery Status -->
+      <!-- Battery: only on frames that have one -->
       <v-chip
         v-if="appStore.battery.connected"
         variant="flat"
@@ -68,10 +71,6 @@ function openSystemSettings() {
         <span v-if="appStore.battery.charging" class="ml-1 d-none d-sm-inline">
           {{ t("Charging") }}
         </span>
-      </v-chip>
-      <v-chip v-else variant="flat" color="grey-darken-1" class="text-white mx-2">
-        <v-icon icon="mdi-power-plug-off" :start="true" />
-        <span class="d-none d-sm-inline">{{ t("No Battery") }}</span>
       </v-chip>
 
       <!-- System settings -->
@@ -86,6 +85,26 @@ function openSystemSettings() {
           <v-icon>mdi-cog</v-icon>
         </v-badge>
       </v-btn>
+    </template>
+
+    <!-- Desktop: the two views as tabs under the title (phones use a bottom bar) -->
+    <template v-if="!xs" #extension>
+      <v-tabs
+        :model-value="currentView"
+        color="white"
+        align-tabs="start"
+        class="px-2"
+        @update:model-value="goTo"
+      >
+        <v-tab value="upload">
+          <v-icon start>mdi-image-plus</v-icon>
+          {{ t("Add photos") }}
+        </v-tab>
+        <v-tab value="albums">
+          <v-icon start>mdi-image-multiple</v-icon>
+          {{ t("Albums") }}
+        </v-tab>
+      </v-tabs>
     </template>
   </v-app-bar>
 </template>

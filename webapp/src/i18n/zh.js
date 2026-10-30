@@ -2,7 +2,6 @@
 // Keep keys identical to the English strings in components; missing keys fall back to English.
 export default {
   "AI Generation": "AI 生成",
-  "AI image generated successfully!": "AI 图片生成成功！",
   "API keys are used for client-side AI image generation when uploading images.":
     "API Key 用于上传时在浏览器端生成 AI 图片。",
   "Access Token (Optional)": "访问令牌（可选）",
@@ -13,9 +12,7 @@ export default {
   "Advanced network settings": "高级网络设置",
   "Advanced: POSIX TZ rule": "高级：POSIX 时区规则",
   "After reset:": "重置后：",
-  Album: "相册",
   "Album Name": "相册名称",
-  "Albums & Gallery": "相册与图库",
   "All custom settings": "所有自定义设置",
   "All device settings will be permanently erased, including:": "设备所有设置将被永久清除，包括：",
   "An error occurred. Please try again.": "出错了，请重试。",
@@ -44,7 +41,6 @@ export default {
   Charging: "充电中",
   Clear: "清除",
   "Clear Logs": "清除日志",
-  "Click or drag image to upload": "点击或拖入图片上传",
   "Click sync to update from NTP server": "点击同步，从 NTP 服务器更新",
   Close: "关闭",
   "Color Matching": "颜色匹配",
@@ -108,7 +104,6 @@ export default {
   "Error: ": "错误：",
   Every: "每隔",
   "Every day": "每天",
-  "Exit wide edit": "退出宽屏编辑",
   "Export Config": "导出配置",
   Exposure: "曝光",
   "Factory Reset": "恢复出厂设置",
@@ -117,7 +112,6 @@ export default {
   "Failed to clear the crash report": "清除崩溃报告失败",
   "Failed to display step wedge": "显示色阶图失败",
   "Failed to download debug logs": "下载调试日志失败",
-  "Failed to format storage": "格式化存储失败",
   "Failed to import config": "导入配置失败",
   "Failed to save calibration": "保存标定失败",
   "Failed to save settings": "保存设置失败",
@@ -130,7 +124,6 @@ export default {
   "Fix the time zone rule first": "请先修正时区规则",
   "Fixed offset {offset} (no DST)": "固定偏移 {offset}（无夏令时）",
   Format: "格式化",
-  "Format Storage": "格式化存储",
   "Format failed: {msg}": "格式化失败：{msg}",
   "Format storage": "格式化存储",
   From: "开始",
@@ -191,7 +184,6 @@ export default {
   "No debug logs available": "没有可用的调试日志",
   "No images in this album. Upload images to get started.": "此相册还没有图片，先上传一些吧。",
   "No upcoming rotations for this schedule.": "此计划没有即将进行的轮播。",
-  OR: "或",
   "Off by default. Most frames sit on a trusted home network, where this is unnecessary.":
     "默认关闭。多数相框在可信的家庭网络中，不需要密码。",
   "OpenAI API Key": "OpenAI API Key",
@@ -261,7 +253,6 @@ export default {
   Strength: "强度",
   "Stretches tones around mid-gray: above 1 deepens shadows and lifts highlights.":
     "以中灰为中心拉伸明暗：大于 1 时暗部更深、亮部更亮。",
-  "Supports: JPG, PNG, HEIC, WebP, GIF, BMP": "支持：JPG、PNG、HEIC、WebP、GIF、BMP",
   "Switch language": "切换语言",
   "Sync NTP": "同步 NTP",
   "Testing WiFi connection...": "正在测试 Wi-Fi 连接…",
@@ -279,10 +270,6 @@ export default {
     "本设备支持 SD 卡。要上传图片和创建多个相册，请插入 SD 卡并重启设备。",
   "This uses {n} rules, but the device supports at most 7. Remove a schedule or simplify the specific times.":
     "当前需要 {n} 条规则，设备最多支持 7 条。请删除一个计划或减少指定时间。",
-  "This will erase all images on internal storage. This action cannot be undone.":
-    "这将清除内部存储中的所有图片，且无法恢复。",
-  "This will erase all images on the SD card. This action cannot be undone.":
-    "这将清除 SD 卡上的所有图片，且无法恢复。",
   "This will overwrite your current settings with the imported config.":
     "导入的配置将覆盖当前设置。",
   "Throughout the day": "全天按间隔",
@@ -300,8 +287,6 @@ export default {
   "Unknown build": "未知版本",
   "Upcoming rotations": "接下来的轮播",
   "Updating display...": "正在刷新屏幕…",
-  Upload: "上传",
-  "Upload Image": "上传图片",
   "Use builder": "使用向导",
   "Use this browser's time zone ({zone})": "使用本浏览器的时区（{zone}）",
   "Used for mDNS hostname": "用作 mDNS 主机名",
@@ -319,7 +304,6 @@ export default {
   "WiFi Password": "Wi-Fi 密码",
   "WiFi SSID": "Wi-Fi 名称（SSID）",
   "WiFi credentials": "Wi-Fi 凭据",
-  "Wide edit — controls beside the preview": "宽屏编辑：参数放在预览旁边",
   "Your photo frame has gone to sleep to save power and is no longer responding. Press the":
     "相框已进入睡眠以节省电量，暂时无法响应。请按设备上的",
   "e.g., X-API-Key": "例如 X-API-Key",
@@ -331,8 +315,6 @@ export default {
   "on the device to wake it, then tap Try again.": "唤醒设备，然后点击“重试”。",
   "wake button": "唤醒按键",
   "← Original": "← 原图",
-  "✓ = Enabled for auto-rotation • Click album name to view images":
-    "✓ = 参与自动轮播 • 点击相册名查看图片",
   Battery: "电池",
   "Charging / external power": "充电 / 外接电源",
   "Battery sleep": "电池睡眠",
@@ -342,19 +324,12 @@ export default {
   "Power source": "供电",
   "Last decision": "最近判断",
   "Failed to save: ": "保存失败：",
-  "Image settings": "图片设置",
   "Show next image": "显示下一张",
   "System settings": "系统设置",
-  Slideshow: "自动轮播",
   "The frame is set to a remote image source (System settings → Experimental). The order below applies to local storage only.":
     "相框当前使用远程图源（系统设置 → 实验功能）。下面的顺序只对本地存储生效。",
-  "Upload defaults": "上传默认处理",
-  "Applied to every new photo; adjust a single photo while uploading":
-    "对每张新图片生效；单张图片在上传时再调整",
   "Unsaved changes": "有未保存的修改",
   "Saved as the default for new uploads": "已设为新上传图片的默认处理",
-  "Please configure an API Key in System settings > Experimental first.":
-    "请先在系统设置 → 实验功能中配置 API Key。",
   "Set as default": "设为默认",
   "Exports never include the device password: set it again under Device & network → Advanced network settings to require one.":
     "导出不含设备密码：如需密码，请在设备与网络 → 高级网络设置中重新设置。",
@@ -375,4 +350,74 @@ export default {
   "Keep editing": "继续编辑",
   Discard: "放弃",
   "Rescan networks": "重新扫描网络",
+  "Auto rotate is off": "自动轮播已关闭",
+  "In order": "按顺序",
+  "Random order": "随机顺序",
+  "{n} albums in the slideshow": "{n} 个相册参与轮播",
+  Albums: "相册",
+  "Include in the slideshow": "参与自动轮播",
+  "Tick an album to include it in the slideshow": "勾选相册即可让它参与自动轮播",
+  "Slideshow settings": "轮播设置",
+  "Add photos": "添加照片",
+  "Now showing": "现在显示",
+  "Just added": "刚添加的",
+  "Could not create the album. The name may already exist.": "无法创建相册，名称可能已存在。",
+  "Sent to the frame. The screen is refreshing.": "已发送到相框，屏幕正在刷新。",
+  "Adjust this photo": "调整这张照片",
+  "Show on frame only (not saved)": "仅在相框显示（不保存）",
+  Done: "完成",
+  "{n} files were not images and were skipped": "有 {n} 个文件不是图片，已跳过",
+  "Without a storage card only one photo can be shown at a time":
+    "没有存储卡时一次只能显示一张照片",
+  "Show on frame": "在相框显示",
+  "Add to album ({n})": "加入相册（{n}）",
+  "Retry failed ({n})": "重试失败项（{n}）",
+  "Lost contact with the frame. {done} added; the rest are still in the list.":
+    "与相框失去联系。已添加 {done} 张，其余仍在列表中。",
+  "Stopped. {done} added to {album}; {left} not sent.":
+    "已停止。{done} 张已加入「{album}」，{left} 张未发送。",
+  "{done} added to {album}; {failed} failed.": "{done} 张已加入「{album}」，{failed} 张失败。",
+  "{done} added to {album}.": "已添加 {done} 张到「{album}」。",
+  "Storage {used} / {total}": "存储 {used} / {total}",
+  "View album": "查看相册",
+  "Add more": "继续添加",
+  "No storage card: the photo is shown on the frame directly and not saved.":
+    "没有存储卡：照片会直接显示在相框上，不会保存。",
+  "Choose photos": "选择照片",
+  "Choose photos, or drop them here": "选择照片，或拖到这里",
+  "Pick as many as you like · JPG, PNG, HEIC, WebP, GIF, BMP":
+    "可一次选多张 · 支持 JPG、PNG、HEIC、WebP、GIF、BMP",
+  "JPG, PNG, HEIC, WebP, GIF, BMP": "支持 JPG、PNG、HEIC、WebP、GIF、BMP",
+  Remove: "移除",
+  "Put in album": "放进相册",
+  "Turn photos to fill the screen": "旋转照片以铺满屏幕",
+  "Uploading {done} / {total}": "正在上传 {done} / {total}",
+  "Stop after this photo": "完成当前这张后停止",
+  "Clear list": "清空列表",
+  FORMAT: "格式化",
+  Firmware: "固件",
+  Build: "构建",
+  Board: "开发板",
+  "Device ID": "设备 ID",
+  "Erases every photo and album on the card. This cannot be undone.":
+    "会清除存储卡上所有照片和相册，无法撤销。",
+  About: "关于",
+  "This will erase all {n} photos on the card and every album. It cannot be undone.":
+    "这会清除存储卡上的全部 {n} 张照片和所有相册，无法撤销。",
+  "Type {word} to confirm": "输入「{word}」以确认",
+  "This browser cannot read this image": "此浏览器无法读取这张图片",
+  "Cannot reach the frame. Check that it is on and on the same Wi-Fi.":
+    "连不上相框。请确认它已开机并在同一个 Wi-Fi 下。",
+  "The photo is too large for the frame (limit 5 MB after processing).":
+    "照片太大，相框放不下（处理后上限 5 MB）。",
+  "The frame does not accept this image format.": "相框不接受这种图片格式。",
+  "The frame is busy updating its screen. Try again in a moment.": "相框正在刷新屏幕，请稍后再试。",
+  "The frame's storage is full.": "相框的存储空间已满。",
+  "The frame asked for a password. Reload the page and sign in.":
+    "相框需要密码。请刷新页面并登录。",
+  "The frame could not save the photo (storage busy or write failed).":
+    "相框没能保存这张照片（存储忙或写入失败）。",
+  "Upload failed.": "上传失败。",
+  "Could not process this image.": "处理这张图片时出错。",
+  "Default album": "默认相册",
 };

@@ -56,3 +56,20 @@ export function rotateCanvas(source, deg, createCanvas = () => document.createEl
   ctx.drawImage(source, -source.width / 2, -source.height / 2);
   return out;
 }
+
+// Rotation a queued photo is auto-turned by at add time: toward the remembered
+// direction when it is clearly the opposite orientation of the frame, else 0.
+export function autoRotationFor(srcWidth, srcHeight, frameWidth, frameHeight, dir) {
+  return rotationSuggestion(srcWidth, srcHeight, frameWidth, frameHeight)
+    ? dir === "ccw"
+      ? 270
+      : 90
+    : 0;
+}
+
+// What a queued photo is actually turned by: the user's explicit choice wins;
+// otherwise the auto rotation, when auto-rotate is on.
+export function effectiveRotation(userRotation, autoRotation, autoOn) {
+  if (userRotation !== null && userRotation !== undefined) return normalizeDeg(userRotation);
+  return autoOn ? normalizeDeg(autoRotation || 0) : 0;
+}

@@ -1,15 +1,19 @@
 <script setup>
 import { t } from "../i18n";
-import { ref } from "vue";
-import { useAppStore, useSettingsStore } from "../stores";
+import { ref, computed } from "vue";
+import { useAppStore, useSettingsStore, useUploadsStore } from "../stores";
 import ImageSettings from "./ImageSettings.vue";
+import NewAlbumDialog from "./NewAlbumDialog.vue";
 import { imageSettingsOpen } from "../utils/uiPrefs";
+import { albumLabel } from "../utils/albums";
+import { scheduleSummary } from "../utils/slideshow";
+import { locale } from "../i18n";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
+const uploads = useUploadsStore();
 
 const newAlbumDialog = ref(false);
-const newAlbumName = ref("");
 const deleteAlbumDialog = ref(false);
 const albumToDelete = ref(null);
 const displayLoading = ref(false);
@@ -18,12 +22,8 @@ const imageToDisplay = ref(null);
 const deleteImageDialog = ref(false);
 const imageToDelete = ref(null);
 
-async function createAlbum() {
-  if (newAlbumName.value.trim()) {
-    await appStore.createAlbum(newAlbumName.value);
-    newAlbumName.value = "";
-    newAlbumDialog.value = false;
-  }
+function onAlbumCreated(name) {
+  appStore.selectAlbum(name);
 }
 
 function confirmDeleteAlbum(album) {
@@ -67,6 +67,28 @@ async function deleteImage() {
   }
 }
 
+// Thumbnails are frame-shaped, so tiles are too (no grey bands)
+const frameRatio = computed(() => {
+  const [w, h] = uploads.frameAspect.split(" / ").map(Number);
+  return w && h ? w / h : 16 / 9;
+});
+
+const enabledAlbumCount = computed(() => appStore.albums.filter((a) => a.enabled).length);
+
+// One line that says what the slideshow is doing without opening the settings
+const slideshowLine = computed(() => {
+  const d = settingsStore.deviceSettings;
+  if (!d.autoRotate) return t("Auto rotate is off");
+  const parts = [scheduleSummary(d.rotateCron, locale.value)];
+  parts.push(d.sdRotationMode === "sequential" ? t("In order") : t("Random order"));
+  parts.push(t("{n} albums in the slideshow", { n: enabledAlbumCount.value }));
+  return parts.join(" · ");
+});
+
+function albumCount(album) {
+  return Number.isFinite(album.image_count) ? album.image_count : null;
+}
+
 function getThumbnailUrl(image) {
   return `/api/image?filepath=${encodeURIComponent(image.album + "/" + image.thumbnail)}`;
 }
@@ -76,47 +98,17 @@ function getThumbnailUrl(image) {
   <v-card>
     <v-card-title class="d-flex align-center">
       <v-icon icon="mdi-image-multiple" class="mr-2" />
-      {{ t("Albums & Gallery") }}
+      {{ t("Albums") }}
+      <v-spacer />
+      <v-btn color="primary" size="small" variant="flat" @click="newAlbumDialog = true">
+        <v-icon icon="mdi-plus" start />
+        {{ t("New Album") }}
+      </v-btn>
     </v-card-title>
 
     <v-card-text>
-      <!-- Album List -->
-      <div class="d-flex align-center flex-wrap ga-2 mb-2">
-        <span class="album-hint text-body-2 text-grey">
-          {{ t("✓ = Enabled for auto-rotation • Click album name to view images") }}
-        </span>
-        <v-spacer />
-        <v-btn
-          variant="tonal"
-          size="small"
-          class="mr-2"
-          :color="imageSettingsOpen ? 'primary' : undefined"
-          :aria-expanded="imageSettingsOpen"
-          @click="imageSettingsOpen = !imageSettingsOpen"
-        >
-          <v-badge
-            dot
-            color="warning"
-            :model-value="settingsStore.imageDirty && !imageSettingsOpen"
-          >
-            <v-icon icon="mdi-tune-variant" start />
-          </v-badge>
-          {{ t("Image settings") }}
-          <v-icon :icon="imageSettingsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'" end />
-        </v-btn>
-        <v-btn color="primary" size="small" @click="newAlbumDialog = true">
-          <v-icon icon="mdi-plus" start />
-          {{ t("New Album") }}
-        </v-btn>
-      </div>
-
-      <v-expand-transition>
-        <div v-if="imageSettingsOpen" class="mb-4">
-          <ImageSettings />
-        </div>
-      </v-expand-transition>
-
-      <div class="d-flex align-center flex-wrap gap-2 mb-4">
+      <!-- Albums: tick = part of the slideshow -->
+      <div class="d-flex align-center flex-wrap ga-2">
         <div
           v-for="album in appStore.sortedAlbums"
           :key="album.name"
@@ -128,30 +120,69 @@ function getThumbnailUrl(image) {
             color="primary"
             hide-details
             density="compact"
+            :title="t('Include in the slideshow')"
+            :aria-label="t('Include in the slideshow')"
             @click.stop
             @update:model-value="appStore.toggleAlbumEnabled(album.name, $event)"
           />
           <span class="album-name" @click="appStore.selectAlbum(album.name)">
-            {{ album.name }}
+            {{ albumLabel(album.name) }}
+            <span v-if="albumCount(album) !== null" class="text-medium-emphasis">
+              {{ albumCount(album) }}
+            </span>
           </span>
           <v-btn
             v-if="album.name !== 'Default'"
             icon
             size="x-small"
             variant="text"
+            :aria-label="t('Delete Album?')"
             @click.stop="confirmDeleteAlbum(album)"
           >
             <v-icon size="small"> mdi-close </v-icon>
           </v-btn>
         </div>
       </div>
+      <div class="text-caption text-medium-emphasis mt-1">
+        {{ t("Tick an album to include it in the slideshow") }}
+      </div>
+
+      <!-- Slideshow: a summary that opens the settings -->
+      <div class="slideshow-row d-flex align-center flex-wrap ga-2 mt-4">
+        <v-icon icon="mdi-slideshow" size="small" class="text-medium-emphasis" />
+        <span class="text-body-2 slideshow-line">{{ slideshowLine }}</span>
+        <v-spacer />
+        <v-btn
+          variant="tonal"
+          size="small"
+          :color="imageSettingsOpen ? 'primary' : undefined"
+          :aria-expanded="imageSettingsOpen"
+          @click="imageSettingsOpen = !imageSettingsOpen"
+        >
+          <v-badge
+            dot
+            color="warning"
+            :model-value="settingsStore.imageDirty && !imageSettingsOpen"
+          >
+            <v-icon icon="mdi-tune-variant" start />
+          </v-badge>
+          {{ t("Slideshow settings") }}
+          <v-icon :icon="imageSettingsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'" end />
+        </v-btn>
+      </div>
+
+      <v-expand-transition>
+        <div v-if="imageSettingsOpen" class="mt-3">
+          <ImageSettings />
+        </div>
+      </v-expand-transition>
 
       <v-divider class="my-4" />
 
       <!-- Image Gallery -->
       <div class="d-flex align-center mb-4">
         <h3 class="text-h6">
-          {{ appStore.selectedAlbum }}
+          {{ albumLabel(appStore.selectedAlbum) }}
         </h3>
         <v-spacer />
         <v-progress-circular v-if="displayLoading" indeterminate size="24" class="mr-2" />
@@ -165,7 +196,7 @@ function getThumbnailUrl(image) {
       </div>
 
       <template v-else>
-        <v-row v-if="appStore.currentAlbumImages.length > 0">
+        <v-row v-if="appStore.currentAlbumImages.length > 0" dense>
           <v-col
             v-for="image in appStore.currentAlbumImages"
             :key="image.filename"
@@ -178,8 +209,8 @@ function getThumbnailUrl(image) {
               <v-img
                 :src="getThumbnailUrl(image)"
                 :alt="image.filename"
-                aspect-ratio="1"
-                contain
+                :aspect-ratio="frameRatio"
+                cover
                 class="cursor-pointer bg-grey-lighten-3"
                 @click="confirmDisplayImage(image)"
               >
@@ -211,25 +242,7 @@ function getThumbnailUrl(image) {
     </v-card-text>
   </v-card>
 
-  <!-- New Album Dialog -->
-  <v-dialog v-model="newAlbumDialog" max-width="400">
-    <v-card>
-      <v-card-title>{{ t("Create New Album") }}</v-card-title>
-      <v-card-text>
-        <v-text-field
-          v-model="newAlbumName"
-          :label="t('Album Name')"
-          autofocus
-          @keyup.enter="createAlbum"
-        />
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="newAlbumDialog = false"> {{ t("Cancel") }} </v-btn>
-        <v-btn color="primary" @click="createAlbum"> {{ t("Create") }} </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  <NewAlbumDialog v-model="newAlbumDialog" @created="onAlbumCreated" />
 
   <!-- Delete Album Dialog -->
   <v-dialog v-model="deleteAlbumDialog" max-width="400">
@@ -240,7 +253,7 @@ function getThumbnailUrl(image) {
           t(
             'Are you sure you want to delete "{name}"? This will also delete all images in the album.',
             {
-              name: albumToDelete?.name,
+              name: albumLabel(albumToDelete?.name),
             }
           )
         }}
@@ -307,9 +320,8 @@ function getThumbnailUrl(image) {
 </template>
 
 <style scoped>
-/* On narrow screens the hint takes its own row above the buttons. */
-.album-hint {
-  flex: 1 1 220px;
+.slideshow-line {
+  min-width: 0;
 }
 .album-chip {
   border: 1px solid rgba(0, 0, 0, 0.12);

@@ -4,6 +4,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import ToneCurve from "./ToneCurve.vue";
 import { useAppStore, useSettingsStore } from "../stores";
 import { rotateDir } from "../utils/uiPrefs";
+import { loadImageFromFile } from "../utils/imageLoad";
 import {
   fitWithin,
   sourceEdgeCap,
@@ -29,6 +30,12 @@ const props = defineProps({
   // in wide-edit mode). null keeps it inline below the preview.
   toneCurveTeleport: {
     type: String,
+    default: null,
+  },
+  // Starting point when re-opening a queued photo: {rotation, scaleMode,
+  // backgroundColor}. A custom pan/zoom is not restored (it starts centred).
+  initialEdit: {
+    type: Object,
     default: null,
   },
 });
@@ -318,7 +325,7 @@ async function loadAndProcessImage(file) {
   processing.value = true;
 
   try {
-    const img = await loadImage(file);
+    const img = await loadImageFromFile(file);
 
     // Cap the long edge: multi-megapixel phone photos are far more than the
     // panel needs and can exhaust canvas memory on mobile browsers.
@@ -334,16 +341,18 @@ async function loadAndProcessImage(file) {
     }
     baseCtx.drawImage(img, 0, 0, size.width, size.height);
 
-    rotation.value = 0;
-    hintDismissed.value = false;
+    rotation.value = normalizeDeg(props.initialEdit?.rotation ?? 0);
+    // A photo the queue already turned (or left alone on purpose) needs no hint
+    hintDismissed.value = props.initialEdit != null;
     applyRotation();
 
     // Default to the configured scale mode and background from the shared
     // processing params (the device settings, or the page-local params on
     // the landing-page demo); the user's per-image override below never
     // writes back to the config
-    scaleMode.value = props.params?.scaleMode || "cover";
-    bgColorMode.value = props.params?.backgroundColor || "white";
+    scaleMode.value = props.initialEdit?.scaleMode || props.params?.scaleMode || "cover";
+    bgColorMode.value =
+      props.initialEdit?.backgroundColor || props.params?.backgroundColor || "white";
 
     // Reinitialize custom mode if active
     if (scaleMode.value === "custom") {
@@ -446,22 +455,6 @@ async function updatePreview() {
   processedCtx.drawImage(result.canvas, 0, 0);
 
   emit("processed", result);
-}
-
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = (error) => {
-      URL.revokeObjectURL(url);
-      reject(error);
-    };
-    img.src = url;
-  });
 }
 
 // Rebuild the rotated source from the base image and refresh derived state.

@@ -56,3 +56,43 @@ watch(imageSettingsOpen, (value) => {
     // Not persisted; the choice still applies to this page.
   }
 });
+
+// Turn portrait photos to fill a landscape frame (and vice versa) automatically
+// when adding them; the user can still rotate any photo by hand.
+const AUTO_ROTATE_KEY = "photoframe.autoRotateFill";
+function loadBoolDefault(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "true";
+  } catch {
+    return fallback;
+  }
+}
+export const autoRotateFill = ref(loadBoolDefault(AUTO_ROTATE_KEY, true));
+
+watch(autoRotateFill, (value) => {
+  try {
+    localStorage.setItem(AUTO_ROTATE_KEY, value ? "true" : "false");
+  } catch {
+    // Not persisted; the choice still applies to this page.
+  }
+});
+
+// The album the last batch went to, so the next one defaults to it.
+const UPLOAD_ALBUM_KEY = "photoframe.uploadAlbum";
+function loadString(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+export const lastUploadAlbum = ref(loadString(UPLOAD_ALBUM_KEY, "Default"));
+
+watch(lastUploadAlbum, (value) => {
+  try {
+    localStorage.setItem(UPLOAD_ALBUM_KEY, value);
+  } catch {
+    // Not persisted; the choice still applies to this page.
+  }
+});

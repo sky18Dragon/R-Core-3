@@ -5,6 +5,8 @@ import {
   sourceEdgeCap,
   rotationSuggestion,
   rotateCanvas,
+  autoRotationFor,
+  effectiveRotation,
 } from "./imageGeometry";
 
 describe("normalizeDeg", () => {
@@ -93,5 +95,28 @@ describe("rotateCanvas", () => {
     expect(out.calls[1][0]).toBe("rotate");
     expect(out.calls[1][1]).toBeCloseTo(Math.PI / 2);
     expect(out.calls[2]).toEqual(["drawImage", -15, -10]);
+  });
+});
+
+describe("autoRotationFor", () => {
+  it("turns a mismatched photo toward the remembered direction", () => {
+    expect(autoRotationFor(3000, 4000, 800, 480, "cw")).toBe(90);
+    expect(autoRotationFor(3000, 4000, 800, 480, "ccw")).toBe(270);
+  });
+  it("leaves matching or square photos alone", () => {
+    expect(autoRotationFor(4000, 3000, 800, 480, "cw")).toBe(0);
+    expect(autoRotationFor(1000, 990, 800, 480, "cw")).toBe(0);
+  });
+});
+
+describe("effectiveRotation", () => {
+  it("prefers the user's choice, including an explicit 0", () => {
+    expect(effectiveRotation(180, 90, true)).toBe(180);
+    expect(effectiveRotation(0, 90, true)).toBe(0);
+  });
+  it("falls back to auto only when it is on", () => {
+    expect(effectiveRotation(null, 90, true)).toBe(90);
+    expect(effectiveRotation(undefined, 270, true)).toBe(270);
+    expect(effectiveRotation(null, 90, false)).toBe(0);
   });
 });
