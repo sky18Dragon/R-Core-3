@@ -20,6 +20,7 @@
 #define SLEEP_NVS_ENABLED "enabled"
 #define SLEEP_NVS_LOG "log"
 #define SLEEP_CHECK_PERIOD_MS 5000
+#define SLEEP_IDLE_CHECK_PERIOD_MS 60000  // sleep switched off: only refresh /api/power readings
 #define SLEEP_RETRY_AFTER_FAILURE_MS (5 * 60 * 1000)
 #define PMU_WAKE_REASON_ALARM 6
 
@@ -33,7 +34,8 @@ static int64_t s_next_check_ms;
 static read_pico_pmu_state_t s_state;
 static bool s_state_valid;
 static const char *s_last_decision = "not evaluated";
-static sleep_log_t s_log;  // written only from frame_sleep_boot/tick (one task each, never concurrent)
+static sleep_log_t s_log;  // guarded by s_log_lock; written by boot/tick, read by /api/power
+static portMUX_TYPE s_log_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static int64_t uptime_ms(void)
 {
@@ -56,11 +58,15 @@ static void log_load(void)
 // Persist before anything that may cut power, so the event survives it.
 static void log_event(sleep_event_kind_t kind, uint8_t detail, uint32_t arg, int battery_mv)
 {
+    static sleep_log_t snapshot;  // callers are serialized (boot, then the rotation task)
+    taskENTER_CRITICAL(&s_log_lock);
     sleep_log_push(&s_log, kind, detail, (uint32_t) (uptime_ms() / 1000), arg, battery_mv);
+    snapshot = s_log;
+    taskEXIT_CRITICAL(&s_log_lock);
     nvs_handle_t nvs;
     if (nvs_open(SLEEP_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK)
         return;
-    if (nvs_set_blob(nvs, SLEEP_NVS_LOG, &s_log, sizeof(s_log)) == ESP_OK)
+    if (nvs_set_blob(nvs, SLEEP_NVS_LOG, &snapshot, sizeof(snapshot)) == ESP_OK)
         nvs_commit(nvs);
     nvs_close(nvs);
 }
@@ -135,7 +141,7 @@ void frame_sleep_tick(int64_t now_ms)
 {
     if (now_ms < s_next_check_ms)
         return;
-    s_next_check_ms = now_ms + SLEEP_CHECK_PERIOD_MS;
+    s_next_check_ms = now_ms + (s_enabled ? SLEEP_CHECK_PERIOD_MS : SLEEP_IDLE_CHECK_PERIOD_MS);
     s_state_valid = read_pico_pmu_session_read(&s_state) == ESP_OK;
     if (!s_state_valid) {
         s_last_decision = "PMU state unreadable";
@@ -181,8 +187,10 @@ void frame_sleep_describe(cJSON *object)
     cJSON_AddBoolToObject(object, "host_ready", s_host_ready);
     cJSON_AddNumberToObject(object, "wake_reason", s_wake_reason);
     cJSON_AddStringToObject(object, "last_decision", s_last_decision);
-    sleep_log_entry_t entries[SLEEP_LOG_DEPTH];
+    static sleep_log_entry_t entries[SLEEP_LOG_DEPTH];  // HTTP handlers run on one task
+    taskENTER_CRITICAL(&s_log_lock);
     size_t n = sleep_log_copy(&s_log, entries, SLEEP_LOG_DEPTH);
+    taskEXIT_CRITICAL(&s_log_lock);
     cJSON *events = cJSON_AddArrayToObject(object, "events");
     for (size_t i = 0; events && i < n; ++i) {
         cJSON *item = cJSON_CreateObject();
