@@ -28,10 +28,6 @@
 #include "storage.h"
 #include "utils.h"
 #include "wifi_manager.h"
-#if CONFIG_READ_PICO_LOCAL_FRAME
-#include "read_pico_ota.h"
-#define OTA_HEALTHY_AFTER_US (60LL * 1000 * 1000)
-#endif
 #if CONFIG_READ_PICO_PMU_SLEEP
 #include "read_pico_frame_sleep.h"
 #endif
@@ -123,13 +119,6 @@ static void rotation_timer_task(void *arg)
         // Always-on frame: bring the station back after outages that outlast
         // the quick reconnect retries (router reboot), without a restart.
         wifi_manager_supervise(esp_timer_get_time() / 1000);
-        // Serving HTTP with background tasks running for a minute: confirm a
-        // freshly uploaded image so it stops counting as a trial boot.
-        static bool ota_confirmed;
-        if (!ota_confirmed && esp_timer_get_time() > OTA_HEALTHY_AFTER_US) {
-            read_pico_ota_mark_healthy();
-            ota_confirmed = true;
-        }
 #if CONFIG_READ_PICO_PMU_SLEEP
         // A timed PMU wake exists to show the next image: do it once, then
         // let the sleep decision take over.

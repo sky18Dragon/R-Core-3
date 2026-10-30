@@ -24,7 +24,7 @@ typedef struct {
     bool woke_by_alarm;
     int64_t uptime_ms;
     int64_t last_activity_ms;  // uptime of the last web/touch/upload activity, 0 if none
-    bool busy;                 // display refresh, upload, OTA in progress
+    bool busy;                 // display refresh or SD I/O in progress
     int64_t seconds_to_next;   // until the next scheduled rotation, < 0 when none
 } sleep_inputs_t;
 

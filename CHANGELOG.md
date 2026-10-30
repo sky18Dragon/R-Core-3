@@ -2,6 +2,10 @@
 
 只记录对使用者/开发者可见的阶段性变更；逐轮细节在 [验证记录](docs/VALIDATION.md) 与 [CHANGELOG全文](docs/history/2026-10-11/CHANGELOG-full.md)（2026-10-19前，来源SHA256 `459aa8af1b3fa16d0b70584e47fc847cdaee49743e46230001d74f15f0efc7e6`）。当前进度见 [TODO](TODO.md)。
 
+## 2026-10-30 · 移除 OTA
+
+- 按项目决定删除全部 OTA：上游 GitHub 发布检查/下载（`ota_manager`、`/api/ota/status|check|update`、网页固件更新卡片）、本地固件上传（`/api/ota/upload|local`、启动守卫、版本标记 `+rplf`）与 OTA 分区表。上游生成的分区表改为单一 factory 应用（存储偏移不变）。固件只经 USB 烧写更新。
+
 ## 2026-10-30 · 电池睡眠实机通过（睡眠变体）
 
 - 电池供电时按轮播间隔断电睡眠、闹钟唤醒换图、按键唤醒，接 USB 保持常亮，均已上板验证；增加睡眠超时保护与事件日志（`/api/power`）。功耗未测。

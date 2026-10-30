@@ -417,18 +417,28 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertIn('return guard.error;', config)
         self.assertIn('config_read_string(g, err, out, capacity, *size)', config)
 
-    def test_read_pico_ota_is_report_only_not_a_migration_shortcut(self):
-        source = (ROOT / "main/ota_manager.c").read_text()
-        start = source.index('#if CONFIG_BOARD_DRIVER_READ_PICO', source.index('esp_err_t ota_manager_init'))
-        guarded = source[start:source.index('#else', start)]
-        self.assertIn('ota_status.state = OTA_STATE_ERROR;', guarded)
-        self.assertIn('return ESP_OK;', guarded)
-        for unsafe in ('esp_https_ota_begin(', 'ota_load_status_from_nvs(', 'periodic_tasks_register(',
-                       'esp_ota_mark_app_valid_cancel_rollback(', 'xTaskCreate('):
-            self.assertNotIn(unsafe, guarded)
-        for function in ('ota_check_for_update', 'ota_start_update'):
-            start = source.index('#if CONFIG_BOARD_DRIVER_READ_PICO', source.index('esp_err_t ' + function))
-            self.assertIn('return ESP_ERR_NOT_SUPPORTED;', source[start:source.index('#else', start)])
+    def test_ota_is_removed_from_firmware_web_and_partition_tables(self):
+        for gone in ('main/ota_manager.c', 'main/ota_manager.h', 'main/read_pico_ota.c', 'main/ota_local.c',
+                     'boards/partitions.read_pico_ota.csv', 'webapp/src/components/OtaUpdate.vue'):
+            self.assertFalse((ROOT / gone).exists(), gone)
+        cmake = (ROOT / 'main/CMakeLists.txt').read_text()
+        for unsafe in ('ota_manager.c', 'esp_https_ota', 'app_update'):
+            self.assertNotIn(unsafe, cmake)
+        self.assertNotIn('/api/ota', (ROOT / 'main/http_server.c').read_text())
+        self.assertNotIn('ota_', (ROOT / 'main/main.c').read_text())
+        spec = importlib.util.spec_from_file_location("generate_partitions", ROOT / "scripts/generate_partitions.py")
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        for internal, size_mb in ((False, 16), (False, 8), (True, 8), (True, 16), (True, 32)):
+            with self.subTest(internal=internal, size_mb=size_mb):
+                with patch.object(generator.sys, "stderr"):
+                    rows = [[f.strip() for f in line.split(",")[:5]]
+                            for line in generator.generate_csv(internal, size_mb).splitlines()
+                            if line.strip() and not line.startswith("#")]
+                self.assertEqual([r[1:3] for r in rows if r[1] == "app"], [["app", "factory"]])
+                self.assertNotIn("ota", [r[2] for r in rows])
+                end = max(int(r[3], 16) + int(r[4], 16) for r in rows)
+                self.assertLessEqual(end, size_mb * 1024 * 1024)
         entry = (ROOT / 'main/read_pico_integration_entry.c').read_text()
         entry = entry.split('#else', 1)[1]
         self.assertNotIn('product_entry();', entry)
@@ -675,11 +685,6 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/power", "HTTP_GET"),  # CONFIG_READ_PICO_PMU_SLEEP only
             ("/api/power", "HTTP_POST"),
             ("/api/time/sync", "HTTP_POST"),
-            ("/api/ota/status", "HTTP_GET"),
-            ("/api/ota/check", "HTTP_POST"),
-            ("/api/ota/update", "HTTP_POST"),
-            ("/api/ota/upload", "HTTP_POST"),  # CONFIG_READ_PICO_LOCAL_FRAME only
-            ("/api/ota/local", "HTTP_GET"),
             ("/api/keep_alive", "HTTP_POST"),
             ("/api/format-storage", "HTTP_POST"),
             ("/api/display-image", "HTTP_POST"),
@@ -1062,24 +1067,6 @@ class ReadPicoBuildTests(unittest.TestCase):
             ["factory", "app", "factory", "0x10000", "0x400000"],
             ["storage", "data", "fat", "0x410000", "0x500000"],
         ])
-
-    def test_ota_partition_table_appends_without_moving_factory_layout(self):
-        def rows(name):
-            lines = (ROOT / name).read_text().splitlines()
-            return [[field.strip() for field in line.split(",")[:5]]
-                    for line in lines if line.strip() and not line.startswith("#")]
-        factory, ota = rows("boards/partitions.read_pico_factory.csv"), rows("boards/partitions.read_pico_ota.csv")
-        self.assertEqual(ota[:len(factory)], factory)
-        self.assertEqual([r[:3] for r in ota[len(factory):]], [
-            ["otadata", "data", "ota"], ["ota_0", "app", "ota_0"], ["ota_1", "app", "ota_1"]])
-        end = 0
-        for name, _, _, offset, size in ota:
-            start = int(offset, 16)
-            self.assertGreaterEqual(start, end, name)
-            end = start + int(size, 16)
-        self.assertLessEqual(end, 16 * 1024 * 1024)
-        defaults = (ROOT / "boards/sdkconfig.defaults.read_pico_local_frame").read_text()
-        self.assertIn('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/partitions.read_pico_ota.csv"', defaults)
 
     def test_display_validation_requires_factory_and_firmware_only(self):
         for arguments in ([], ["--board", "read_pico", "--step", "firmware"],

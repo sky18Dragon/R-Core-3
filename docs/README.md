@@ -47,7 +47,7 @@
 
 | 文件 | 何时看 |
 | --- | --- |
-| [READ-PICO-MIGRATION](READ-PICO-MIGRATION.md) | 部署前确认分区冲突；OTA/旧配置迁移 |
+| [READ-PICO-MIGRATION](READ-PICO-MIGRATION.md) | 部署前确认分区冲突；旧配置迁移（OTA 已移除） |
 | [READ-PICO-REMOTE-CONFIG](READ-PICO-REMOTE-CONFIG.md) | 重新启用远程配置时（R1拒绝该入口） |
 | [READ-PICO-SNTP](READ-PICO-SNTP.md) | 修改时间同步时 |
 | [READ-PICO-PHOTO-VALIDATION](READ-PICO-PHOTO-VALIDATION.md) | 修改单张照片诊断profile时 |

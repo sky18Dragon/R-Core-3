@@ -10,7 +10,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "ota_manager.h"
 #include "utils.h"
 
 static const char *TAG = "ha_integration";

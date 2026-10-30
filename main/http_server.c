@@ -34,7 +34,6 @@
 #include "image_processor.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
-#include "ota_manager.h"
 #include "periodic_tasks.h"
 #include "power_manager.h"
 #include "processing_settings.h"
@@ -51,9 +50,6 @@
 #endif
 #if CONFIG_READ_PICO_TOUCH
 #include "read_pico_touch_nav.h"
-#endif
-#if CONFIG_READ_PICO_LOCAL_FRAME
-#include "read_pico_ota.h"
 #endif
 #if CONFIG_READ_PICO_PMU_SLEEP
 #include "read_pico_frame_sleep.h"
@@ -2611,116 +2607,6 @@ static esp_err_t system_info_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t ota_status_handler(httpd_req_t *req)
-{
-    ota_status_t status;
-    ota_get_status(&status);
-
-    cJSON *response = cJSON_CreateObject();
-
-    // Add state as string
-    const char *state_str = "idle";
-    switch (status.state) {
-    case OTA_STATE_IDLE:
-        state_str = "idle";
-        break;
-    case OTA_STATE_CHECKING:
-        state_str = "checking";
-        break;
-    case OTA_STATE_UPDATE_AVAILABLE:
-        state_str = "update_available";
-        break;
-    case OTA_STATE_DOWNLOADING:
-        state_str = "downloading";
-        break;
-    case OTA_STATE_INSTALLING:
-        state_str = "installing";
-        break;
-    case OTA_STATE_SUCCESS:
-        state_str = "success";
-        break;
-    case OTA_STATE_ERROR:
-        state_str = "error";
-        break;
-    }
-
-    cJSON_AddStringToObject(response, "state", state_str);
-    cJSON_AddStringToObject(response, "current_version", status.current_version);
-    cJSON_AddStringToObject(response, "latest_version", status.latest_version);
-    cJSON_AddNumberToObject(response, "progress_percent", status.progress_percent);
-
-    if (status.error_message[0] != '\0') {
-        cJSON_AddStringToObject(response, "error_message", status.error_message);
-    }
-
-    char *json_str = cJSON_Print(response);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_str);
-
-    free(json_str);
-    cJSON_Delete(response);
-    return ESP_OK;
-}
-
-static esp_err_t ota_check_handler(httpd_req_t *req)
-{
-    if (req->method == HTTP_POST) {
-        bool update_available = false;
-        esp_err_t err = ota_check_for_update(&update_available, 30);
-
-        cJSON *response = cJSON_CreateObject();
-        if (err == ESP_OK) {
-            cJSON_AddBoolToObject(response, "update_available", update_available);
-            cJSON_AddStringToObject(response, "status", "success");
-        } else {
-            cJSON_AddStringToObject(response, "status", "error");
-            cJSON_AddStringToObject(response, "message", "Failed to check for updates");
-        }
-
-        char *json_str = cJSON_Print(response);
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, json_str);
-
-        free(json_str);
-        cJSON_Delete(response);
-        return ESP_OK;
-    }
-
-    httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
-    return ESP_FAIL;
-}
-
-static esp_err_t ota_update_handler(httpd_req_t *req)
-{
-    if (req->method == HTTP_POST) {
-        esp_err_t err = ota_start_update();
-
-        cJSON *response = cJSON_CreateObject();
-        if (err == ESP_OK) {
-            cJSON_AddStringToObject(response, "status", "success");
-            cJSON_AddStringToObject(response, "message", "OTA update started");
-        } else if (err == ESP_ERR_INVALID_STATE) {
-            cJSON_AddStringToObject(response, "status", "error");
-            cJSON_AddStringToObject(response, "message",
-                                    "No update available or update already in progress");
-        } else {
-            cJSON_AddStringToObject(response, "status", "error");
-            cJSON_AddStringToObject(response, "message", "Failed to start OTA update");
-        }
-
-        char *json_str = cJSON_Print(response);
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, json_str);
-
-        free(json_str);
-        cJSON_Delete(response);
-        return ESP_OK;
-    }
-
-    httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
-    return ESP_FAIL;
-}
-
 static esp_err_t keep_alive_handler(httpd_req_t *req)
 {
     if (!http_requests_ready(req)) {
@@ -3037,35 +2923,6 @@ static esp_err_t touch_status_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     read_pico_touch_nav_describe(response);
-    char *json_str = cJSON_PrintUnformatted(response);
-    cJSON_Delete(response);
-    if (!json_str) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
-        return ESP_FAIL;
-    }
-    httpd_resp_set_type(req, "application/json");
-    esp_err_t err = httpd_resp_sendstr(req, json_str);
-    free(json_str);
-    return err;
-}
-#endif
-
-#if CONFIG_READ_PICO_LOCAL_FRAME
-// Local OTA: raw firmware image body; the response is sent before restart.
-static esp_err_t ota_upload_handler(httpd_req_t *req)
-{
-    power_manager_reset_sleep_timer();
-    return read_pico_ota_receive(req);
-}
-
-static esp_err_t ota_local_status_handler(httpd_req_t *req)
-{
-    cJSON *response = cJSON_CreateObject();
-    if (!response) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
-        return ESP_FAIL;
-    }
-    read_pico_ota_describe(response);
     char *json_str = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
     if (!json_str) {
@@ -3448,16 +3305,6 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
 #endif
 
         HTTP_REGISTER("/api/time/sync", HTTP_POST, time_sync_handler);
-
-        HTTP_REGISTER("/api/ota/status", HTTP_GET, ota_status_handler);
-
-        HTTP_REGISTER("/api/ota/check", HTTP_POST, ota_check_handler);
-
-        HTTP_REGISTER("/api/ota/update", HTTP_POST, ota_update_handler);
-#if CONFIG_READ_PICO_LOCAL_FRAME
-        HTTP_REGISTER("/api/ota/upload", HTTP_POST, ota_upload_handler);
-        HTTP_REGISTER("/api/ota/local", HTTP_GET, ota_local_status_handler);
-#endif
 
         HTTP_REGISTER("/api/keep_alive", HTTP_POST, keep_alive_handler);
 

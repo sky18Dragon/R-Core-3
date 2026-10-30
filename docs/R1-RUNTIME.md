@@ -15,7 +15,7 @@
 | 7 | `image_processor_init` | `ESP_ERROR_CHECK` | 保留 |
 | 8 | `display_manager_init` + `read_pico_epaper_prepare_local_frame`（init → 清白一次 → 软件白参考） | 清理后返回，**不启动 Web 与轮播** | R1 新增；软件参考不是目视证据，见下 |
 | 9 | `processing_settings_init`、`color_palette_init`、`power_manager_init` | 返回/abort | 睡眠由 `config_manager_get_deep_sleep_enabled()` 固定 false；轮播定时任务在此创建 |
-| 10 | `ota_manager_init`、`album_manager_init` | 返回 | OTA 在 Read Pico 返回 NOT_SUPPORTED，不检查更新 |
+| 10 | `album_manager_init` | 返回 | （OTA 已从项目移除，无更新检查） |
 | 11 | 唤醒源分支 | 冷启动走默认继续 | 睡眠/定时唤醒路径在 R1 不可达（睡眠禁用） |
 | 12 | `wifi_manager_init`、`wifi_provisioning_init`、凭据 | 返回 | 无凭据：读 SD `wifi.txt` 导入或开设备 AP 配网，保存后重启 |
 | 13 | `connect_to_wifi` | 成功：继续；超时：`late_wifi_task` 后台等待；失败：AP 重配网（凭据保留） | 保留 |

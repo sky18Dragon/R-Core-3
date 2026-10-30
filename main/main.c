@@ -37,7 +37,6 @@
 #include "memfs.h"
 #include "nvs_bootstrap.h"
 #include "nvs_flash.h"
-#include "ota_manager.h"
 #include "periodic_tasks.h"
 #include "power_manager.h"
 #include "processing_settings.h"
@@ -49,7 +48,6 @@
 #include "read_pico_epaper.h"
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "upload_sweep.h"
-#include "read_pico_ota.h"
 #define UPLOAD_SWEEP_MAX_PER_BOOT 64
 #endif
 #if CONFIG_READ_PICO_PMU_SLEEP
@@ -330,16 +328,6 @@ static void startup_online_work(void)
     ESP_LOGI(TAG, "Sending online notification to Home Assistant");
     ha_notify_online(NULL);
 
-#if CONFIG_READ_PICO_LOCAL_FRAME
-    // OTA is unsupported on this board and outside R1: no delayed check.
-    return;
-#endif
-    // Delay OTA check to avoid competing with boot-time network activity
-    vTaskDelay(pdMS_TO_TICKS(10000));
-#if CONFIG_BOARD_DRIVER_READ_PICO
-    if (!read_pico_background_running() || !http_server_is_ready()) return;
-#endif
-    ota_check_for_update(NULL, 0);
 }
 
 // Interactive boot whose connect timed out (see app_main): wait for the
@@ -612,7 +600,7 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
     if (wifi_connected) {
         power_manager_reset_sleep_timer();
 
-        // Check and run periodic tasks (OTA check, SNTP sync if due). When SNTP
+        // Check and run periodic tasks (SNTP sync if due). When SNTP
         // actually corrects the clock it logs a "Wall-clock (SNTP sync)" line —
         // the trustworthy anchor on RTC-less boards.
         ESP_LOGI(TAG, "Checking periodic tasks...");
@@ -754,10 +742,6 @@ void app_main(void)
                  esp_err_to_name(nvs_start));
         return;
     }
-#if CONFIG_READ_PICO_LOCAL_FRAME
-    // First thing after NVS: count/limit trial boots of a newly uploaded image.
-    read_pico_ota_boot_guard();
-#endif
     esp_err_t config_start = config_manager_init();
     if (config_start != ESP_OK) {
         ESP_LOGE(TAG, "Config load refused (%s); no board/storage/display/network startup "
@@ -975,8 +959,7 @@ void app_main(void)
 #endif
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
-    esp_err_t metadata_start = ota_manager_init();
-    if (metadata_start == ESP_OK) metadata_start = album_manager_init();
+    esp_err_t metadata_start = album_manager_init();
     if (metadata_start != ESP_OK) {
         ESP_LOGE(TAG, "Post-power initialization failed (%s); background remains gated",
                  esp_err_to_name(metadata_start));
@@ -994,7 +977,6 @@ void app_main(void)
     }
 #endif
 #else
-    ESP_ERROR_CHECK(ota_manager_init());
     ESP_ERROR_CHECK(album_manager_init());
 #endif
 
@@ -1193,7 +1175,7 @@ void app_main(void)
     if (credentials_failed) return; // Read errors are not AP rejections or absent configuration.
 #endif
     if (wifi_err == ESP_OK) {
-        // Check and run periodic tasks (OTA check, SNTP sync if due)
+        // Check and run periodic tasks (SNTP sync if due)
         // Note: If RTC was invalid at boot, sntp_sync was already forced via
         // periodic_tasks_force_run()
         ESP_LOGI(TAG, "Checking periodic tasks...");

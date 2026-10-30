@@ -10,7 +10,6 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "power_manager.h"
-#include "read_pico_ota.h"
 #include "read_pico_pmu_session.h"
 #include "read_pico_sd.h"
 #include "sleep_log.h"
@@ -155,7 +154,7 @@ void frame_sleep_tick(int64_t now_ms)
         .woke_by_alarm = s_woke_by_alarm,
         .uptime_ms = now_ms,
         .last_activity_ms = atomic_load(&s_last_activity_ms),
-        .busy = display_manager_is_busy() || sd_busy || read_pico_ota_busy(),
+        .busy = display_manager_is_busy() || sd_busy,
         .seconds_to_next = power_manager_seconds_to_next_rotation(),
     };
     sleep_decision_t decision = sleep_decide(&in);

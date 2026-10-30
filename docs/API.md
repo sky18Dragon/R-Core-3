@@ -455,32 +455,6 @@ Enter deep sleep immediately.
 
 ---
 
-## OTA Updates
-
-### `GET /api/ota/status`
-
-Get OTA update status.
-
-**Response:**
-```json
-{
-  "status": "idle",
-  "current_version": "2.7.0",
-  "latest_version": "2.7.0",
-  "update_available": false
-}
-```
-
-### `POST /api/ota/check`
-
-Check for firmware updates.
-
-### `POST /api/ota/update`
-
-Start firmware update. Device reboots after completion.
-
----
-
 ## Storage Management
 
 ### `POST /api/format-storage`

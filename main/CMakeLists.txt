@@ -65,7 +65,6 @@ set(SOURCES
     "mdns_service.c"
     "network_backoff.c"
     "nvs_bootstrap.c"
-    "ota_manager.c"
     "periodic_tasks.c"
     "png_decoder.c"
     "power_manager.c"
@@ -97,13 +96,10 @@ if(CONFIG_BOARD_DRIVER_READ_PICO)
     list(APPEND SOURCES "jpeg_metadata.c" "jpeg_stream_probe.c" "jpeg_buffered_source.c"
                         "upload_stream.c" "upload_file.c" "read_pico_upload.c" "upload_asset.c"
                         "download_file.c" "upload_copy.c" "config_read.c" "wifi_text.c"
-                        "provisioning_session.c" "provisioning_apply.c" "wifi_link.c" "wifi_watch.c" "wifi_network.c" "touch_gesture.c" "image_history.c" "upload_sweep.c" "ota_local.c" "sleep_policy.c" "sleep_log.c"
+                        "provisioning_session.c" "provisioning_apply.c" "wifi_link.c" "wifi_watch.c" "wifi_network.c" "touch_gesture.c" "image_history.c" "upload_sweep.c" "sleep_policy.c" "sleep_log.c"
                         "wifi_provisioning_ap.c" "read_pico_http_service.c" "read_pico_background.c")
     if(CONFIG_READ_PICO_TOUCH)
         list(APPEND SOURCES "read_pico_touch_nav.c")
-    endif()
-    if(CONFIG_READ_PICO_LOCAL_FRAME)
-        list(APPEND SOURCES "read_pico_ota.c")
     endif()
     if(CONFIG_READ_PICO_PMU_SLEEP)
         list(APPEND SOURCES "read_pico_frame_sleep.c")
@@ -111,7 +107,6 @@ if(CONFIG_BOARD_DRIVER_READ_PICO)
 endif()
 
 set(PRIV_REQUIRES
-    app_update
     board_hal
     espressif__qrcode
     epaper
@@ -129,7 +124,6 @@ set(PRIV_REQUIRES
     esp_http_client
     http_parser
     esp_http_server
-    esp_https_ota
     esp-tls
     esp_netif
     esp_timer

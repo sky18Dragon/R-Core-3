@@ -12,7 +12,7 @@
 
 | 层 | 职责 | 改动方向 |
 | --- | --- | --- |
-| PhotoFrame 产品层 | Web、相册、REST、Wi-Fi、配置、轮播、OTA | 复用，仅做必要兼容修正 |
+| PhotoFrame 产品层 | Web、相册、REST、Wi-Fi、配置、轮播（OTA 已移除） | 复用，仅做必要兼容修正 |
 | 图像层 | 解码、方向、缩放/裁切、灰阶和标准 framebuffer | 先验证已有处理，后优化大图与缓存 |
 | Board HAL | 初始化、电池/充电、共享资源、睡眠能力 | 新增 Read Pico 实现 |
 | 显示后端 | `epaper_*` 契约到裸屏时序/波形 | 独立 Read Pico 后端 |
@@ -61,7 +61,7 @@ CW32 PMU可以切断ESP EN。HAL须区分ESP原生睡眠和外部PMU控制；存
 
 固定ESP-IDF v6.1与厂家gitlink，原板保留回归；诊断80MHz与产品120MHz/HPM分开验证。完整integration profile只保留真实main/Web/相册/处理/轮播链接，不调用产品启动；独立只读/显示/SD/照片profile各有明确IO边界。
 
-本机factory布局与上游OTA默认布局冲突，现有app-only诊断不能推导为完整迁移许可。Read Pico OTA暂返回不可用；分区、数据保留、镜像身份与恢复/回滚先制定具体方案。详见 [集成](READ-PICO-INTEGRATION.md)、[迁移](READ-PICO-MIGRATION.md)、[部署](DEPLOYMENT.md)。
+OTA 已从项目移除（2026-10-30），固件只经 USB app-only 烧写；本机保持已核验 factory 布局，任何分区变更需单独方案。详见 [集成](READ-PICO-INTEGRATION.md)、[迁移](READ-PICO-MIGRATION.md)、[部署](DEPLOYMENT.md)。
 
 ## GR 后续接入
 

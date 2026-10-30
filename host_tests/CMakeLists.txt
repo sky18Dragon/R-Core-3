@@ -205,12 +205,6 @@ if(READ_PICO_TEST_IDF_PATH)
 endif()
 gtest_discover_tests(read_pico_settings_save_test)
 
-add_executable(read_pico_ota_gate_test test_read_pico_ota_gate.cpp ../main/ota_manager.c)
-target_compile_definitions(read_pico_ota_gate_test PRIVATE CONFIG_BOARD_DRIVER_READ_PICO=1)
-target_include_directories(read_pico_ota_gate_test PRIVATE config_load_stubs display_checked_stubs stubs ../main)
-target_link_libraries(read_pico_ota_gate_test GTest::gtest_main)
-gtest_discover_tests(read_pico_ota_gate_test)
-
 foreach(config_profile IN ITEMS read_pico legacy local_frame)
   add_executable(${config_profile}_config_load_test test_config_load.cpp
     ../main/config_manager.c ../main/config_read.c ../main/cron.c
@@ -238,11 +232,6 @@ add_executable(upload_sweep_test test_upload_sweep.cpp ../main/upload_sweep.c)
 target_include_directories(upload_sweep_test PRIVATE ../main)
 target_link_libraries(upload_sweep_test GTest::gtest_main)
 gtest_discover_tests(upload_sweep_test)
-
-add_executable(ota_local_test test_ota_local.cpp ../main/ota_local.c)
-target_include_directories(ota_local_test PRIVATE ../main)
-target_link_libraries(ota_local_test GTest::gtest_main)
-gtest_discover_tests(ota_local_test)
 
 add_executable(touch_gesture_test test_touch_gesture.cpp ../main/touch_gesture.c)
 target_include_directories(touch_gesture_test PRIVATE ../main)

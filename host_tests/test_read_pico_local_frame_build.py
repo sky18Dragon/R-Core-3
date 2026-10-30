@@ -58,9 +58,8 @@ class LocalFrameBuildTests(unittest.TestCase):
         self.assertEqual(hits, 2)  # boot path and late-WiFi path (wake path is unreachable in R1)
         online = main[main.index("static void startup_online_work(void)"):]
         online = online[:online.index("static void late_wifi_task")]
-        guard = online.index("#if CONFIG_READ_PICO_LOCAL_FRAME\n    // OTA is unsupported")
-        self.assertLess(guard, online.index("vTaskDelay(pdMS_TO_TICKS(10000))"))
-        self.assertLess(guard, online.index("ota_check_for_update(NULL, 0)"))
+        self.assertNotIn("ota_check_for_update", online)  # OTA removed from the project
+        self.assertNotIn("vTaskDelay(pdMS_TO_TICKS(10000))", online)
 
     def test_card_diagnostic_is_read_only_and_local_frame_only(self):
         source = (ROOT / "components/sdcard/src/sdcard_sdio.c").read_text()

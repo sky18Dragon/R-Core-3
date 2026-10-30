@@ -4,7 +4,7 @@
 
 ## 部署状态与入口
 
-完整Read Pico产品、OTA和PMU睡眠仍未开放。集成profile保留真实PhotoFrame链接但不调用产品启动；仅编译通过的镜像不能作为可运行产品发布。只读factory、显示、SD、照片和集成profile的应用/配置互相独立，原板镜像与默认双OTA布局不能直接烧入本机。
+完整Read Pico产品与PMU睡眠（可选睡眠变体除外）仍未开放；OTA已移除。集成profile保留真实PhotoFrame链接但不调用产品启动；仅编译通过的镜像不能作为可运行产品发布。只读factory、显示、SD、照片和集成profile的应用/配置互相独立，原板镜像与默认双OTA布局不能直接烧入本机。
 
 最后已知设备部署为2026-10-07的SD合成发布诊断，之后的软件复验未操作设备。实际部署前重新核对设备与候选；屏幕残留照片、旧STOPPED记录或本机bin都不是实时设备状态。
 
@@ -33,8 +33,6 @@
 
 SD诊断开机不挂载，命令按profile白名单执行；限定文件独占新建，不覆盖/删除原片，file-check只读核对已保留文件。正常关闭/卸载后才人工插拔；关闭失败保留锁存，不按旧路径重建/修复文件。具体契约见 [存储](READ-PICO-STORAGE.md)、[照片诊断](READ-PICO-PHOTO-VALIDATION.md)。
 
-## 分区与 OTA 迁移
+## 分区
 
-上游默认NVS/PHY/otadata/coredump/OTA布局与本机factory/FAT存在重叠。迁移前形成可审查方案，明确保留数据、备份/恢复、擦除范围、板型/镜像身份、boot选择与失败回滚，再按批准范围验收。
-
-Read Pico OTA检查/升级当前返回NOT_SUPPORTED；没有otadata/OTA槽及已验证回滚方案时不确认新镜像有效。完整审查与重新开放条件见 [迁移说明](READ-PICO-MIGRATION.md)。
+2026-10-30 按项目决定移除 OTA（含上游 GitHub 发布更新、本地固件上传、OTA 分区表），固件只通过 USB 烧写更新。本机保持已核验 factory 表，只做 app-only 烧写；分区表变更需要单独方案与批准，见 [迁移说明](READ-PICO-MIGRATION.md)。
