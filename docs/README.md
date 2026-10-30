@@ -32,6 +32,7 @@
 | [READ-PICO-STORAGE](READ-PICO-STORAGE.md) | SD单一挂载、卡检测、退出租约 |
 | [READ-PICO-UPLOAD](READ-PICO-UPLOAD.md) | HTTP上传接收、FAT非覆盖发布 |
 | [READ-PICO-PHOTO](READ-PICO-PHOTO.md) | 原片边界、JPEG方向/Cover/灰阶链路 |
+| [R2-STATUS](R2-STATUS.md) | R2 功能、构建变体、实机验证结论与已知限制（OTA 已移除） |
 | [R1-RELEASE](R1-RELEASE.md) | R1 交付说明：固件身份、构建与只写应用部署、网页使用、已验证范围与已知限制 |
 | [R1-RUNTIME](R1-RUNTIME.md) | R1本地相框启动顺序、范围外入口处置、已知限制 |
 | [READ-PICO-INTEGRATION](READ-PICO-INTEGRATION.md) | 完整PhotoFrame编译链接、NVS/存储/路径保护、运行门禁 |
