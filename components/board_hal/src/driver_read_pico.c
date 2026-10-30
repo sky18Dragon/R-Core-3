@@ -20,6 +20,28 @@ static bool snapshot_valid;
 static StaticSemaphore_t mutex_storage;
 static SemaphoreHandle_t mutex;
 static bool display_claimed;
+static bool storage_claimed;
+
+static bool bus_access(void)
+{
+    return mutex != NULL && xSemaphoreGetMutexHolder(mutex) == xTaskGetCurrentTaskHandle();
+}
+
+esp_err_t read_pico_board_storage_claim(void)
+{
+    if (!bus_access() || bus == NULL || ioe == NULL || storage_claimed)
+        return ESP_ERR_INVALID_STATE;
+    storage_claimed = true;
+    return ESP_OK;
+}
+
+esp_err_t read_pico_board_storage_release(void)
+{
+    if (!bus_access() || !storage_claimed)
+        return ESP_ERR_INVALID_STATE;
+    storage_claimed = false;
+    return ESP_OK;
+}
 
 esp_err_t read_pico_board_lock(uint32_t timeout_ms)
 {
@@ -54,6 +76,31 @@ esp_err_t read_pico_board_display_claim(i2c_master_bus_handle_t *out)
     return ESP_OK;
 }
 
+esp_err_t read_pico_board_i2c_bus(i2c_master_bus_handle_t *out)
+{
+    if (out == NULL)
+        return ESP_ERR_INVALID_ARG;
+    *out = NULL;
+    // The display keeps its lease for its whole lifetime; holding the board
+    // lock is what excludes a refresh, so the lease is not checked here.
+    if (!bus_access() || bus == NULL)
+        return ESP_ERR_INVALID_STATE;
+    *out = bus;
+    return ESP_OK;
+}
+
+// PMU device for the opt-in sleep session; caller holds the board lock.
+esp_err_t read_pico_board_pmu_device(i2c_master_dev_handle_t *out)
+{
+    if (out == NULL)
+        return ESP_ERR_INVALID_ARG;
+    *out = NULL;
+    if (!bus_access() || pmu == NULL)
+        return ESP_ERR_INVALID_STATE;
+    *out = pmu;
+    return ESP_OK;
+}
+
 esp_err_t read_pico_board_display_release(void)
 {
     if (!display_access())
@@ -65,6 +112,30 @@ esp_err_t read_pico_board_display_release(void)
 static esp_err_t read_reg(i2c_master_dev_handle_t device, uint8_t reg, uint8_t *data, size_t len)
 {
     return i2c_master_transmit_receive(device, &reg, 1, data, len, 100);
+}
+
+esp_err_t read_pico_board_sd_present(bool *present)
+{
+    if (present == NULL)
+        return ESP_ERR_INVALID_ARG;
+    *present = false;
+    esp_err_t err = read_pico_board_lock(100);
+    if (err != ESP_OK)
+        return err;
+    uint8_t config = 0, input = 0xff;
+    if (bus == NULL || ioe == NULL)
+        err = ESP_ERR_INVALID_STATE;
+    else
+        err = read_reg(ioe, 6, &config, 1);
+    // Refuse a repurposed CD pin rather than trusting its output latch.
+    if (err == ESP_OK && (config & 0x40) == 0)
+        err = ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK)
+        err = read_reg(ioe, 0, &input, 1);
+    if (err == ESP_OK)
+        *present = (input & 0x40) == 0;
+    read_pico_board_unlock();
+    return err;
 }
 
 static esp_err_t add_device(uint16_t address, i2c_master_dev_handle_t *device)
@@ -79,7 +150,7 @@ static esp_err_t add_device(uint16_t address, i2c_master_dev_handle_t *device)
 
 static esp_err_t deinit_locked(void)
 {
-    if (display_claimed)
+    if (display_claimed || storage_claimed)
         return ESP_ERR_INVALID_STATE;
     snapshot_valid = false;
     memset(&snapshot, 0, sizeof(snapshot));

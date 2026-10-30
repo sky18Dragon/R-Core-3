@@ -28,6 +28,17 @@ typedef enum {
     SCALE_MODE_FIT = 1,
 } scale_mode_t;
 
+typedef struct {
+    dither_algorithm_t dither_algorithm;
+    scale_mode_t scale_mode;
+    char background_color[12];
+} processing_options_t;
+
+// Read Pico: one owned read under participating configuration application
+// control. Missing records use upstream defaults; errors/unsupported options
+// leave output unchanged. Does not serialize every direct NVS writer.
+esp_err_t processing_settings_copy_options(processing_options_t *out);
+
 esp_err_t processing_settings_init(void);
 esp_err_t processing_settings_save(const processing_settings_t *settings);
 esp_err_t processing_settings_load(processing_settings_t *settings);
@@ -38,5 +49,9 @@ scale_mode_t processing_settings_get_scale_mode(void);
 void processing_settings_get_background_color(char *out, size_t out_size);
 char *processing_settings_to_json(const processing_settings_t *settings);
 void processing_settings_from_json(cJSON *json, processing_settings_t *settings);
+// Read Pico checked converter: known fields must have their declared types,
+// finite float-representable values and supported nontruncated text. Missing
+// fields retain the supplied candidate. Output is unchanged on error.
+esp_err_t processing_settings_from_json_checked(cJSON *json, processing_settings_t *settings);
 
 #endif

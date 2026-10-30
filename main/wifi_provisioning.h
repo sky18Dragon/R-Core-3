@@ -8,6 +8,8 @@
 esp_err_t wifi_provisioning_init(void);
 esp_err_t wifi_provisioning_start_ap(void);
 esp_err_t wifi_provisioning_stop_ap(void);
+bool wifi_provisioning_is_active(void);
 bool wifi_provisioning_is_provisioned(void);
+bool wifi_provisioning_session_complete(void);
 
 #endif

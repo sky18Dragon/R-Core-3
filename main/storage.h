@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <stdbool.h>
+#include "wifi_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,7 +21,8 @@ typedef enum {
 
 /**
  * @brief Initialize the appropriate storage medium based on kconfig and availability
- *        Handles fallbacks (SD Card -> LittleFS -> MemFS)
+ *        Handles legacy fallbacks; Read Pico requires its owned SD mount and
+ *        never silently substitutes flash or volatile storage at /storage.
  *
  * @return esp_err_t ESP_OK on success, ESP_FAIL or error code on failure
  */
@@ -48,14 +50,20 @@ bool storage_has_persistent_storage(void);
  * @return esp_err_t ESP_OK if found and read successfully, ESP_ERR_NOT_FOUND if not found
  */
 esp_err_t storage_read_wifi_credentials(char *ssid, char *password);
+// Read Pico's checked read-only import; returns device name without saving it.
+esp_err_t storage_read_wifi_config(wifi_text_t *out);
 
 /**
  * @brief Unmount storage before deep sleep to release flash references
  */
 void storage_unmount(void);
 
+// Checked teardown; Read Pico retains its ownership on failure until reboot.
+// Callers must close all file handles before invoking this function.
+esp_err_t storage_unmount_checked(void);
+
 /**
- * @brief Format the internal flash storage (LittleFS only)
+ * @brief Explicitly format legacy storage. Not supported on Read Pico.
  *
  * @return esp_err_t ESP_OK on success
  */

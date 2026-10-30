@@ -43,6 +43,7 @@ void *mutex_owner;
 int mutex_depth;
 uint8_t ioe_output;
 uint8_t ioe_config;
+uint8_t ioe_input;
 bool corrupt_ioe_readback;
 std::array<uint8_t, 65> request;
 
@@ -176,7 +177,7 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t device, const uint
     if (device->address == 0x24) {
         EXPECT_TRUE(*reg == 6 || *reg == 2 || *reg == 0);
         EXPECT_EQ(length, 1u);
-        raw[0] = *reg == 6 ? ioe_config : *reg == 2 ? ioe_output : 0x64;
+        raw[0] = *reg == 6 ? ioe_config : *reg == 2 ? ioe_output : ioe_input;
         if (corrupt_ioe_readback)
             raw[0] ^= 1;
         return ESP_OK;
@@ -231,6 +232,7 @@ class ReadPicoBoardTest : public testing::Test
         now = 100;
         ioe_output = 0x80;
         ioe_config = 0x64;
+        ioe_input = 0x64;
         corrupt_ioe_readback = false;
     }
     void TearDown() override
@@ -422,4 +424,57 @@ TEST_F(ReadPicoBoardTest, RefusesLiveRailsAndDetectsReadbackFailure)
     corrupt_ioe_readback = false;
     ASSERT_EQ(read_pico_board_display_release(), ESP_OK);
     read_pico_board_unlock();
+}
+
+TEST_F(ReadPicoBoardTest, CardDetectIsFreshActiveLowAndReadOnly)
+{
+    ASSERT_EQ(board_hal_init(), ESP_OK);
+    bool present = true;
+    EXPECT_EQ(read_pico_board_sd_present(&present), ESP_OK);
+    EXPECT_FALSE(present);
+    ioe_input &= ~0x40;
+    EXPECT_EQ(read_pico_board_sd_present(&present), ESP_OK);
+    EXPECT_TRUE(present);
+    EXPECT_EQ(ioe_config, 0x64);
+    EXPECT_EQ(ioe_output, 0x80);
+    EXPECT_EQ(commands, 1);  // Only startup VCOM GET; no power/calibration commands.
+}
+
+TEST_F(ReadPicoBoardTest, CardDetectErrorsNeverPublishPresence)
+{
+    bool present = true;
+    EXPECT_EQ(read_pico_board_sd_present(nullptr), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(read_pico_board_sd_present(&present), ESP_ERR_INVALID_STATE);
+    EXPECT_FALSE(present);
+    ASSERT_EQ(board_hal_init(), ESP_OK);
+    ioe_input = 0;
+    for (int offset : {1, 2}) {
+        present = true;
+        fail_at = calls + offset;
+        EXPECT_EQ(read_pico_board_sd_present(&present), ESP_ERR_TIMEOUT);
+        EXPECT_FALSE(present);
+    }
+    fail_at = 0;
+    ioe_config &= ~0x40;
+    EXPECT_EQ(read_pico_board_sd_present(&present), ESP_ERR_INVALID_STATE);
+    EXPECT_FALSE(present);
+}
+
+TEST_F(ReadPicoBoardTest, StorageLeaseRequiresLockAndPreventsHalDeinit)
+{
+    EXPECT_EQ(read_pico_board_storage_claim(), ESP_ERR_INVALID_STATE);
+    ASSERT_EQ(board_hal_init(), ESP_OK);
+    EXPECT_EQ(read_pico_board_storage_claim(), ESP_ERR_INVALID_STATE);
+    ASSERT_EQ(read_pico_board_lock(0), ESP_OK);
+    ASSERT_EQ(read_pico_board_storage_claim(), ESP_OK);
+    EXPECT_EQ(read_pico_board_storage_claim(), ESP_ERR_INVALID_STATE);
+    read_pico_board_unlock();
+    EXPECT_EQ(read_pico_board_storage_release(), ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(read_pico_board_deinit(), ESP_ERR_INVALID_STATE);
+    EXPECT_EQ(bus_count, 1);
+    ASSERT_EQ(read_pico_board_lock(0), ESP_OK);
+    EXPECT_EQ(read_pico_board_storage_release(), ESP_OK);
+    EXPECT_EQ(read_pico_board_storage_release(), ESP_ERR_INVALID_STATE);
+    read_pico_board_unlock();
+    EXPECT_EQ(read_pico_board_deinit(), ESP_OK);
 }

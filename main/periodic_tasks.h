@@ -8,7 +8,6 @@
 
 // Periodic tasks names
 #define SNTP_TASK_NAME "sntp_sync"
-#define OTA_CHECK_TASK_NAME "ota_check"
 
 /**
  * @brief Periodic task callback function type
@@ -76,5 +75,18 @@ esp_err_t periodic_tasks_get_last_run(const char *task_name, int64_t *last_run_t
  * @return ESP_OK on success, error code on failure
  */
 esp_err_t periodic_tasks_force_run(const char *task_name);
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+// Admission closes immediately; stop confirms owned timer exit only when no
+// batch/NVS operation is active. No task is forcibly deleted or state reused.
+void periodic_tasks_request_stop(void);
+esp_err_t periodic_tasks_stop(void);
+bool periodic_tasks_is_active(void);
+// Outputs remain unchanged on errors. The bool compatibility API fails closed.
+esp_err_t periodic_tasks_should_run_checked(const char *task_name, bool *should_run);
+// Atomic admission/force/execute for one task; no gap in which another caller
+// can consume this request and make a subsequent no-op look like its success.
+esp_err_t periodic_tasks_run_now(const char *task_name);
+#endif
 
 #endif  // PERIODIC_TASKS_H

@@ -453,31 +453,50 @@ Enter deep sleep immediately.
 }
 ```
 
----
+### `GET /api/power` / `POST /api/power` (Read Pico sleep variant only)
 
-## OTA Updates
-
-### `GET /api/ota/status`
-
-Get OTA update status.
+Present only in builds with `CONFIG_READ_PICO_PMU_SLEEP` (`build.py --read-pico-local-frame --read-pico-pmu-sleep`). `POST` takes `{"frame_sleep_enabled": true|false}` and returns the same body as `GET`. Any request counts as activity and keeps the frame awake for two more minutes.
 
 **Response:**
 ```json
 {
-  "status": "idle",
-  "current_version": "2.7.0",
-  "latest_version": "2.7.0",
-  "update_available": false
+  "frame_sleep_enabled": false,
+  "host_ready": true,
+  "wake_reason": 2,
+  "last_decision": "not on battery",
+  "supply": "unknown",
+  "battery_mv": 4103,
+  "battery_percent": 100,
+  "charge_state": 3,
+  "pmu_flags": 9553,
+  "power_state": 3,
+  "events": [{"boot": 5, "event": "boot", "detail": 2, "uptime_s": 0, "arg": 1, "battery_mv": 4103}]
 }
 ```
 
-### `POST /api/ota/check`
+`supply` is `battery` only for NOT_CHARGING with the charger pin low; `unknown` never sleeps. `wake_reason` is the PMU's (2 key, 6 alarm). `events` is a persistent ring of the last 24 boot/sleep events.
 
-Check for firmware updates.
+---
 
-### `POST /api/ota/update`
+## Touch (Read Pico)
 
-Start firmware update. Device reboots after completion.
+### `GET /api/touch`
+
+Present in local-frame builds (`CONFIG_READ_PICO_TOUCH`). Read-only diagnostics: panel readiness, read counters, the last touched sample and the last 16 gestures with raw panel coordinates. Swipe left = next image, swipe right = previous; leftmost key = previous, rightmost = next.
+
+**Response:**
+```json
+{
+  "ready": true,
+  "reads": 4378,
+  "read_errors": 0,
+  "busy_skips": 0,
+  "touched_samples": 54,
+  "last_x": 316, "last_y": 125, "last_count": 1,
+  "events": [{"at_ms": 201960, "gesture": "swipe_y_pos", "key": -1, "x0": 406, "y0": 735,
+              "x1": 370, "y1": 958, "hold_ms": 203, "action": "next", "result": "ESP_OK"}]
+}
+```
 
 ---
 

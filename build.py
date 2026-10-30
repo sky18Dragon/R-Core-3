@@ -82,14 +82,50 @@ def idf_py_command():
 
 
 def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
-                   read_pico_display_validation=False):
+                   read_pico_display_validation=False, read_pico_storage_validation=False,
+                   read_pico_photoframe_integration=False, read_pico_photo_validation=False,
+                   read_pico_local_frame=False, read_pico_pmu_sleep=False):
     """Build firmware with idf.py."""
+    if read_pico_pmu_sleep and not read_pico_local_frame:
+        raise ValueError("PMU sleep is a variant of the local frame")
+    if read_pico_local_frame:
+        if (board != "read_pico" or read_pico_factory_diagnostic
+                or read_pico_display_validation or read_pico_storage_validation
+                or read_pico_photoframe_integration or read_pico_photo_validation):
+            raise ValueError("local frame requires an exclusive Read Pico profile")
+        # Reuse the reviewed layout and full-stack linkage, but never its output directory.
+        read_pico_factory_diagnostic = True
+        read_pico_photoframe_integration = True
+    if read_pico_photo_validation and (
+        board != "read_pico" or not read_pico_factory_diagnostic
+        or read_pico_display_validation or read_pico_storage_validation or read_pico_photoframe_integration
+    ):
+        raise ValueError("photo validation requires an exclusive Read Pico factory profile")
+    if read_pico_storage_validation and (
+        board != "read_pico" or not read_pico_factory_diagnostic or read_pico_display_validation
+    ):
+        raise ValueError("storage validation requires an exclusive Read Pico factory profile")
+    if read_pico_photoframe_integration and (
+        board != "read_pico" or not read_pico_factory_diagnostic
+        or read_pico_display_validation or read_pico_storage_validation
+    ):
+        raise ValueError("PhotoFrame integration requires an exclusive Read Pico factory profile")
     print(f"\n=== Building firmware for {board} ===")
     sdkconfig_defaults = f"sdkconfig.defaults;boards/sdkconfig.defaults.{board}"
     if read_pico_factory_diagnostic:
         sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_factory_diagnostic"
     if read_pico_display_validation:
         sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_display_validation"
+    if read_pico_storage_validation:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_storage_validation"
+    if read_pico_photoframe_integration:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_photoframe_integration"
+    if read_pico_photo_validation:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_photo_validation"
+    if read_pico_local_frame:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_local_frame"
+    if read_pico_pmu_sleep:
+        sdkconfig_defaults += ";boards/sdkconfig.defaults.read_pico_pmu_sleep"
 
     # Boards differ in target chip (the M5Paper is a plain ESP32, everything
     # else is an ESP32-S3). Pass it explicitly: idf.py resolves the target
@@ -113,6 +149,16 @@ def build_firmware(board, extra_args, read_pico_factory_diagnostic=False,
         suffix = "-factory" if read_pico_factory_diagnostic else ""
         if read_pico_display_validation:
             suffix = "-display"
+        if read_pico_storage_validation:
+            suffix = "-storage"
+        if read_pico_photoframe_integration:
+            suffix = "-integration"
+        if read_pico_photo_validation:
+            suffix = "-photo"
+        if read_pico_local_frame:
+            suffix = "-local-frame"
+        if read_pico_pmu_sleep:
+            suffix = "-local-frame-sleep"
         idf_base += ["-B", f"build-read-pico{suffix}",
                      f"-DSDKCONFIG=.cache/sdkconfig.read_pico{suffix}"]
 
@@ -160,6 +206,31 @@ def main():
         help="Compile command-armed display validation; requires the factory diagnostic profile; never flash",
     )
     parser.add_argument(
+        "--read-pico-storage-validation",
+        action="store_true",
+        help="Compile isolated command-armed SD validation; requires factory profile; never flash",
+    )
+    parser.add_argument(
+        "--read-pico-photoframe-integration",
+        action="store_true",
+        help="Compile/link full PhotoFrame stack with runtime disabled; requires isolated factory profile",
+    )
+    parser.add_argument(
+        "--read-pico-local-frame",
+        action="store_true",
+        help="Build isolated R1 local-frame candidate; firmware step only; never flash",
+    )
+    parser.add_argument(
+        "--read-pico-pmu-sleep",
+        action="store_true",
+        help="With --read-pico-local-frame: opt-in PMU battery sleep variant (unverified); separate build dir",
+    )
+    parser.add_argument(
+        "--read-pico-photo-validation",
+        action="store_true",
+        help="Compile isolated single-photo diagnostic; requires factory profile; never flash",
+    )
+    parser.add_argument(
         "--fullclean",
         action="store_true",
         help="Remove sdkconfig and run idf.py fullclean before building",
@@ -176,6 +247,16 @@ def main():
 
     steps = args.step if args.step else STEPS
 
+    if args.read_pico_local_frame and (
+        args.board != "read_pico" or steps != ["firmware"]
+        or args.read_pico_factory_diagnostic or args.read_pico_display_validation
+        or args.read_pico_storage_validation or args.read_pico_photoframe_integration
+        or args.read_pico_photo_validation
+    ):
+        parser.error("local frame requires --board read_pico --step firmware and no diagnostic flags")
+    if args.read_pico_pmu_sleep and not args.read_pico_local_frame:
+        parser.error("--read-pico-pmu-sleep requires --read-pico-local-frame")
+
     if args.board == "read_pico" and (args.fullclean or extra_args):
         parser.error("Read Pico P1 only permits building; no fullclean or extra commands")
     if args.read_pico_factory_diagnostic and (
@@ -184,6 +265,20 @@ def main():
         parser.error("factory diagnostic requires --board read_pico --step firmware only")
     if args.read_pico_display_validation and not args.read_pico_factory_diagnostic:
         parser.error("display validation requires --read-pico-factory-diagnostic")
+    if args.read_pico_storage_validation and not args.read_pico_factory_diagnostic:
+        parser.error("storage validation requires --read-pico-factory-diagnostic")
+    if args.read_pico_storage_validation and args.read_pico_display_validation:
+        parser.error("storage and display validation must use separate profiles")
+    if args.read_pico_photoframe_integration and (
+        not args.read_pico_factory_diagnostic or args.read_pico_display_validation
+        or args.read_pico_storage_validation
+    ):
+        parser.error("PhotoFrame integration requires an exclusive factory profile")
+    if args.read_pico_photo_validation and (
+        not args.read_pico_factory_diagnostic or args.read_pico_display_validation
+        or args.read_pico_storage_validation or args.read_pico_photoframe_integration
+    ):
+        parser.error("photo validation requires an exclusive factory profile")
 
     if args.fullclean:
         print("Performing full clean...")
@@ -203,7 +298,9 @@ def main():
 
     if "firmware" in steps:
         build_firmware(args.board, extra_args, args.read_pico_factory_diagnostic,
-                       args.read_pico_display_validation)
+                       args.read_pico_display_validation, args.read_pico_storage_validation,
+                       args.read_pico_photoframe_integration, args.read_pico_photo_validation,
+                       args.read_pico_local_frame, args.read_pico_pmu_sleep)
 
 
 if __name__ == "__main__":

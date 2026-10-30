@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, onMounted, computed, watch } from "vue";
 import { useAppStore, useSettingsStore } from "../stores";
 import ImageProcessing from "./ImageProcessing.vue";
@@ -149,6 +150,7 @@ async function uploadImage(mode = "upload") {
             blackY: settingsStore.palette?.black_y ?? 0.009,
             whiteY: settingsStore.palette?.white_y ?? 0.65,
             gamma: settingsStore.palette?.gamma ?? 1.42,
+            levelsY: settingsStore.palette?.levels_y ?? null, // measured per-code ramp, when set
           })
         : {
             ...imageProcessor.SPECTRA6,
@@ -312,14 +314,14 @@ async function formatStorage() {
   try {
     const response = await fetch("/api/format-storage", { method: "POST" });
     if (response.ok) {
-      showMessage("Storage formatted successfully", "success");
+      showMessage(t("Storage formatted successfully"), "success");
       await appStore.loadSystemInfo();
       await appStore.loadImages(appStore.selectedAlbum);
     } else {
-      showMessage("Failed to format storage", "error");
+      showMessage(t("Failed to format storage"), "error");
     }
   } catch (error) {
-    showMessage(`Format failed: ${error.message}`, "error");
+    showMessage(t("Format failed: {msg}", { msg: error.message }), "error");
   } finally {
     formatting.value = false;
     showFormatConfirm.value = false;
@@ -341,7 +343,7 @@ function openAiDialog() {
   const googleKey = settingsStore.deviceSettings.aiCredentials.googleApiKey;
 
   if (!openaiKey && !googleKey) {
-    showMessage("Please configure an API Key in Settings > AI Generation first.", "error");
+    showMessage(t("Please configure an API Key in Settings > AI Generation first."), "error");
     settingsStore.activeSettingsTab = "ai";
     return;
   }
@@ -484,9 +486,9 @@ async function generateAiImage() {
 
     showAiDialog.value = false;
     await processFile(file);
-    showMessage("AI image generated successfully!", "success");
+    showMessage(t("AI image generated successfully!"), "success");
   } catch (error) {
-    showMessage(`Generation failed: ${error.message}`, "error");
+    showMessage(t("Generation failed: {msg}", { msg: error.message }), "error");
   } finally {
     generatingAi.value = false;
   }
@@ -497,7 +499,7 @@ async function generateAiImage() {
   <v-card class="mt-4" :class="{ 'wide-edit-card': wideEdit && showPreview }">
     <v-card-title class="d-flex align-center">
       <v-icon icon="mdi-upload" class="mr-2" />
-      Upload Image
+      {{ t("Upload Image") }}
       <v-spacer />
       <v-btn
         v-if="showPreview"
@@ -505,7 +507,7 @@ async function generateAiImage() {
         size="small"
         variant="text"
         :color="wideEdit ? 'primary' : undefined"
-        :title="wideEdit ? 'Exit wide edit' : 'Wide edit — controls beside the preview'"
+        :title="wideEdit ? t('Exit wide edit') : t('Wide edit — controls beside the preview')"
         class="mr-1"
         @click="toggleWideEdit"
       />
@@ -526,7 +528,7 @@ async function generateAiImage() {
           size="x-small"
           variant="text"
           class="ml-1"
-          title="Format storage"
+          :title="t('Format storage')"
           @click="showFormatConfirm = true"
         />
       </template>
@@ -553,16 +555,16 @@ async function generateAiImage() {
         @drop.prevent="onFileSelected({ target: { files: $event.dataTransfer.files } })"
       >
         <v-icon icon="mdi-cloud-upload" size="64" color="grey" />
-        <p class="text-h6 mt-4">Click or drag image to upload</p>
-        <p class="text-body-2 text-grey">Supports: JPG, PNG, HEIC, WebP, GIF, BMP</p>
+        <p class="text-h6 mt-4">{{ t("Click or drag image to upload") }}</p>
+        <p class="text-body-2 text-grey">{{ t("Supports: JPG, PNG, HEIC, WebP, GIF, BMP") }}</p>
         <div class="my-3 d-flex align-center" style="width: 100%">
           <v-divider />
-          <span class="mx-2 text-grey text-caption">OR</span>
+          <span class="mx-2 text-grey text-caption">{{ t("OR") }}</span>
           <v-divider />
         </div>
         <v-btn color="primary" variant="tonal" @click.stop="openAiDialog">
           <v-icon icon="mdi-magic-staff" start />
-          Generate with AI
+          {{ t("Generate with AI") }}
         </v-btn>
       </v-sheet>
 
@@ -594,13 +596,13 @@ async function generateAiImage() {
     </v-card-text>
 
     <v-card-actions v-if="showPreview" class="px-4 pb-4">
-      <v-btn variant="text" @click="resetUpload"> Cancel </v-btn>
+      <v-btn variant="text" @click="resetUpload"> {{ t("Cancel") }} </v-btn>
       <v-spacer />
       <v-select
         v-if="canSaveToAlbum"
         v-model="appStore.selectedAlbum"
         :items="appStore.sortedAlbums.map((a) => a.name)"
-        label="Album"
+        :label="t('Album')"
         variant="outlined"
         density="compact"
         hide-details
@@ -615,11 +617,11 @@ async function generateAiImage() {
         @click="uploadImage('display')"
       >
         <v-icon icon="mdi-monitor" start />
-        Display
+        {{ t("Display") }}
       </v-btn>
       <v-btn color="primary" :loading="uploading" @click="uploadImage('upload')">
         <v-icon :icon="canSaveToAlbum ? 'mdi-upload' : 'mdi-monitor'" start />
-        {{ canSaveToAlbum ? "Upload" : "Display" }}
+        {{ canSaveToAlbum ? t("Upload") : t("Display") }}
       </v-btn>
     </v-card-actions>
 
@@ -629,14 +631,14 @@ async function generateAiImage() {
     <!-- AI Input Dialog -->
     <v-dialog v-model="showAiDialog" max-width="500">
       <v-card>
-        <v-card-title>Generate Image</v-card-title>
+        <v-card-title>{{ t("Generate Image") }}</v-card-title>
         <v-card-text>
           <v-select
             v-model="aiProvider"
             :items="aiProviderOptions"
             item-title="title"
             item-value="value"
-            label="Provider"
+            :label="t('Provider')"
             variant="outlined"
             class="mb-4"
           />
@@ -645,40 +647,46 @@ async function generateAiImage() {
             :items="aiModelOptions"
             item-title="title"
             item-value="value"
-            label="Model"
+            :label="t('Model')"
             variant="outlined"
             class="mb-4"
           />
           <v-textarea
             v-model="aiPrompt"
-            label="Prompt"
+            :label="t('Prompt')"
             variant="outlined"
             rows="3"
             auto-grow
-            hint="Describe the image you want to generate"
+            :hint="t('Describe the image you want to generate')"
             persistent-hint
           />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="showAiDialog = false">Cancel</v-btn>
-          <v-btn color="primary" :loading="generatingAi" @click="generateAiImage"> Generate </v-btn>
+          <v-btn variant="text" @click="showAiDialog = false">{{ t("Cancel") }}</v-btn>
+          <v-btn color="primary" :loading="generatingAi" @click="generateAiImage">
+            {{ t("Generate") }}
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
     <!-- Format Storage Confirmation Dialog -->
     <v-dialog v-model="showFormatConfirm" max-width="400">
       <v-card>
-        <v-card-title>Format Storage</v-card-title>
+        <v-card-title>{{ t("Format Storage") }}</v-card-title>
         <v-card-text>
-          This will erase all images
-          {{ appStore.systemInfo.sdcard_inserted ? "on the SD card" : "on internal storage" }}. This
-          action cannot be undone.
+          {{
+            appStore.systemInfo.sdcard_inserted
+              ? t("This will erase all images on the SD card. This action cannot be undone.")
+              : t("This will erase all images on internal storage. This action cannot be undone.")
+          }}
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn variant="text" @click="showFormatConfirm = false">Cancel</v-btn>
-          <v-btn color="error" :loading="formatting" @click="formatStorage">Format</v-btn>
+          <v-btn variant="text" @click="showFormatConfirm = false">{{ t("Cancel") }}</v-btn>
+          <v-btn color="error" :loading="formatting" @click="formatStorage">{{
+            t("Format")
+          }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -686,7 +694,7 @@ async function generateAiImage() {
     <v-snackbar v-model="snackbar" :color="snackbarColor" :timeout="4000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn variant="text" @click="snackbar = false"> Close </v-btn>
+        <v-btn variant="text" @click="snackbar = false"> {{ t("Close") }} </v-btn>
       </template>
     </v-snackbar>
   </v-card>

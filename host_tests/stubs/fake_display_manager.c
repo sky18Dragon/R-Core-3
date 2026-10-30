@@ -18,6 +18,27 @@ static int begin_count = 0;
 static char pub_display_name[512];
 static char pub_save_path[512];
 static char pub_fallback_name[512];
+static char current_image[512];
+static bool current_known;
+bool display_manager_copy_current_image(char *out, size_t capacity, bool *known)
+{
+    if (!out || capacity < sizeof(current_image) || !known) return false;
+    memcpy(out, current_image, sizeof(current_image));
+    *known = current_known;
+    return true;
+}
+void fake_display_set_current_image(const char *path)
+{
+    snprintf(current_image, sizeof(current_image), "%s", path ? path : "");
+    current_known = true;
+}
+
+// File-format refresh is not emulated by this RGB-only decoder fixture.
+esp_err_t display_manager_show_image(const char *filename)
+{
+    (void)filename;
+    return ESP_ERR_NOT_SUPPORTED;
+}
 
 void fake_display_reset(void)
 {
@@ -31,6 +52,8 @@ void fake_display_reset(void)
     pub_display_name[0] = '\0';
     pub_save_path[0] = '\0';
     pub_fallback_name[0] = '\0';
+    current_image[0] = 0;
+    current_known = false;
 }
 
 int fake_display_frame_width(void)
@@ -120,5 +143,6 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
              pub && pub->save_path ? pub->save_path : "");
     snprintf(pub_fallback_name, sizeof(pub_fallback_name), "%s",
              pub && pub->fallback_name ? pub->fallback_name : "");
+    if (show) fake_display_set_current_image(pub && pub->display_name ? pub->display_name : "");
     return ESP_OK;
 }

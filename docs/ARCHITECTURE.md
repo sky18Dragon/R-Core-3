@@ -1,8 +1,6 @@
 # 当前技术架构
 
-最新状态补充：边缘探针候选daf0b7bf…已app-only部署/回读一致。唯一清白78/78帧完整且人工全白；同启动唯一局部图36/36相、每相696次、12条关键renderer脉冲行齐全，六组成对轨迹相等、五边界可区分。新实拍仍复现左侧宽连续区，约u≈120后布局恢复，本轮明确不通过；根因边界收窄到source回调之后、可见像素之前。旧分析器误判已在离线候选5069a6d0…修正，普通/ASan各300/300及固定IDF 6.1编译通过但未部署。会话STOPPED；暂不做GC16铺白或调gamma/VCOM/频率。下一验证设计见 [16灰阶方案](GRAY16-VALIDATION-PLAN.md)，以下较早阶段状态保留为背景。
-
-状态：2026-10-03 P0 完成，P1/P2b 代码/主机/编译通过。四角 GC16 单次软件/人工通过（2.140 秒）；随后获准单张灰阶软件完成（2.138 秒），用户反馈“白色偏多”，未通过实屏验收，拒绝后 stop/显示及 HAL ESP_OK、串口关闭。本轮 drawn=0x8/visually_confirmed=0，参考已清除；不计全部 P2 完成。普通诊断不启屏，不自动恢复。灰阶能力、温度有效性、历史欠载/黑带机制和长期稳定仍待核验。主工程为 `aitjcize/esp32-photoframe`，硬件参考为 `MindReset/read_pico_firmware`；见 [上游基线](UPSTREAM-BASELINE.md)、[硬件资料](HARDWARE-REFERENCE.md)。
+进度、候选身份与下一步统一见 [TODO](../TODO.md)；逐轮测试、部署与失败记录见 [验证记录](VALIDATION.md)。整理前原文保留在 [历史快照](history/2026-10-08/docs/ARCHITECTURE.md)。
 
 ## 分层与数据路径
 
@@ -14,11 +12,11 @@
 
 | 层 | 职责 | 改动方向 |
 | --- | --- | --- |
-| PhotoFrame 产品层 | Web、相册、REST、Wi-Fi、配置、轮播、OTA | 复用，仅做必要兼容修正 |
+| PhotoFrame 产品层 | Web、相册、REST、Wi-Fi、配置、轮播（OTA 已移除） | 复用，仅做必要兼容修正 |
 | 图像层 | 解码、方向、缩放/裁切、灰阶和标准 framebuffer | 先验证已有处理，后优化大图与缓存 |
 | Board HAL | 初始化、电池/充电、共享资源、睡眠能力 | 新增 Read Pico 实现 |
 | 显示后端 | `epaper_*` 契约到裸屏时序/波形 | 独立 Read Pico 后端 |
-| 存储适配 | 上游挂载/文件语义到 SDMMC | 参数化 1-bit 总线 |
+| 存储适配 | 上游挂载/文件语义到 SDMMC | 唯一/storage、只读CD与租约已接；真实业务存储层接入，产品运行待验收 |
 | 输入适配 | CST836U 坐标/事件到轮播请求 | 驱动只报事件，业务层处理手势 |
 | 硬件参考组件 | EPDiy、PMU、SY7636A、FCA9555、CST836U、波形 | 固定版本并保留来源，不引入阅读器应用 |
 | 后续 GR 扩展 | 相机协议、能力验证、下载和同步 | 独立适配，默认不参与第一阶段运行 |
@@ -27,42 +25,46 @@
 
 ### 显示
 
-官方 BSP 确认 Read Pico 使用 ESP32-S3 16-bit LCD 并口驱动裸屏，与 IT8951 控制器后端有本质差异。采用独立后端复用 `epaper_*` 公共调用。已核对上游 init/display/clear/enter_deepsleep 返回 void，因此需额外设计结果状态与失败传播；具体显示后端在 P2 落实；当前诊断入口见 [P1 说明](READ-PICO-BRINGUP.md)。
+Read Pico使用ESP32-S3 16-bit LCD驱动裸屏。独立后端复用PhotoFrame `epaper_*` 调用，板级IO放在HAL，不引入厂家总BSP/Demo。上游void契约由新板检查式刷新/状态提交包裹，原板保留原行为。
 
-1216×684 紧凑 4bpp 为 415,872 字节；PhotoFrame 偶数像素高 nibble，EPDiy 偶数像素低 nibble，均 0 黑/15 白。便携转换/事务及原生后端已实现；新板 display_manager/轮播只在检查式刷新成功后提交状态，其他板保留 void 契约。HAL 拥有总线，后端持有显示租约并按显示→总线锁顺序执行；失败锁存到重启。原生初次白屏需人工确认，内存填白不能替代物理参考。用户已允许厂家标准 SY 易失性启动配置、禁止 PMU/NVS 校准写；只读诊断已实机启动，一次清白的电源/退出与人工白屏确认通过。参考仅属本次启动，deinit 已清除，后续 GC16 需重新建立；产品时序、连续电源运行与完整迁移仍待验收，详见 [显示适配](READ-PICO-DISPLAY.md)。
+1216×684紧凑4bpp为415,872字节；PhotoFrame偶数像素高nibble、EPDiy偶数像素低nibble，0黑/15白。外层转换采用精确684行；厂家驱动、波形、校准保持锁定原样。HAL拥有总线，后端持有显示租约，按显示→总线顺序锁定。
 
-GC16 全刷为首期照片模式；刷新、电源与资源释放串行进行。驱动、时序、波形、校准保留参考基线，VCOM 只读 PMU。
+完整prepare→主动温度→draw→stop事务持有CPU/APB max锁，防止直接LL RMT与CPU feeder受DFS影响。VCOM仅读取PMU出厂值，使用厂家标准易失性启动配置；默认GC16/36相、0–50°C表不改。失败清理并锁存，初始化内存填白不建立物理白参考；隔离诊断由本次启动人工确认白参考后才绘制。
 
-刷新事务增加可选 `read_temperature`：未配置时仍要求预先验证温度 gate；配置时先验证 PMU/帧，再 prepare 标准上电，随后在同锁下读有效温度，最后 draw/stop。Read Pico 使用主动采样路径，待机预检仅验证 OFF/故障，不将复位的温度寄存器当实时值。采样失败/越界/未写样本均不绘制且清理，原生后端锁存故障；不改变厂家驱动与高压启动配置，不新增单独试探上电。候选已 app-only 部署，主动采样单次 28°C/ON=1/PGOOD=1；准确性与连续性未验收。
-
-标准 4bpp 保留 16 个输入码，不增加 gamma/阈值补偿去掩盖白偏。厂家默认波形为 36 相、单个 0–50°C 温区；完整 48 相表声明约 11 级可分辨是能力资料，不是本机测量。软件序列不同也不证明光学级数不同。历史待机 0°C 不再作为有效采样依据；新主动温度已有读数但编号图仍明显白偏，不能宣称温度修改修复灰阶或完成因果排除。新增编号图只加白边标签，不改变中央灰码；详见显示说明。
-
-隔离显示测试入口有原六种便携图案与编号图，经标准 4bpp → 同一原生转换/GC16 路径；新增仅诊断的官方绘图控制，原无编号布局经实际厂家 epd_fill_rect(i*17)，逐字节核对转换目标后走 from-white，只可在人工全白后的首次绘制使用，普通配置不链接。逐张显式绘制/人工确认，拒绝或 IO 失败锁存到退出；启动不自动开屏/轮播，不把 transport completed 当作实屏正确。历史 DEBUG 四角欠载 0x400 保留；PERF/64 KB/64 B、80 MHz/原扫描/波形不变，四角单次通过仅为历史，旧/新灰阶均被用户拒绝。设备最后 STOPPED/串口结束，官方绘图候选只完成离线验证、未烧写，仍需灰阶/像素/照片及连续稳定性，参考随退出清除。不为复现官方示例引入总 BSP/NVS/SD/出厂标定副作用。
-
-扫描观察分为 `read_pico_display` 的便携分析与 `epaper_driver_read_pico` 的诊断 profile 专用 link-wrap IO 适配。显式静态清白记录末行首尾脉冲/填充与帧完成；新的局部图专用GC16模式同时记录36相时间及12条选定行的304字节脉冲指纹。两者均保留厂家数据源/返回值、回调内不分配/日志/IO，观测不完整时会话失败锁存。指纹仅证明renderer供给回调的数据关系与调用顺序，不代替DMA、CKV/STV、物理gate或人工画面验收；GC16模式尚未真机运行。固定第三方代码、波形、校准不改；详见显示说明。
+显示租约、软件相位/行指纹与返回值只证明各自观察边界。固定EPDiy内部`portMAX_DELAY`没有安全DMA/renderer取消契约，清理以同步调用返回为前提。实屏重复性、温度准确性、供电与故障恢复仍需验收。详见 [显示契约](READ-PICO-DISPLAY.md)。
 
 ### SD 与图像
 
-已核对 Read Pico SD 源码为 1-bit、CLK=38/CMD=42/D0=44；PhotoFrame SDMMC 当前固定 4-bit，需要参数化。保留上游 `/storage` 及相册组织，不引入旧 `/frame` 事务库。厂家总初始化自带 `/sdcard` 挂载，移植时由 PhotoFrame 存储适配统一管理，避免双重初始化。
+唯一挂载为PhotoFrame `/storage`：Read Pico SDMMC 1-bit、CLK38/CMD42/D0=44、D1–D3未连接；原板保持4-bit。只读P0.6卡检测，存储租约与IO占用阻止活动文件期间卸载。失败不自动格式化/fallback/重挂，不猜测或借用屏幕电源位控制SD。
 
-先使用上游解码链路，测量内存峰值后再增加流式/缩放解码。baseline 与 progressive JPEG 分开确认。缓存若引入，保存业务层标准 4bpp，携带尺寸/格式/处理版本/源指纹/CRC，并以临时文件提交；不保存 EPDiy 私有状态作为通用缓存。
+标准库包装登记文件/目录及元数据占用，关闭失败保留不确定资源并锁存；有限32槽不是任意VFS/别名/并发close契约。上传使用有界接收、独占新建、完整写入/同步/关闭/介质检查后非覆盖发布；临时文件、原片和相册同名文件保留。FAT两文件和元数据仍不具备已验证的掉电原子性。详见 [存储](READ-PICO-STORAGE.md)、[上传](READ-PICO-UPLOAD.md)。
+
+baseline JPEG采用分块压缩输入、≤5MiB缩放RGB、EXIF 1–8采样坐标映射、固定居中Cover与现有灰阶/抖动/sink；完整源/EOF/关闭/介质确认后才显示，原片不删除。4KiB读缓存减少卡检测开销。内存JPEG沿用相同metadata/预算，PNG在创建输出/显示流前获取布局副本，并在源关闭后提交。保护边界不等于格式/尺寸支持上限，真实峰值仍待测量。详见 [照片](READ-PICO-PHOTO.md)。
+
+Read Pico默认native方向为厂家inverted portrait对应的180°，隔离照片桥同步变换；既有NVS方向覆盖不静默重写。完整图像palette/方向/dither/layout尚未统一为一个事务快照。
+
+### 配置、网络与后台
+
+配置启动只读严格加载，NVS错误在板级/SD前停止，不自动擦除/迁移。名称/网络/NTP/时区/版本的检查式保存确认后发布；参与的本地/远端三组更新与请求配置捕获共用零等待应用控制。完整有界JSON拒绝截断、重复键/NUL/深度错误，serializer和HTTP响应失败传播；直接setter与全部读取者仍待覆盖。
+
+下载前捕获revision/processing/palette自有JSON；URL/凭据/ETag/CA另有受锁保护的自有副本，持有至重试和缩略图结束。下载字段检查式保存全部成功后才发布RAM，身份改变失效ETag，旧请求不写回新身份；NVS多键失败不承诺持久回滚。全部自有初始header先remove/确认缺失/set/精确readback，非法名称/控制值或首错在perform前停止。跨源redirect在下一跳前逐项删除/确认认证头缺失，事件首错锁存并在perform返回后传播，失败不安排下一跳。缩略图保留同源认证和可选失败契约。URL/TLS解析、响应字段截断、SDK内部认证和redirect完整处理仍待补齐。详见 [配置文档](READ-PICO-CONFIG-DOCUMENT.md)。
+
+Wi-Fi manager与AP复用既有控制权；普通HTTP/AP预约共同资源，保留确切句柄和未确认故障。后台角色创建逐项检查，HTTP就绪后才运行；周期timer只合并通知，worker串行执行。SNTP使用外层DNS身份、数字地址、自有服务与回复关联检查。合作取消不是IO回滚/SDK硬中断，完整退出与真实联网尚未验收。详见 [Wi-Fi](READ-PICO-WIFI.md)、[HTTP](READ-PICO-HTTP.md)、[后台](READ-PICO-BACKGROUND.md)、[周期](READ-PICO-PERIODIC.md)、[SNTP](READ-PICO-SNTP.md)。
 
 ### 电源与触摸
 
-报告指出 CW32 PMU 可切断 ESP EN，因此需要 Board HAL 明确区分原生 ESP 睡眠和外部 PMU 控制，不能只在普通 deep-sleep 前插入一个 PMU 调用。存储提交与显示/网络退出必须先完成，再交给 PMU。alarm、按键唤醒、失败处理与功耗单独上板验收。
+CW32 PMU可以切断ESP EN。HAL须区分ESP原生睡眠和外部PMU控制；存储提交、显示和网络退出完成后才交给PMU，alarm/按键唤醒、RTC重建和电源unknown状态分别验收。现有Read Pico睡眠入口直接返回。
 
-触摸驱动只生成有界事件；手势复用现有 rotation 接口。刷新中重复切图合并；“上一张”需历史/顺序语义，不假设反向遍历即可正确。
+触摸驱动只生成有界事件，手势复用rotation入口；刷新中重复切图合并，“上一张”先确定历史/顺序语义。CST836U与PMU睡醒产品能力均待实现/验收。
 
-### SDK 与频率
+### SDK、构建与迁移
 
-Read Pico 官方要求 ESP-IDF v6.1；PhotoFrame CI 为 release-v6.0。目标 v6.1 已通过诊断入口及原板编译，仍需显示集成/真机验证，并保留原有板型回归。官方 120 MHz 配置与 CI 80 MHz 配置用途不同；Flash/PSRAM 频率与 LCD 时序不能分别照抄，须记录实板依据和测量结果。
+固定ESP-IDF v6.1与厂家gitlink，原板保留回归；诊断80MHz与产品120MHz/HPM分开验证。完整integration profile只保留真实main/Web/相册/处理/轮播链接，不调用产品启动；独立只读/显示/SD/照片profile各有明确IO边界。
 
-两个工程 NVS/PHY/应用偏移不同，新分区不能直接沿用旧 Demo 的恢复假设。实板已核实为 Demo factory 布局；专用诊断保持原表，仅覆盖 factory app，并通过回读/启动。用户放弃完整备份，无旧 app 完整回滚保证；完整业务/OTA 的迁移仍未批准。差异及保护范围见 [分区核对](UPSTREAM-BASELINE.md) 和 [烧写维护](DEPLOYMENT.md)。
+OTA 已从项目移除（2026-10-30），固件只经 USB app-only 烧写；本机保持已核验 factory 布局，任何分区变更需单独方案。详见 [集成](READ-PICO-INTEGRATION.md)、[迁移](READ-PICO-MIGRATION.md)、[部署](DEPLOYMENT.md)。
 
 ## GR 后续接入
 
-相机模块拥有协议与连接状态，不拥有第二套相册或显示系统。下载完成并通过校验后才发布本地副本；路径、超时、断线和重试均有界。相机与管理网络的切换、BLE/Wi-Fi 共存和功耗在第二阶段单独设计。
+第一阶段验收后增加独立相机协议/能力/下载适配，副本校验提交后进入已有存储、图像与轮播系统，不建立第二套相册/状态系统。GR IV/HDF/Monochrome逐型号/固件验证，不继承旧协议实验的兼容或写操作授权。
 
-旧便携核心、日志格式和诊断固件可以提供经验，是否复用代码要重新评估兼容性与测试覆盖。旧工程验收不转移到新代码。
-
-来源与候选版本见 [THIRD-PARTY](THIRD-PARTY.md)，原始建议见 [研究报告](reference/esp32-photoframe-read-pico-port-research.md)。
+来源与许可见 [THIRD-PARTY](THIRD-PARTY.md)，研究资料仅作参考。

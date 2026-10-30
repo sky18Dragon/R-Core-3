@@ -1,6 +1,8 @@
 # Read Pico P1：只读板级诊断
 
-本文描述普通只读入口，不是相框。factory 诊断已实机启动，PMU/VCOM/PSRAM 通过；P2b 后端在此入口仍不运行。另有明确授权的 [受控显示入口](READ-PICO-DISPLAY.md)，已完成一次清白/人工确认/显式退出，但尚未验收 GC16。所有入口均未启用 SD/触摸/Wi-Fi/OTA/睡眠/完整业务；厂家驱动、波形和校准保持原样。
+进度、候选身份与下一步统一见 [TODO](../TODO.md)；逐轮测试、部署与失败记录见 [验证记录](VALIDATION.md)。整理前原文保留在 [历史快照](history/2026-10-08/docs/READ-PICO-BRINGUP.md)。
+
+本文只描述普通只读profile：不启屏/SD/触摸/Wi-Fi/OTA/睡眠/完整业务。factory诊断已有PMU/VCOM/PSRAM实机证据；显示、SD与照片采用各自隔离profile，具体结果按VALIDATION分别记录。
 
 诊断入口先核验 `init(false)` 被拒绝及 16 像素 nibble 内存交换，再执行 P1 观测；不启动 EPDiy 或真实刷新。已链接原生显示代码用于检查依赖，存在符号不代表运行；见 [显示适配说明](READ-PICO-DISPLAY.md)。
 
@@ -51,7 +53,7 @@ python build.py --board read_pico --step firmware
 
 SD 唯一所有者确定为 PhotoFrame 存储 backend，保留 `/storage`；不调用厂家 `/sdcard` 挂载。P1 当前不挂载任何卡，1-bit 参数化及介质测试在 P3 完成。
 
-外层 EPDiy/GC16、SY/IOE 电源和所有权通过本地测试/编译；用户另行允许受控显示测试和首次清白，已实机执行并人工确认全白。软件 PGOOD/故障与退出检查、显示/HAL deinit 成功，但 GC16/温度/异常恢复、连续稳定性和 120 MHz/HPM 仍未验收。普通入口仍不启屏，受控显示授权不扩展为完整迁移或校准写。
+外层 EPDiy/GC16、SY/IOE 电源和所有权通过本地测试/编译；用户另行允许受控显示测试和首次清白，已实机执行并人工确认全白。软件 PGOOD/故障与退出检查、显示/HAL deinit 成功，GC16标准页和S1已有单张证据；温度准确性/异常恢复、连续稳定性和120MHz/HPM仍待验收。普通入口仍不启屏，受控显示授权不扩展为完整迁移或校准写。
 
 小纸 Pico ROM 识别为 S3 v0.2、16 MB Flash/8 MB PSRAM，factory 专用诊断通过本机启动；PMU 1.0.9/hw1、VCOM 有效 1580 mV、IOE CFG0=0x64/OUT0=0x81，SY 断电 NACK 符合诊断边界。PMU fault bit0 是协议定义的 BOOT_WAIT 超时粘滞位，本轮未清除；无法据此推定屏电源故障或所有 PMU 功能正常。电池/USB 来源只是瞬时报告，unknown 不等于无 USB。
 

@@ -46,7 +46,7 @@ jobs:
           npm --prefix webapp ci
           npm --prefix webapp run build
           python3 build.py --board waveshare_photopainter_73 --step splash
-      - name: Compile original board and three Read Pico bring-up profiles
+      - name: Compile original board and five isolated Read Pico profiles
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v6.1
@@ -57,3 +57,5 @@ jobs:
             python build.py --board read_pico --step firmware
             python build.py --board read_pico --step firmware --read-pico-factory-diagnostic
             python build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-display-validation
+            python build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-storage-validation
+            python build.py --board read_pico --step firmware --read-pico-factory-diagnostic --read-pico-photoframe-integration

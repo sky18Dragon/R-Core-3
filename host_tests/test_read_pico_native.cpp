@@ -9,7 +9,9 @@
 extern "C" {
 #include "driver/gpio.h"
 #include "e0470_epaper_waveform.h"
+#include "esp_clk_tree.h"
 #include "esp_heap_caps.h"
+#include "esp_pm.h"
 #include "freertos/semphr.h"
 #include "read_pico_board.h"
 #include "read_pico_epaper.h"
@@ -20,8 +22,10 @@ extern "C" {
 namespace
 {
 bool display_lock, bus_lock, leased, pg_stuck, pg_read_error, callback_write_error;
-int devices, allocations, fail_alloc_at = -1, draw_calls, clear_calls, lcd_calls, vcom = 1250;
+int devices, allocations, fail_alloc_at = -1, fail_draw_at = -1, draw_calls, clear_calls, lcd_calls,
+                          vcom = 1250;
 int claim_calls, mutex_token, bus_token, device_token;
+int pm_locks, pm_acquired;
 int from_white_calls, vendor_rect_calls;
 bool vendor_render_corrupt;
 int fail_sy_reg = -1;
@@ -47,6 +51,8 @@ void start()
     ASSERT_EQ(read_pico_epaper_init(true), ESP_OK);
     EXPECT_EQ(lcd_calls, 1);
     EXPECT_TRUE(leased);
+    EXPECT_EQ(pm_locks, 2);
+    EXPECT_EQ(pm_acquired, 0);
 }
 void white()
 {
@@ -97,6 +103,60 @@ read_pico_validation_session_t validation_session()
 }  // namespace
 
 extern "C" {
+struct fake_esp_pm_lock {
+    esp_pm_lock_type_t type;
+    bool acquired;
+};
+
+esp_err_t esp_clk_tree_src_get_freq_hz(soc_module_clk_t source,
+                                       esp_clk_tree_src_freq_precision_t, uint32_t *frequency_hz)
+{
+    if (frequency_hz == nullptr)
+        return ESP_ERR_INVALID_ARG;
+    if (source == SOC_MOD_CLK_CPU)
+        *frequency_hz = pm_acquired >= 1 ? 240000000 : 40000000;
+    else if (source == SOC_MOD_CLK_APB)
+        *frequency_hz = pm_acquired >= 1 ? 80000000 : 40000000;
+    else
+        return ESP_ERR_INVALID_ARG;
+    return ESP_OK;
+}
+
+esp_err_t esp_pm_lock_create(esp_pm_lock_type_t type, int, const char *, esp_pm_lock_handle_t *out)
+{
+    auto *lock = static_cast<fake_esp_pm_lock *>(calloc(1, sizeof(fake_esp_pm_lock)));
+    if (lock == nullptr)
+        return ESP_ERR_NO_MEM;
+    lock->type = type;
+    *out = lock;
+    ++pm_locks;
+    return ESP_OK;
+}
+esp_err_t esp_pm_lock_acquire(esp_pm_lock_handle_t handle)
+{
+    if (handle == nullptr || handle->acquired)
+        return ESP_ERR_INVALID_STATE;
+    handle->acquired = true;
+    ++pm_acquired;
+    return ESP_OK;
+}
+esp_err_t esp_pm_lock_release(esp_pm_lock_handle_t handle)
+{
+    if (handle == nullptr || !handle->acquired)
+        return ESP_ERR_INVALID_STATE;
+    handle->acquired = false;
+    --pm_acquired;
+    return ESP_OK;
+}
+esp_err_t esp_pm_lock_delete(esp_pm_lock_handle_t handle)
+{
+    if (handle == nullptr || handle->acquired)
+        return ESP_ERR_INVALID_STATE;
+    free(handle);
+    --pm_locks;
+    return ESP_OK;
+}
+
 const EpdWaveform E0470_WAVEFORM = {};
 const EpdDisplay_t E0470_DISPLAY = {};
 SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *)
@@ -116,8 +176,10 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t)
     display_lock = false;
     return pdTRUE;
 }
-esp_err_t read_pico_board_lock(uint32_t)
+uint32_t last_bus_lock_timeout;
+esp_err_t read_pico_board_lock(uint32_t timeout_ms)
 {
+    last_bus_lock_timeout = timeout_ms;
     if (bus_lock)
         return ESP_ERR_TIMEOUT;
     bus_lock = true;
@@ -269,7 +331,7 @@ size_t heap_caps_get_largest_free_block(unsigned)
 void e0470_waveform_init(void) {}
 void read_pico_epd_scan(int clock, int mode, read_pico_epd_scan_t *scan)
 {
-    EXPECT_EQ(clock, 12);
+    EXPECT_EQ(clock, 18);
     EXPECT_EQ(mode, READ_PICO_EPD_SCAN_FULL);
     scan->pclk_mhz = clock;
 }
@@ -279,13 +341,13 @@ void read_pico_epd_init_lcd(const lcd_bus_config_t *pins, int bits, int width, i
     EXPECT_EQ(bits, 16);
     EXPECT_EQ(width, 1216);
     EXPECT_EQ(height, 684);
-    EXPECT_EQ(scan->pclk_mhz, 12);
+    EXPECT_EQ(scan->pclk_mhz, 18);
     EXPECT_EQ(pins->clock, 21);
     ++lcd_calls;
 }
 void read_pico_epd_set_pclk(int clock)
 {
-    EXPECT_EQ(clock, 12);
+    EXPECT_EQ(clock, 18);
 }
 void epd_lcd_deinit(void) {}
 void epd_init(const EpdBoardDefinition *definition, const EpdDisplay_t *, int lut)
@@ -340,6 +402,7 @@ void epd_poweron(void)
 }
 void epd_clear(void)
 {
+    EXPECT_EQ(pm_acquired, 2);
     ++clear_calls;
 }
 EpdDrawError epd_hl_update_screen_full(EpdiyHighlevelState *hl, int mode, int temperature)
@@ -349,6 +412,7 @@ EpdDrawError epd_hl_update_screen_full(EpdiyHighlevelState *hl, int mode, int te
     EXPECT_TRUE(display_lock);
     EXPECT_TRUE(bus_lock);
     EXPECT_TRUE(output & 0x10);
+    EXPECT_EQ(pm_acquired, 2);
     ++draw_calls;
     drawn.assign(hl->front_fb, hl->front_fb + READ_PICO_FRAME_BYTES);
     // Match the real vendor API's problematic back-buffer mutation even on a failure.
@@ -356,7 +420,7 @@ EpdDrawError epd_hl_update_screen_full(EpdiyHighlevelState *hl, int mode, int te
     if (reenter)
         reenter_busy =
             read_pico_epaper_display(source.data(), source.size()).error == READ_PICO_REFRESH_BUSY;
-    return draw_error;
+    return draw_calls == fail_draw_at ? MOCK_DRAW_FAILURE : draw_error;
 }
 EpdDrawError epd_hl_update_screen_from_white(EpdiyHighlevelState *hl, int mode, int temperature)
 {
@@ -420,6 +484,17 @@ TEST(ReadPicoNative, AllocationAndHeadroomFailuresFreeBuffersAndLease)
                EXPECT_EQ(read_pico_epaper_init(true), ESP_ERR_NO_MEM); EXPECT_EQ(allocations, 0);
                EXPECT_EQ(devices, 0); EXPECT_FALSE(leased));
 }
+TEST(ReadPicoNative, RefreshWaitsBrieflyForBoardLockInsteadOfFailingBusy)
+{
+    // Touch polling and SD checks hold the board lock for ~1 ms; a 0 ms try
+    // failed 8/100 refreshes on the device.
+    FRESH_BOOT(start(); white(); last_bus_lock_timeout = 0;
+               EXPECT_TRUE(read_pico_epaper_display(source.data(), source.size()).completed);
+               EXPECT_EQ(last_bus_lock_timeout, (uint32_t) READ_PICO_EPAPER_BUS_WAIT_MS);
+               EXPECT_GE(READ_PICO_EPAPER_BUS_WAIT_MS, 100);
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
+
 TEST(ReadPicoNative, FirstFrameRequiresExplicitWhiteReferenceAndReentryIsBusy)
 {
     FRESH_BOOT(start(); EXPECT_EQ(read_pico_epaper_display(source.data(), source.size()).error,
@@ -433,6 +508,18 @@ TEST(ReadPicoNative, FirstFrameRequiresExplicitWhiteReferenceAndReentryIsBusy)
                EXPECT_EQ(drawn.back(), 0x21); EXPECT_EQ(output & 0x1a, 0);
                EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK); EXPECT_EQ(allocations, 0);
                EXPECT_EQ(devices, 0); EXPECT_FALSE(leased));
+}
+
+TEST(ReadPicoNative, ScanClockLocksCoverClearAndGc16AndAreReleasedAfterEachTransaction)
+{
+    FRESH_BOOT(start(); EXPECT_EQ(pm_locks, 2); EXPECT_EQ(pm_acquired, 0);
+               ASSERT_EQ(read_pico_epaper_clear_unverified(), ESP_OK);
+               EXPECT_EQ(clear_calls, 1); EXPECT_EQ(pm_acquired, 0);
+               ASSERT_EQ(read_pico_epaper_confirm_white_reference(), ESP_OK);
+               auto result = read_pico_epaper_display(source.data(), source.size());
+               EXPECT_TRUE(result.completed); EXPECT_EQ(draw_calls, 1); EXPECT_EQ(pm_acquired, 0);
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK);
+               EXPECT_EQ(pm_acquired, 0); EXPECT_EQ(pm_locks, 0));
 }
 TEST(ReadPicoNative, MalformedFrameAndUnknownTemperatureNeverDraw)
 {
@@ -459,6 +546,48 @@ TEST(ReadPicoNative, StandbyResetTemperatureIsNotPassedToRenderer)
                EXPECT_TRUE(read_pico_epaper_display(source.data(), source.size()).completed);
                EXPECT_EQ(temperature_read_on, (std::vector<bool>{false, true, true}));
                EXPECT_EQ(draw_calls, 1); EXPECT_EQ(output & 0x1a, 0);
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
+
+TEST(ReadPicoNative, ContinuousWhiteThenTargetUsesOneRailIntervalAndOneTemperatureSample)
+{
+    FRESH_BOOT(
+        start(); white(); temperature_read_on.clear(); active_temp_reads = 0;
+        std::vector<uint8_t> white_frame(READ_PICO_FRAME_BYTES, 0xff); int starts = rail_starts;
+        auto r = read_pico_epaper_display_continuous_pair(white_frame.data(), white_frame.size(),
+                                                          source.data(), source.size());
+        EXPECT_TRUE(r.completed); EXPECT_EQ(r.frames_completed, 2u); EXPECT_EQ(draw_calls, 2);
+        EXPECT_EQ(rail_starts, starts + 1); EXPECT_EQ(active_temp_reads, 2);
+        EXPECT_EQ(temperature_read_on, (std::vector<bool>{false, true, true}));
+        ASSERT_EQ(drawn.size(), READ_PICO_FRAME_BYTES); EXPECT_EQ(drawn.front(), 0x21);
+        EXPECT_EQ(drawn.back(), 0x21); EXPECT_EQ(output & 0x1a, 0);
+        EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
+
+TEST(ReadPicoNative, ContinuousSecondDrawFailureStopsAndLatchesUnknownReference)
+{
+    FRESH_BOOT(start(); white(); std::vector<uint8_t> white_frame(READ_PICO_FRAME_BYTES, 0xff);
+               fail_draw_at = 2;
+               auto r = read_pico_epaper_display_continuous_pair(
+                   white_frame.data(), white_frame.size(), source.data(), source.size());
+               EXPECT_FALSE(r.completed); EXPECT_EQ(r.frames_completed, 1u);
+               EXPECT_EQ(r.error, READ_PICO_REFRESH_DRAW_FAILED);
+               EXPECT_EQ(r.operation_error, MOCK_DRAW_FAILURE); EXPECT_EQ(output & 0x1a, 0);
+               EXPECT_TRUE(read_pico_epaper_faulted());
+               EXPECT_EQ(read_pico_epaper_display(source.data(), source.size()).error,
+                         READ_PICO_REFRESH_GATE_CLOSED);
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
+}
+
+TEST(ReadPicoNative, ContinuousMissingSecondFrameNeverStartsRails)
+{
+    FRESH_BOOT(start(); white(); std::vector<uint8_t> white_frame(READ_PICO_FRAME_BYTES, 0xff);
+               int starts = rail_starts; auto r = read_pico_epaper_display_continuous_pair(
+                                             white_frame.data(), white_frame.size(), nullptr, 0);
+               EXPECT_FALSE(r.completed); EXPECT_EQ(r.error, READ_PICO_REFRESH_BAD_FRAME);
+               EXPECT_EQ(r.frame_error, READ_PICO_FRAME_INVALID_ARGUMENT);
+               EXPECT_EQ(rail_starts, starts); EXPECT_EQ(draw_calls, 0);
+               EXPECT_FALSE(read_pico_epaper_faulted());
                EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
 }
 
@@ -532,6 +661,20 @@ TEST(ReadPicoNative, FailedDrawLatchesUnknownPhysicalReferenceForThisBoot)
                EXPECT_NE(read_pico_epaper_confirm_white_reference(), ESP_OK);
                EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK);
                EXPECT_EQ(read_pico_epaper_init(true), ESP_ERR_INVALID_STATE));
+}
+TEST(ReadPicoNative, CallbackWriteErrorDuringDrawPreservedAcrossStopRails)
+{
+    FRESH_BOOT(start(); white();
+               fail_draw_at = 1;
+               // When draw runs, simulate a failure in poweroff/ctrl
+               // epd_hl_update_screen_full mock will set callback_write_error during draw
+               draw_error = MOCK_DRAW_FAILURE;
+               auto result = read_pico_epaper_display(source.data(), source.size());
+               EXPECT_FALSE(result.completed);
+               EXPECT_EQ(result.error, READ_PICO_REFRESH_DRAW_FAILED);
+               EXPECT_EQ(result.operation_error, MOCK_DRAW_FAILURE);
+               EXPECT_TRUE(read_pico_epaper_faulted());
+               EXPECT_EQ(read_pico_epaper_deinit(), ESP_OK));
 }
 TEST(ReadPicoNative, PartialPrepareFailureIsStoppedAndLatchedWithoutDrawing)
 {

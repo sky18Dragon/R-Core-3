@@ -1,3 +1,4 @@
+#include <string.h>
 // Host-test stub implementations for the ESP-IDF symbols image_processor.c
 // links against.
 #include <stddef.h>
@@ -19,7 +20,7 @@ const char *esp_err_to_name(esp_err_t code)
 // color_palette normally loads calibration from NVS; on host, always report
 // the firmware defaults (mirrors color_palette_get_defaults, whose real
 // implementation drags in NVS).
-esp_err_t color_palette_load(color_palette_t *palette)
+void color_palette_get_defaults(color_palette_t *palette)
 {
     palette->black = (color_rgb_t){2, 2, 2};
     palette->white = (color_rgb_t){190, 200, 200};
@@ -30,6 +31,27 @@ esp_err_t color_palette_load(color_palette_t *palette)
     palette->gray_black_y = 0.009f;
     palette->gray_white_y = 0.65f;
     palette->gray_gamma = 1.42f;
+}
+
+esp_err_t color_palette_load(color_palette_t *palette)
+{
+    extern unsigned test_palette_load_calls;
+    ++test_palette_load_calls;
+    color_palette_get_defaults(palette);
+    return ESP_OK;
+}
+
+unsigned test_palette_load_calls;
+
+// Measured GC16 ramp: absent unless a test sets it.
+float test_gray_levels[COLOR_PALETTE_GRAY_LEVELS];
+bool test_gray_levels_present;
+esp_err_t test_gray_levels_error;
+esp_err_t color_palette_load_gray_levels(float levels[COLOR_PALETTE_GRAY_LEVELS], bool *present)
+{
+    if (test_gray_levels_error != ESP_OK) return test_gray_levels_error;
+    *present = test_gray_levels_present;
+    if (test_gray_levels_present) memcpy(levels, test_gray_levels, sizeof(test_gray_levels));
     return ESP_OK;
 }
 

@@ -20,6 +20,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <unistd.h>
 #include <tuple>
 #include <vector>
 
@@ -214,7 +215,11 @@ Processed RunPipeline(const std::vector<uint8_t> &png)
 // File entry point used by the PNG display fast path.
 Processed RunPngFile(const std::vector<uint8_t> &png)
 {
-    std::string path = ::testing::TempDir() + "pipeline_test.png";
+    // CTest runs cases as parallel processes sharing TempDir(); a fixed name let
+    // one case overwrite or remove another's input (seen as a rare failure).
+    static int sequence;
+    std::string path = ::testing::TempDir() + "pipeline_test_" + std::to_string(getpid()) + "_" +
+                       std::to_string(++sequence) + ".png";
     FILE *fp = fopen(path.c_str(), "wb");
     EXPECT_NE(fp, nullptr);
     fwrite(png.data(), 1, png.size(), fp);

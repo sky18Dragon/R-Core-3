@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, computed } from "vue";
 import { useAppStore } from "../stores";
 import { copyText } from "../utils/clipboard";
@@ -11,12 +12,12 @@ const crash = computed(() => appStore.systemInfo.last_crash || null);
 const detected = computed(() =>
   crash.value.time
     ? new Date(crash.value.time * 1000).toLocaleString()
-    : "Unknown (the frame's clock was not set)"
+    : t("Unknown (the frame's clock was not set)")
 );
 
 const firmware = computed(() => {
   const { firmware: version, elf_sha256: sha } = crash.value;
-  const name = version || "Unknown build";
+  const name = version || t("Unknown build");
   return sha ? `${name} (ELF ${sha})` : name;
 });
 
@@ -64,21 +65,27 @@ async function clearCrash() {
 
 <template>
   <div v-if="crash">
-    <div class="text-subtitle-1 mb-4">Last Crash</div>
-    <div class="text-body-2 mb-1"><strong>Detected:</strong> {{ detected }}</div>
-    <div class="text-body-2 mb-1"><strong>Firmware:</strong> {{ firmware }}</div>
-    <div class="text-body-2 mb-3"><strong>Reason:</strong> {{ crash.reason }}</div>
+    <div class="text-subtitle-1 mb-4">{{ t("Last Crash") }}</div>
+    <div class="text-body-2 mb-1">
+      <strong>{{ t("Detected:") }}</strong> {{ detected }}
+    </div>
+    <div class="text-body-2 mb-1">
+      <strong>{{ t("Firmware:") }}</strong> {{ firmware }}
+    </div>
+    <div class="text-body-2 mb-3">
+      <strong>{{ t("Reason:") }}</strong> {{ crash.reason }}
+    </div>
     <pre class="crash-trace mb-3">{{ trace }}</pre>
     <div class="text-body-2 text-medium-emphasis mb-3">
-      Include the copied report when you file a bug, then clear it.
+      {{ t("Include the copied report when you file a bug, then clear it.") }}
     </div>
     <v-btn variant="outlined" class="mr-2" @click="copyReport">
       <v-icon start>{{ copyState === "copied" ? "mdi-check" : "mdi-content-copy" }}</v-icon>
-      {{ copyState === "copied" ? "Copied" : "Copy Report" }}
+      {{ copyState === "copied" ? t("Copied") : t("Copy Report") }}
     </v-btn>
     <v-btn variant="outlined" :loading="clearing" @click="clearCrash">
       <v-icon start>mdi-delete</v-icon>
-      Clear
+      {{ t("Clear") }}
     </v-btn>
     <v-alert
       v-if="copyState === 'failed' || clearFailed"
@@ -89,8 +96,8 @@ async function clearCrash() {
     >
       {{
         clearFailed
-          ? "Failed to clear the crash report"
-          : "Couldn't copy to the clipboard; select the details above instead"
+          ? t("Failed to clear the crash report")
+          : t("Couldn't copy to the clipboard; select the details above instead")
       }}
     </v-alert>
     <v-divider class="my-6" />

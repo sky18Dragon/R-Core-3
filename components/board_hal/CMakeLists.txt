@@ -18,6 +18,12 @@ set(PRIV_REQS
 
 if(CONFIG_BOARD_DRIVER_READ_PICO)
     list(APPEND SRCS "src/driver_read_pico.c" "src/read_pico_pmu_codec.c")
+    if(CONFIG_READ_PICO_STORAGE_VALIDATION OR CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION OR CONFIG_READ_PICO_PHOTO_VALIDATION)
+        list(APPEND SRCS "src/read_pico_sd.c" "src/read_pico_sd_command.c" "src/read_pico_fs.c")
+    endif()
+    if(CONFIG_READ_PICO_PMU_SLEEP)
+        list(APPEND SRCS "src/read_pico_pmu_command.c" "src/read_pico_pmu_session.c")
+    endif()
 elseif(CONFIG_BOARD_DRIVER_WAVESHARE_PHOTOPAINTER_73)
     list(APPEND SRCS "src/driver_waveshare_photopainter_73.c")
 elseif(CONFIG_BOARD_DRIVER_SEEEDSTUDIO_XIAO_EE02)
@@ -48,3 +54,12 @@ idf_component_register(
     REQUIRES esp_timer driver esp_adc esp_driver_gpio esp_driver_i2c esp_driver_usb_serial_jtag epaper sensor
     PRIV_REQUIRES ${PRIV_REQS}
 )
+
+if(CONFIG_BOARD_DRIVER_READ_PICO AND
+   (CONFIG_READ_PICO_STORAGE_VALIDATION OR CONFIG_READ_PICO_PHOTOFRAME_INTEGRATION OR CONFIG_READ_PICO_PHOTO_VALIDATION))
+    # Include calls from linked PNG/zlib/BMP/file-log consumers, not just main.
+    # Non-storage paths (e.g. console/socket descriptors) pass through unchanged.
+    foreach(FS_CALL fopen fdopen fclose open close opendir closedir stat mkdir unlink rename)
+        target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${FS_CALL}")
+    endforeach()
+endif()

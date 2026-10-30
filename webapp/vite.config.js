@@ -27,11 +27,22 @@ function gzipOutput(outDir) {
 }
 
 export default defineConfig({
-  plugins: [
-    vue(),
-    vuetify({ autoImport: true }),
-    gzipOutput(resolve(__dirname, "../main/webapp")),
-  ],
+  resolve: {
+    // Project copy with GC16 measured-ramp support; see third_party/epaper-image-convert/UPSTREAM.md
+    alias: {
+      "@aitjcize/epaper-image-convert": resolve(
+        __dirname,
+        "../third_party/epaper-image-convert/src/index.js"
+      ),
+      // Its Node-only dynamic imports resolve from webapp's installed packages, as before.
+      canvas: resolve(
+        __dirname,
+        "node_modules/@aitjcize/epaper-image-convert/node_modules/canvas/browser.js"
+      ),
+      exifreader: resolve(__dirname, "node_modules/exifreader"),
+    },
+  },
+  plugins: [vue(), vuetify({ autoImport: true }), gzipOutput(resolve(__dirname, "../main/webapp"))],
   build: {
     outDir: resolve(__dirname, "../main/webapp"),
     emptyOutDir: true,

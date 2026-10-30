@@ -1,0 +1,1281 @@
+/**
+ * Core image processing functions for e-paper displays
+ */
+
+import { SPECTRA6 } from "./palettes.js";
+import { getDefaultParams } from "./presets.js";
+
+// Default dimensions
+export const DEFAULT_DISPLAY_WIDTH = 800;
+export const DEFAULT_DISPLAY_HEIGHT = 480;
+export const DEFAULT_THUMBNAIL_MAX_DIMENSION = 400;
+
+/**
+ * Helper function to get canvas context with configurable image smoothing
+ * @param {HTMLCanvasElement} canvas - The canvas element
+ * @param {string} contextType - Context type (default: "2d")
+ * @param {boolean} enableSmoothing - Enable image smoothing for better quality scaling (default: false)
+ */
+export function getCanvasContext(
+  canvas,
+  contextType = "2d",
+  enableSmoothing = false,
+) {
+  const ctx = canvas.getContext(contextType);
+  if (ctx && contextType === "2d") {
+    ctx.imageSmoothingEnabled = enableSmoothing;
+    if (enableSmoothing) {
+      ctx.imageSmoothingQuality = "high";
+    }
+    if (ctx.mozImageSmoothingEnabled !== undefined) {
+      ctx.mozImageSmoothingEnabled = enableSmoothing;
+    }
+    if (ctx.webkitImageSmoothingEnabled !== undefined) {
+      ctx.webkitImageSmoothingEnabled = enableSmoothing;
+    }
+    if (ctx.msImageSmoothingEnabled !== undefined) {
+      ctx.msImageSmoothingEnabled = enableSmoothing;
+    }
+  }
+  return ctx;
+}
+
+/**
+ * Convert palette object to array format for indexing
+ * Array format: [[r,g,b], ...] ordered as [black, white, yellow, red, reserved, blue, green]
+ */
+export function paletteToArray(palette) {
+  // Grayscale palette: the gray ramp ([[r,g,b], ...]) is already the array form.
+  if (Array.isArray(palette.grays)) {
+    return palette.grays.map((g) => [g[0], g[1], g[2]]);
+  }
+  return [
+    [palette.black.r, palette.black.g, palette.black.b],
+    [palette.white.r, palette.white.g, palette.white.b],
+    [palette.yellow.r, palette.yellow.g, palette.yellow.b],
+    [palette.red.r, palette.red.g, palette.red.b],
+    [0, 0, 0], // Reserved (index 4, not used)
+    [palette.blue.r, palette.blue.g, palette.blue.b],
+    [palette.green.r, palette.green.g, palette.green.b],
+  ];
+}
+
+// ===== Color Space Conversion Functions =====
+
+function rgbToXyz(r, g, b) {
+  r = r / 255;
+  g = g / 255;
+  b = b / 255;
+
+  r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+  g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+  b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+
+  const x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
+  const y = r * 0.2126729 + g * 0.7151522 + b * 0.072175;
+  const z = r * 0.0193339 + g * 0.119192 + b * 0.9503041;
+
+  return [x * 100, y * 100, z * 100];
+}
+
+function xyzToLab(x, y, z) {
+  x = x / 95.047;
+  y = y / 100.0;
+  z = z / 108.883;
+
+  x = x > 0.008856 ? Math.pow(x, 1 / 3) : 7.787 * x + 16 / 116;
+  y = y > 0.008856 ? Math.pow(y, 1 / 3) : 7.787 * y + 16 / 116;
+  z = z > 0.008856 ? Math.pow(z, 1 / 3) : 7.787 * z + 16 / 116;
+
+  const L = 116 * y - 16;
+  const a = 500 * (x - y);
+  const bVal = 200 * (y - z);
+
+  return [L, a, bVal];
+}
+
+export function rgbToLab(r, g, b) {
+  const [x, y, z] = rgbToXyz(r, g, b);
+  return xyzToLab(x, y, z);
+}
+
+function labToXyz(L, a, b) {
+  let y = (L + 16) / 116;
+  let x = a / 500 + y;
+  let z = y - b / 200;
+
+  x = x > 0.206897 ? Math.pow(x, 3) : (x - 16 / 116) / 7.787;
+  y = y > 0.206897 ? Math.pow(y, 3) : (y - 16 / 116) / 7.787;
+  z = z > 0.206897 ? Math.pow(z, 3) : (z - 16 / 116) / 7.787;
+
+  return [x * 95.047, y * 100.0, z * 108.883];
+}
+
+function xyzToRgb(x, y, z) {
+  x = x / 100;
+  y = y / 100;
+  z = z / 100;
+
+  let r = x * 3.2404542 + y * -1.5371385 + z * -0.4985314;
+  let g = x * -0.969266 + y * 1.8760108 + z * 0.041556;
+  let b = x * 0.0556434 + y * -0.2040259 + z * 1.0572252;
+
+  r = r > 0.0031308 ? 1.055 * Math.pow(r, 1 / 2.4) - 0.055 : 12.92 * r;
+  g = g > 0.0031308 ? 1.055 * Math.pow(g, 1 / 2.4) - 0.055 : 12.92 * g;
+  b = b > 0.0031308 ? 1.055 * Math.pow(b, 1 / 2.4) - 0.055 : 12.92 * b;
+
+  return [
+    Math.max(0, Math.min(255, Math.round(r * 255))),
+    Math.max(0, Math.min(255, Math.round(g * 255))),
+    Math.max(0, Math.min(255, Math.round(b * 255))),
+  ];
+}
+
+function labToRgb(L, a, b) {
+  const [x, y, z] = labToXyz(L, a, b);
+  return xyzToRgb(x, y, z);
+}
+
+function deltaE(lab1, lab2) {
+  const dL = lab1[0] - lab2[0];
+  const da = lab1[1] - lab2[1];
+  const db = lab1[2] - lab2[2];
+  return Math.sqrt(dL * dL + da * da + db * db);
+}
+
+// ===== Image Adjustment Functions =====
+
+function applyExposure(imageData, exposure) {
+  if (exposure === 1.0) return;
+
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.min(255, Math.round(data[i] * exposure));
+    data[i + 1] = Math.min(255, Math.round(data[i + 1] * exposure));
+    data[i + 2] = Math.min(255, Math.round(data[i + 2] * exposure));
+  }
+}
+
+function applyContrast(imageData, contrast) {
+  if (contrast === 1.0) return;
+
+  const data = imageData.data;
+  const factor = contrast;
+
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(
+      0,
+      Math.min(255, Math.round((data[i] - 128) * factor + 128)),
+    );
+    data[i + 1] = Math.max(
+      0,
+      Math.min(255, Math.round((data[i + 1] - 128) * factor + 128)),
+    );
+    data[i + 2] = Math.max(
+      0,
+      Math.min(255, Math.round((data[i + 2] - 128) * factor + 128)),
+    );
+  }
+}
+
+function applySaturation(imageData, saturation) {
+  if (saturation === 1.0) return;
+
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    const max = Math.max(r, g, b) / 255;
+    const min = Math.min(r, g, b) / 255;
+    const l = (max + min) / 2;
+
+    if (max === min) continue; // Grayscale
+
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+    let h;
+    if (max === r / 255) {
+      h = ((g / 255 - b / 255) / d + (g < b ? 6 : 0)) / 6;
+    } else if (max === g / 255) {
+      h = ((b / 255 - r / 255) / d + 2) / 6;
+    } else {
+      h = ((r / 255 - g / 255) / d + 4) / 6;
+    }
+
+    const newS = Math.max(0, Math.min(1, s * saturation));
+    const c = (1 - Math.abs(2 * l - 1)) * newS;
+    const x = c * (1 - Math.abs(((h * 6) % 2) - 1));
+    const m = l - c / 2;
+
+    let rPrime, gPrime, bPrime;
+    const hSector = Math.floor(h * 6);
+
+    if (hSector === 0) {
+      [rPrime, gPrime, bPrime] = [c, x, 0];
+    } else if (hSector === 1) {
+      [rPrime, gPrime, bPrime] = [x, c, 0];
+    } else if (hSector === 2) {
+      [rPrime, gPrime, bPrime] = [0, c, x];
+    } else if (hSector === 3) {
+      [rPrime, gPrime, bPrime] = [0, x, c];
+    } else if (hSector === 4) {
+      [rPrime, gPrime, bPrime] = [x, 0, c];
+    } else {
+      [rPrime, gPrime, bPrime] = [c, 0, x];
+    }
+
+    data[i] = Math.round((rPrime + m) * 255);
+    data[i + 1] = Math.round((gPrime + m) * 255);
+    data[i + 2] = Math.round((bPrime + m) * 255);
+  }
+}
+
+function applyScurveTonemap(
+  imageData,
+  strength,
+  shadowBoost,
+  highlightCompress,
+  midpoint,
+) {
+  if (strength === 0) return;
+
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const normalized = data[i + c] / 255.0;
+      let result;
+
+      if (normalized <= midpoint) {
+        const shadowVal = normalized / midpoint;
+        result = Math.pow(shadowVal, 1.0 - strength * shadowBoost) * midpoint;
+      } else {
+        const highlightVal = (normalized - midpoint) / (1.0 - midpoint);
+        result =
+          midpoint +
+          Math.pow(highlightVal, 1.0 + strength * highlightCompress) *
+            (1.0 - midpoint);
+      }
+
+      data[i + c] = Math.round(Math.max(0, Math.min(1, result)) * 255);
+    }
+  }
+}
+
+// ===== Color Matching Functions =====
+
+// Only the 7-entry Spectra layout has a reserved slot at index 4 (see
+// paletteToArray). A 16-level grayscale ramp uses every index, including 4.
+const hasReservedSlot = (paletteArray) => paletteArray.length === 7;
+
+function findClosestColorRGB(r, g, b, paletteArray) {
+  const reserved = hasReservedSlot(paletteArray);
+  let minDist = Infinity;
+  let closest = 1; // Default to white
+
+  for (let i = 0; i < paletteArray.length; i++) {
+    if (i === 4 && reserved) continue; // Skip reserved color
+
+    const [pr, pg, pb] = paletteArray[i];
+    const dr = r - pr;
+    const dg = g - pg;
+    const db = b - pb;
+    const dist = dr * dr + dg * dg + db * db;
+
+    if (dist < minDist) {
+      minDist = dist;
+      closest = i;
+    }
+  }
+
+  return closest;
+}
+
+function findClosestColorLAB(r, g, b, paletteArray, paletteLab) {
+  const reserved = hasReservedSlot(paletteArray);
+  let minDist = Infinity;
+  let closest = 1;
+
+  const inputLab = rgbToLab(r, g, b);
+
+  for (let i = 0; i < paletteArray.length; i++) {
+    if (i === 4 && reserved) continue;
+    const dist = deltaE(inputLab, paletteLab[i]);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = i;
+    }
+  }
+
+  return closest;
+}
+
+function findClosestColor(r, g, b, method, paletteArray, paletteLab) {
+  return method === "lab"
+    ? findClosestColorLAB(r, g, b, paletteArray, paletteLab)
+    : findClosestColorRGB(r, g, b, paletteArray);
+}
+
+// ===== Dithering =====
+
+const DIFFUSION_MATRICES = {
+  "floyd-steinberg": [
+    [1, 0, 7 / 16],
+    [-1, 1, 3 / 16],
+    [0, 1, 5 / 16],
+    [1, 1, 1 / 16],
+  ],
+  stucki: [
+    [1, 0, 8 / 42],
+    [2, 0, 4 / 42],
+    [-2, 1, 2 / 42],
+    [-1, 1, 4 / 42],
+    [0, 1, 8 / 42],
+    [1, 1, 4 / 42],
+    [2, 1, 2 / 42],
+    [-2, 2, 1 / 42],
+    [-1, 2, 2 / 42],
+    [0, 2, 4 / 42],
+    [1, 2, 2 / 42],
+    [2, 2, 1 / 42],
+  ],
+  burkes: [
+    [1, 0, 8 / 32],
+    [2, 0, 4 / 32],
+    [-2, 1, 2 / 32],
+    [-1, 1, 4 / 32],
+    [0, 1, 8 / 32],
+    [1, 1, 4 / 32],
+    [2, 1, 2 / 32],
+  ],
+  sierra: [
+    [1, 0, 5 / 32],
+    [2, 0, 3 / 32],
+    [-2, 1, 2 / 32],
+    [-1, 1, 4 / 32],
+    [0, 1, 5 / 32],
+    [1, 1, 4 / 32],
+    [2, 1, 2 / 32],
+    [-1, 2, 2 / 32],
+    [0, 2, 3 / 32],
+    [1, 2, 2 / 32],
+  ],
+};
+
+/**
+ * Apply error diffusion dithering to image data
+ * @param {ImageData} imageData - Image data to dither (modified in place)
+ * @param {string} method - Color matching method: "rgb" or "lab"
+ * @param {Array} outputPaletteArray - Palette array for output colors
+ * @param {Array} ditherPaletteArray - Palette array for error diffusion calculations
+ * @param {string} algorithm - Dithering algorithm name
+ */
+// sRGB (0..255) <-> linear-light (0..1), per channel. Diffusion error should be
+// distributed in linear light: the eye averages the linear luminance of the
+// dithered dots, not their gamma-encoded values, so a 50/50 black/white dither
+// reads as linear Y=0.5 (a light gray), not mid-gray. Diffusing in linear keeps
+// the dithered average luminance correct -- important with only 16 levels.
+const srgbToLinear = (c) => {
+  c /= 255;
+  return c > 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
+};
+const linearToSrgb = (l) => {
+  const c = l > 0.0031308 ? 1.055 * Math.pow(l, 1 / 2.4) - 0.055 : 12.92 * l;
+  return c * 255;
+};
+
+function applyErrorDiffusionDither(
+  imageData,
+  method,
+  outputPaletteArray,
+  ditherPaletteArray,
+  algorithm,
+  linearLight = false,
+) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = imageData.data;
+
+  const errors = new Array(width * height * 3).fill(0);
+  const diffusionMatrix =
+    DIFFUSION_MATRICES[algorithm] || DIFFUSION_MATRICES["floyd-steinberg"];
+
+  // Pre-compute LAB values for dither palette if using LAB method
+  const ditherPaletteLab =
+    method === "lab"
+      ? ditherPaletteArray.map(([r, g, b]) => rgbToLab(r, g, b))
+      : null;
+
+  // In linear-light mode the working value + diffused error live in linear space
+  // (0..1) and the nearest-level match still happens in sRGB/LAB. In sRGB mode
+  // decode/encode are identities and hi=255, so the output is unchanged.
+  const decode = linearLight ? srgbToLinear : (c) => c;
+  const encode = linearLight ? linearToSrgb : (w) => w;
+  const hi = linearLight ? 1 : 255;
+  const ditherWork = linearLight
+    ? ditherPaletteArray.map(([r, g, b]) => [
+        srgbToLinear(r),
+        srgbToLinear(g),
+        srgbToLinear(b),
+      ])
+    : ditherPaletteArray;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      const errIdx = (y * width + x) * 3;
+
+      const wR = Math.max(0, Math.min(hi, decode(data[idx]) + errors[errIdx]));
+      const wG = Math.max(
+        0,
+        Math.min(hi, decode(data[idx + 1]) + errors[errIdx + 1]),
+      );
+      const wB = Math.max(
+        0,
+        Math.min(hi, decode(data[idx + 2]) + errors[errIdx + 2]),
+      );
+
+      const colorIdx = findClosestColor(
+        encode(wR),
+        encode(wG),
+        encode(wB),
+        method,
+        ditherPaletteArray,
+        ditherPaletteLab,
+      );
+      const [newR, newG, newB] = outputPaletteArray[colorIdx];
+
+      data[idx] = newR;
+      data[idx + 1] = newG;
+      data[idx + 2] = newB;
+
+      const [ditherR, ditherG, ditherB] = ditherWork[colorIdx];
+      const errR = wR - ditherR;
+      const errG = wG - ditherG;
+      const errB = wB - ditherB;
+
+      for (const [dx, dy, weight] of diffusionMatrix) {
+        const nx = x + dx;
+        const ny = y + dy;
+
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const nextIdx = (ny * width + nx) * 3;
+          errors[nextIdx] += errR * weight;
+          errors[nextIdx + 1] += errG * weight;
+          errors[nextIdx + 2] += errB * weight;
+        }
+      }
+    }
+  }
+}
+
+// ===== Image Preprocessing =====
+
+function preprocessImage(imageData, params, perceivedPalette) {
+  const toneMode = params.toneMode || "contrast";
+
+  // 1. Apply exposure
+  if (params.exposure && params.exposure !== 1.0) {
+    applyExposure(imageData, params.exposure);
+  }
+
+  // 2. Apply saturation
+  if (params.saturation !== 1.0) {
+    applySaturation(imageData, params.saturation);
+  }
+
+  // 3. Apply tone mapping
+  if (toneMode === "contrast") {
+    if (params.contrast && params.contrast !== 1.0) {
+      applyContrast(imageData, params.contrast);
+    }
+  } else {
+    applyScurveTonemap(
+      imageData,
+      params.strength,
+      params.shadowBoost,
+      params.highlightCompress,
+      params.midpoint,
+    );
+  }
+
+  // 4. Compress dynamic range to display's actual luminance range
+  if (params.compressDynamicRange && perceivedPalette) {
+    const paletteBlack = perceivedPalette.black;
+    const paletteWhite = perceivedPalette.white;
+
+    const [blackL] = rgbToLab(paletteBlack.r, paletteBlack.g, paletteBlack.b);
+    const [whiteL] = rgbToLab(paletteWhite.r, paletteWhite.g, paletteWhite.b);
+
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      const [l, a, bLab] = rgbToLab(r, g, b);
+      const compressedL = blackL + (l / 100) * (whiteL - blackL);
+      const [newR, newG, newB] = labToRgb(compressedL, a, bLab);
+
+      data[i] = newR;
+      data[i + 1] = newG;
+      data[i + 2] = newB;
+    }
+  }
+}
+
+// ===== Canvas Transformation Functions =====
+
+/**
+ * Rotate canvas 90 degrees clockwise
+ */
+/**
+ * Rotate canvas by the specified degrees (must be a multiple of 90)
+ */
+export function rotateImage(canvas, degrees, createCanvas = null) {
+  const d = ((degrees % 360) + 360) % 360;
+  if (d % 90 !== 0) {
+    throw new Error(
+      `Rotation must be a multiple of 90 degrees, got ${degrees}`,
+    );
+  }
+  if (d === 0) return canvas;
+
+  const swapDims = d === 90 || d === 270;
+  const outW = swapDims ? canvas.height : canvas.width;
+  const outH = swapDims ? canvas.width : canvas.height;
+
+  let rotatedCanvas;
+  if (createCanvas) {
+    rotatedCanvas = createCanvas(outW, outH);
+  } else {
+    rotatedCanvas = document.createElement("canvas");
+    rotatedCanvas.width = outW;
+    rotatedCanvas.height = outH;
+  }
+
+  const ctx = getCanvasContext(rotatedCanvas);
+  ctx.translate(outW / 2, outH / 2);
+  ctx.rotate((d * Math.PI) / 180);
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+
+  return rotatedCanvas;
+}
+
+/**
+ * Apply EXIF orientation transformation to canvas
+ */
+export function applyExifOrientation(canvas, orientation, createCanvas = null) {
+  if (orientation === 1) return canvas;
+
+  const { width, height } = canvas;
+  let newCanvas;
+
+  if (orientation >= 5 && orientation <= 8) {
+    if (createCanvas) {
+      newCanvas = createCanvas(height, width);
+    } else {
+      newCanvas = document.createElement("canvas");
+      newCanvas.width = height;
+      newCanvas.height = width;
+    }
+  } else {
+    if (createCanvas) {
+      newCanvas = createCanvas(width, height);
+    } else {
+      newCanvas = document.createElement("canvas");
+      newCanvas.width = width;
+      newCanvas.height = height;
+    }
+  }
+
+  const ctx = getCanvasContext(newCanvas);
+
+  switch (orientation) {
+    case 2:
+      ctx.transform(-1, 0, 0, 1, width, 0);
+      break;
+    case 3:
+      ctx.transform(-1, 0, 0, -1, width, height);
+      break;
+    case 4:
+      ctx.transform(1, 0, 0, -1, 0, height);
+      break;
+    case 5:
+      ctx.transform(0, 1, 1, 0, 0, 0);
+      break;
+    case 6:
+      ctx.transform(0, 1, -1, 0, height, 0);
+      break;
+    case 7:
+      ctx.transform(0, -1, -1, 0, height, width);
+      break;
+    case 8:
+      ctx.transform(0, -1, 1, 0, 0, width);
+      break;
+  }
+
+  ctx.drawImage(canvas, 0, 0);
+  return newCanvas;
+}
+
+/**
+ * Resize image with cover mode (scale and crop to fill)
+ *
+ * Browser vs Node.js scaling behavior:
+ * - Browser canvas drawImage uses simple pixel sampling for downscaling, which causes
+ *   aliasing artifacts when reducing by more than 2x. To work around this, we use
+ *   multi-step downscaling (halving repeatedly) until we're within 2x of target size.
+ * - Node.js canvas (node-canvas) uses proper interpolation algorithms internally,
+ *   so single-step scaling produces good quality results.
+ *
+ * Reference: https://stackoverflow.com/questions/18922880/html5-canvas-resize-downscale-image-high-quality
+ */
+export function resizeImageCover(
+  sourceCanvas,
+  outputWidth,
+  outputHeight,
+  createCanvas = null,
+) {
+  const srcWidth = sourceCanvas.width;
+  const srcHeight = sourceCanvas.height;
+
+  const scaleX = outputWidth / srcWidth;
+  const scaleY = outputHeight / srcHeight;
+  const scale = Math.max(scaleX, scaleY);
+
+  const scaledWidth = Math.round(srcWidth * scale);
+  const scaledHeight = Math.round(srcHeight * scale);
+
+  // Detect environment: createCanvas is provided in Node.js, null in browser
+  const isBrowser = !createCanvas;
+
+  let tempCanvas;
+
+  if (
+    isBrowser &&
+    (srcWidth > scaledWidth * 2 || srcHeight > scaledHeight * 2)
+  ) {
+    // Browser with large downscale (>2x): use multi-step halving for better quality
+    // Each 2x reduction is handled well by browsers (used for retina displays),
+    // so we repeatedly halve until within 2x of target, then do final scale.
+    let currentCanvas = sourceCanvas;
+    let currentWidth = srcWidth;
+    let currentHeight = srcHeight;
+
+    while (currentWidth > scaledWidth * 2 || currentHeight > scaledHeight * 2) {
+      const nextWidth = Math.round(currentWidth / 2);
+      const nextHeight = Math.round(currentHeight / 2);
+
+      const stepCanvas = document.createElement("canvas");
+      stepCanvas.width = nextWidth;
+      stepCanvas.height = nextHeight;
+      const stepCtx = getCanvasContext(stepCanvas, "2d", true);
+      stepCtx.drawImage(currentCanvas, 0, 0, nextWidth, nextHeight);
+
+      currentCanvas = stepCanvas;
+      currentWidth = nextWidth;
+      currentHeight = nextHeight;
+    }
+
+    // Final scale step (now within 2x of target)
+    tempCanvas = document.createElement("canvas");
+    tempCanvas.width = scaledWidth;
+    tempCanvas.height = scaledHeight;
+    const tempCtx = getCanvasContext(tempCanvas, "2d", true);
+    tempCtx.drawImage(currentCanvas, 0, 0, scaledWidth, scaledHeight);
+  } else {
+    // Node.js or small reduction (<= 2x): single-step scaling works well
+    if (createCanvas) {
+      tempCanvas = createCanvas(scaledWidth, scaledHeight);
+    } else {
+      tempCanvas = document.createElement("canvas");
+      tempCanvas.width = scaledWidth;
+      tempCanvas.height = scaledHeight;
+    }
+    const tempCtx = getCanvasContext(tempCanvas, "2d", true);
+    tempCtx.drawImage(sourceCanvas, 0, 0, scaledWidth, scaledHeight);
+  }
+
+  // Crop to final output size
+  const cropX = Math.round((scaledWidth - outputWidth) / 2);
+  const cropY = Math.round((scaledHeight - outputHeight) / 2);
+
+  let outputCanvas;
+  if (createCanvas) {
+    outputCanvas = createCanvas(outputWidth, outputHeight);
+  } else {
+    outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outputWidth;
+    outputCanvas.height = outputHeight;
+  }
+  const outputCtx = getCanvasContext(outputCanvas);
+  outputCtx.drawImage(
+    tempCanvas,
+    cropX,
+    cropY,
+    outputWidth,
+    outputHeight,
+    0,
+    0,
+    outputWidth,
+    outputHeight,
+  );
+
+  return outputCanvas;
+}
+
+/**
+ * Resize canvas to fit within target dimensions (letterbox mode).
+ * The image is scaled to fit entirely within the target, centered,
+ * with the remaining area filled with backgroundColor.
+ */
+export function resizeImageFit(
+  sourceCanvas,
+  outputWidth,
+  outputHeight,
+  backgroundColor = "white",
+  createCanvas = null,
+) {
+  const srcWidth = sourceCanvas.width;
+  const srcHeight = sourceCanvas.height;
+
+  const scale = Math.min(outputWidth / srcWidth, outputHeight / srcHeight);
+  const scaledWidth = Math.round(srcWidth * scale);
+  const scaledHeight = Math.round(srcHeight * scale);
+  const offsetX = Math.round((outputWidth - scaledWidth) / 2);
+  const offsetY = Math.round((outputHeight - scaledHeight) / 2);
+
+  let outputCanvas;
+  if (createCanvas) {
+    outputCanvas = createCanvas(outputWidth, outputHeight);
+  } else {
+    outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outputWidth;
+    outputCanvas.height = outputHeight;
+  }
+
+  const ctx = getCanvasContext(outputCanvas, "2d", true);
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, outputWidth, outputHeight);
+  ctx.drawImage(sourceCanvas, offsetX, offsetY, scaledWidth, scaledHeight);
+
+  return outputCanvas;
+}
+
+/**
+ * Resize canvas with custom zoom and pan.
+ * The source is drawn at the given zoom level and pan offset onto the output canvas,
+ * with remaining area filled with backgroundColor.
+ *
+ * @param {Canvas} sourceCanvas - Source canvas
+ * @param {number} outputWidth - Output width
+ * @param {number} outputHeight - Output height
+ * @param {number} zoom - Zoom factor (1.0 = original size)
+ * @param {number} panX - Horizontal offset in output pixels
+ * @param {number} panY - Vertical offset in output pixels
+ * @param {string} backgroundColor - Background fill color (default: "#000000")
+ * @param {Function} createCanvas - Canvas creation function for Node.js
+ */
+export function resizeImageCustom(
+  sourceCanvas,
+  outputWidth,
+  outputHeight,
+  zoom = 1.0,
+  panX = 0,
+  panY = 0,
+  backgroundColor = "white",
+  createCanvas = null,
+) {
+  let outputCanvas;
+  if (createCanvas) {
+    outputCanvas = createCanvas(outputWidth, outputHeight);
+  } else {
+    outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outputWidth;
+    outputCanvas.height = outputHeight;
+  }
+
+  const ctx = getCanvasContext(outputCanvas, "2d", true);
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, outputWidth, outputHeight);
+
+  const w = Math.round(sourceCanvas.width * zoom);
+  const h = Math.round(sourceCanvas.height * zoom);
+  ctx.drawImage(sourceCanvas, Math.round(panX), Math.round(panY), w, h);
+
+  return outputCanvas;
+}
+
+/**
+ * Generate thumbnail from canvas, preserving aspect ratio.
+ * The longest side will not exceed maxDimension.
+ *
+ * @param {Canvas} sourceCanvas - Source canvas to generate thumbnail from
+ * @param {number} maxDimension - Maximum size of the longest side (default: 400)
+ * @param {Function} createCanvas - Canvas creation function for Node.js
+ */
+export function generateThumbnail(
+  sourceCanvas,
+  maxDimension = DEFAULT_THUMBNAIL_MAX_DIMENSION,
+  createCanvas = null,
+) {
+  const srcWidth = sourceCanvas.width;
+  const srcHeight = sourceCanvas.height;
+
+  const scale = Math.min(maxDimension / srcWidth, maxDimension / srcHeight);
+  const thumbWidth = Math.round(srcWidth * scale);
+  const thumbHeight = Math.round(srcHeight * scale);
+
+  let thumbCanvas;
+  if (createCanvas) {
+    thumbCanvas = createCanvas(thumbWidth, thumbHeight);
+  } else {
+    thumbCanvas = document.createElement("canvas");
+    thumbCanvas.width = thumbWidth;
+    thumbCanvas.height = thumbHeight;
+  }
+
+  const ctx = getCanvasContext(thumbCanvas, "2d", true);
+  ctx.drawImage(sourceCanvas, 0, 0, thumbWidth, thumbHeight);
+
+  return thumbCanvas;
+}
+
+/**
+ * Convert canvas to PNG
+ */
+export async function createPNG(canvas) {
+  if (typeof Buffer !== "undefined" && typeof window === "undefined") {
+    return canvas.toBuffer("image/png");
+  } else {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Failed to create PNG blob"));
+        }
+      }, "image/png");
+    });
+  }
+}
+
+/**
+ * Convert canvas to BMP (24-bit uncompressed)
+ */
+export function createBMP(canvas) {
+  const ctx = getCanvasContext(canvas);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { width, height, data } = imageData;
+
+  // BMP row padding (rows must be multiple of 4 bytes)
+  const rowSize = Math.ceil((width * 3) / 4) * 4;
+  const pixelDataSize = rowSize * height;
+
+  // File size: headers (54 bytes) + pixel data
+  const fileSize = 54 + pixelDataSize;
+
+  const buffer = Buffer.alloc(fileSize);
+
+  // BMP File Header (14 bytes)
+  buffer.write("BM", 0); // Signature
+  buffer.writeUInt32LE(fileSize, 2); // File size
+  buffer.writeUInt32LE(0, 6); // Reserved
+  buffer.writeUInt32LE(54, 10); // Pixel data offset
+
+  // DIB Header (BITMAPINFOHEADER - 40 bytes)
+  buffer.writeUInt32LE(40, 14); // Header size
+  buffer.writeInt32LE(width, 18); // Width
+  buffer.writeInt32LE(height, 22); // Height (positive = bottom-up)
+  buffer.writeUInt16LE(1, 26); // Color planes
+  buffer.writeUInt16LE(24, 28); // Bits per pixel
+  buffer.writeUInt32LE(0, 30); // Compression (0 = none)
+  buffer.writeUInt32LE(pixelDataSize, 34); // Image size
+  buffer.writeInt32LE(2835, 38); // X pixels per meter (~72 DPI)
+  buffer.writeInt32LE(2835, 42); // Y pixels per meter
+  buffer.writeUInt32LE(0, 46); // Colors in color table
+  buffer.writeUInt32LE(0, 50); // Important colors
+
+  // Pixel data (BGR, bottom-up)
+  let offset = 54;
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = 0; x < width; x++) {
+      const srcIdx = (y * width + x) * 4;
+      buffer[offset++] = data[srcIdx + 2]; // B
+      buffer[offset++] = data[srcIdx + 1]; // G
+      buffer[offset++] = data[srcIdx]; // R
+    }
+    // Padding to 4-byte boundary
+    const padding = rowSize - width * 3;
+    for (let p = 0; p < padding; p++) {
+      buffer[offset++] = 0;
+    }
+  }
+
+  return buffer;
+}
+
+/**
+ * Map a theoretical palette RGB value to its 4-bit palette index.
+ * Color indices: 0=Black, 1=White, 2=Yellow, 3=Red, 5=Blue, 6=Green.
+ * For grayscale (GC16), the index is the 4-bit gray level itself (0=black..15=white).
+ */
+function rgbToPaletteIndex(r, g, b, grayscale = false) {
+  if (grayscale) {
+    // Pixels are already quantized to the gray ramp, so r==g==b; map directly.
+    const idx = Math.round((r / 255) * 15);
+    return idx < 0 ? 0 : idx > 15 ? 15 : idx;
+  }
+  if (r === 0 && g === 0 && b === 0) return 0; // Black
+  if (r === 255 && g === 255 && b === 255) return 1; // White
+  if (r === 255 && g === 255 && b === 0) return 2; // Yellow
+  if (r === 255 && g === 0 && b === 0) return 3; // Red
+  if (r === 0 && g === 0 && b === 255) return 5; // Blue
+  if (r === 0 && g === 255 && b === 0) return 6; // Green
+  return 1; // Default to white for unknown colors
+}
+
+/**
+ * Convert canvas to EPDGZ (4-bit-per-pixel gzip-compressed raw e-paper data)
+ *
+ * Pixel packing: 2 pixels per byte, high nibble = first pixel, low nibble = second pixel.
+ * For grayscale (GC16 / IT8951) the nibble is the 4-bit gray level (0..15) rather
+ * than a Spectra palette index; pass { grayscale: true }.
+ * Works in both Node.js (zlib) and browser (CompressionStream) environments.
+ */
+export async function createEPDGZ(canvas, options = {}) {
+  const { grayscale = false } = options;
+  const ctx = getCanvasContext(canvas);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { width, height, data } = imageData;
+
+  const rawBuffer = new Uint8Array(Math.ceil((width * height) / 2));
+  let byteIdx = 0;
+  const padPixel = grayscale ? 15 : 1; // white
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x += 2) {
+      const idx1 = (y * width + x) * 4;
+      const p1 = rgbToPaletteIndex(
+        data[idx1],
+        data[idx1 + 1],
+        data[idx1 + 2],
+        grayscale,
+      );
+
+      let p2 = padPixel;
+      if (x + 1 < width) {
+        const idx2 = (y * width + x + 1) * 4;
+        p2 = rgbToPaletteIndex(
+          data[idx2],
+          data[idx2 + 1],
+          data[idx2 + 2],
+          grayscale,
+        );
+      }
+
+      rawBuffer[byteIdx++] = (p1 << 4) | (p2 & 0x0f);
+    }
+  }
+
+  // Gzip compress: Node.js uses zlib, browser uses CompressionStream
+  if (typeof Buffer !== "undefined" && typeof window === "undefined") {
+    const { gzipSync } = await import("zlib");
+    return gzipSync(rawBuffer);
+  } else {
+    const cs = new CompressionStream("gzip");
+    const writer = cs.writable.getWriter();
+    writer.write(rawBuffer);
+    writer.close();
+    const compressed = await new Response(cs.readable).arrayBuffer();
+    return new Uint8Array(compressed);
+  }
+}
+
+// ===== Main Processing Function =====
+
+/**
+ * Complete image processing pipeline from source to device-ready output
+ *
+ * @param {Canvas|ImageData} source - Source canvas or ImageData
+ * @param {Object} options - Processing options
+ * @param {number} options.displayWidth - Display width in pixels (required)
+ * @param {number} options.displayHeight - Display height in pixels (required)
+ * @param {Object} options.palette - Palette pair { theoretical, perceived } (default: SPECTRA6)
+ * @param {Object} options.params - Processing parameters (exposure, saturation, etc.)
+ * @param {string|null} options.orientation - Display orientation: "landscape", "portrait", or null.
+ *   When null (default), uses native panel orientation (no rotation).
+ *   When set and different from native, processes at swapped dimensions then rotates output
+ *   90° CW to produce native panel layout.
+ * @param {string} options.scaleMode - Scale mode: "cover" (crop), "fit" (letterbox), or "custom" (zoom/pan)
+ * @param {string} options.backgroundColor - Palette color name for fit/custom background (default: "white")
+ * @param {number} options.zoom - Zoom factor for custom mode (default: 1.0)
+ * @param {number} options.panX - Horizontal pan offset for custom mode (default: 0)
+ * @param {number} options.panY - Vertical pan offset for custom mode (default: 0)
+ * @param {boolean} options.skipDithering - Skip dithering step (default: false)
+ * @param {boolean} options.usePerceivedOutput - Use perceived palette for output (default: false)
+ * @param {boolean} options.verbose - Enable verbose logging (default: false)
+ * @param {Function} options.createCanvas - Canvas creation function for Node.js (default: null)
+ * @returns {Object} { canvas, originalCanvas }
+ */
+export function processImage(source, options = {}) {
+  let {
+    displayWidth = DEFAULT_DISPLAY_WIDTH,
+    displayHeight = DEFAULT_DISPLAY_HEIGHT,
+  } = options;
+  const {
+    palette = SPECTRA6,
+    params = getDefaultParams(),
+    orientation = null,
+    scaleMode = "cover",
+    backgroundColor = "white",
+    zoom = 1.0,
+    panX = 0,
+    panY = 0,
+    skipDithering = false,
+    usePerceivedOutput = false,
+    linearDither,
+    verbose = false,
+    createCanvas = null,
+  } = options;
+
+  // Handle both canvas and ImageData inputs
+  const isImageData = source.data && source.width && source.height;
+  let canvas;
+  if (createCanvas) {
+    canvas = createCanvas(source.width, source.height);
+  } else {
+    canvas = document.createElement("canvas");
+    canvas.width = source.width;
+    canvas.height = source.height;
+  }
+  const ctx = getCanvasContext(canvas);
+
+  if (isImageData) {
+    ctx.putImageData(source, 0, 0);
+  } else {
+    ctx.drawImage(source, 0, 0);
+  }
+
+  // Check if orientation doesn't match native panel aspect ratio.
+  // If mismatched, swap processing dimensions and rotate the output at the end.
+  // If orientation is null, use native (no rotation).
+  // e.g. portrait on 800x480 panel → process at 480x800 → rotate to 800x480
+  // e.g. landscape on 1200x1600 panel → process at 1600x1200 → rotate to 1200x1600
+  const nativeIsLandscape = displayWidth > displayHeight;
+  const orientIsLandscape =
+    orientation === null ? nativeIsLandscape : orientation !== "portrait";
+  const needsRotation = nativeIsLandscape !== orientIsLandscape;
+  if (needsRotation) {
+    [displayWidth, displayHeight] = [displayHeight, displayWidth];
+    if (verbose) {
+      console.log(
+        `  ${orientation} mode on ${nativeIsLandscape ? "landscape" : "portrait"} panel: processing at ${displayWidth}x${displayHeight}`,
+      );
+    }
+  }
+
+  if (verbose) {
+    console.log(`  Original size: ${canvas.width}x${canvas.height}`);
+    console.log(`  Processing parameters:`);
+    console.log(`    Exposure: ${params.exposure ?? 1.0}`);
+    console.log(`    Saturation: ${params.saturation ?? 1.0}`);
+    console.log(`    Tone mode: ${params.toneMode || "contrast"}`);
+    if (params.toneMode === "scurve") {
+      console.log(`    S-curve strength: ${params.strength ?? 0.5}`);
+      console.log(`    S-curve shadow boost: ${params.shadowBoost ?? 0.3}`);
+      console.log(
+        `    S-curve highlight compress: ${params.highlightCompress ?? 1.5}`,
+      );
+      console.log(`    S-curve midpoint: ${params.midpoint ?? 0.5}`);
+    } else {
+      console.log(`    Contrast: ${params.contrast ?? 1.0}`);
+    }
+    console.log(`    Color method: ${params.colorMethod || "rgb"}`);
+    console.log(
+      `    Dither algorithm: ${params.ditherAlgorithm || "floyd-steinberg"}`,
+    );
+    console.log(
+      `    Compress dynamic range: ${params.compressDynamicRange ?? false}`,
+    );
+    const nativeOrient = nativeIsLandscape ? "landscape" : "portrait";
+    const effectiveOrient = orientation || nativeOrient;
+    console.log(
+      `    Orientation: ${effectiveOrient}${effectiveOrient === nativeOrient ? " (native)" : ""}`,
+    );
+    console.log(`    Scale mode: ${scaleMode}`);
+    if (scaleMode === "fit" || scaleMode === "custom") {
+      console.log(`    Background color: ${backgroundColor}`);
+    }
+    if (scaleMode === "custom") {
+      console.log(`    Zoom: ${zoom}, Pan: (${panX}, ${panY})`);
+    }
+  }
+
+  // Resize to display dimensions
+  const finalWidth = displayWidth;
+  const finalHeight = displayHeight;
+  let bgMask = null;
+
+  if (scaleMode === "fit" || scaleMode === "custom") {
+    const bgColor =
+      palette.theoretical[backgroundColor] || palette.theoretical.black;
+    const bgHex = `rgb(${bgColor.r},${bgColor.g},${bgColor.b})`;
+
+    // Resize function based on scale mode
+    const resizeFn = (bg) =>
+      scaleMode === "fit"
+        ? resizeImageFit(canvas, finalWidth, finalHeight, bg, createCanvas)
+        : resizeImageCustom(
+            canvas,
+            finalWidth,
+            finalHeight,
+            zoom,
+            panX,
+            panY,
+            bg,
+            createCanvas,
+          );
+
+    if (verbose) {
+      console.log(
+        scaleMode === "fit"
+          ? `  Resizing to fit ${finalWidth}x${finalHeight} (letterbox)`
+          : `  Custom scale: zoom=${zoom}, pan=(${panX},${panY}) → ${finalWidth}x${finalHeight}`,
+      );
+    }
+
+    // First pass: transparent background to build mask
+    const tempCanvas = resizeFn("rgba(0,0,0,0)");
+    const tempData = getCanvasContext(tempCanvas).getImageData(
+      0,
+      0,
+      finalWidth,
+      finalHeight,
+    );
+    bgMask = new Uint8Array(finalWidth * finalHeight);
+    for (let i = 0; i < bgMask.length; i++) {
+      bgMask[i] = tempData.data[i * 4 + 3] === 0 ? 1 : 0;
+    }
+
+    // Second pass: actual background color
+    canvas = resizeFn(bgHex);
+  } else if (canvas.width !== finalWidth || canvas.height !== finalHeight) {
+    if (verbose) {
+      console.log(`  Resizing to cover ${finalWidth}x${finalHeight} (crop)`);
+    }
+    canvas = resizeImageCover(canvas, finalWidth, finalHeight, createCanvas);
+  }
+
+  // Snapshot the post-layout, pre-dither canvas for thumbnail generation.
+  // Capturing here (rather than before the resize block) ensures the
+  // thumbnail reflects the user's chosen scaleMode — cover crop, fit
+  // letterbox, or custom zoom/pan — so gallery previews match what the
+  // device actually displays. Still captured in clean 24-bit color to
+  // avoid dither artifacts at thumbnail sizes.
+  let originalCanvas;
+  if (createCanvas) {
+    originalCanvas = createCanvas(canvas.width, canvas.height);
+  } else {
+    originalCanvas = document.createElement("canvas");
+    originalCanvas.width = canvas.width;
+    originalCanvas.height = canvas.height;
+  }
+  getCanvasContext(originalCanvas, "2d", true).drawImage(canvas, 0, 0);
+
+  // Get image data for processing
+  const imageData = getCanvasContext(canvas).getImageData(
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+
+  // Apply tone mapping and preprocessing
+  if (verbose) {
+    console.log(`  Applying tone mapping (${params.toneMode || "contrast"})`);
+  }
+  if (verbose && params.compressDynamicRange) {
+    const [blackL] = rgbToLab(
+      palette.perceived.black.r,
+      palette.perceived.black.g,
+      palette.perceived.black.b,
+    );
+    const [whiteL] = rgbToLab(
+      palette.perceived.white.r,
+      palette.perceived.white.g,
+      palette.perceived.white.b,
+    );
+    console.log(
+      `  Compressing dynamic range to L* ${Math.round(blackL)}-${Math.round(whiteL)}`,
+    );
+  }
+  const processingParams = { ...params, measuredPalette: palette.perceived };
+  preprocessImage(imageData, processingParams, palette.perceived);
+
+  // Apply dithering
+  if (!skipDithering) {
+    const outputPalette = usePerceivedOutput
+      ? palette.perceived
+      : palette.theoretical;
+    const outputPaletteArray = paletteToArray(outputPalette);
+    const ditherPaletteArray = paletteToArray(palette.perceived);
+
+    // Diffuse error in linear light for grayscale (GC16) by default -- few
+    // levels make gamma-space error diffusion visibly wrong. Callers can force
+    // it on/off via options.linearDither. Color keeps its tuned sRGB behavior.
+    const useLinearDither =
+      linearDither !== undefined ? linearDither : palette?.mode === "grayscale";
+
+    if (verbose) {
+      console.log(
+        `  Applying ${params.ditherAlgorithm || "floyd-steinberg"} dithering` +
+          (useLinearDither ? " (linear light)" : ""),
+      );
+    }
+
+    applyErrorDiffusionDither(
+      imageData,
+      params.colorMethod || "rgb",
+      outputPaletteArray,
+      ditherPaletteArray,
+      params.ditherAlgorithm || "floyd-steinberg",
+      useLinearDither,
+    );
+  }
+
+  // Replace background pixels with clean palette color after dithering.
+  // Dithering can introduce artifacts in uniform background areas.
+  if (bgMask) {
+    const outputPal = usePerceivedOutput
+      ? palette.perceived
+      : palette.theoretical;
+    const cleanBg = outputPal[backgroundColor] || outputPal.black;
+    for (let i = 0; i < bgMask.length; i++) {
+      if (bgMask[i]) {
+        imageData.data[i * 4] = cleanBg.r;
+        imageData.data[i * 4 + 1] = cleanBg.g;
+        imageData.data[i * 4 + 2] = cleanBg.b;
+      }
+    }
+  }
+
+  getCanvasContext(canvas).putImageData(imageData, 0, 0);
+
+  // Rotate output to native panel layout when orientation doesn't match panel
+  if (needsRotation) {
+    canvas = rotateImage(canvas, 90, createCanvas);
+    if (verbose) {
+      console.log(
+        `  Rotated output 90° CW to native layout (${canvas.width}x${canvas.height})`,
+      );
+    }
+  }
+
+  return { canvas, originalCanvas };
+}

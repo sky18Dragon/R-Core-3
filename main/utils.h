@@ -16,6 +16,17 @@
 // client of the device's own API; such config may not touch the device
 // password.
 esp_err_t apply_config_from_json(cJSON *root, bool from_remote);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "config_apply.h"
+typedef struct {
+    config_apply_result_t state;
+    char config_error[256];
+    char cert_error[256];
+} local_config_result_t;
+// Local general update, diagnostic snapshot, and checked revision share one
+// application control. Caller owns result; no shared error consume after return.
+esp_err_t apply_local_config_checked(cJSON *root, local_config_result_t *result);
+#endif
 
 // Get/set the last image fetch error (transient, for UI display)
 void utils_set_last_fetch_error(const char *error);
@@ -43,6 +54,9 @@ const char *utils_consume_config_error(void);
 // On HTTP 304 Not Modified, *not_modified (if non-NULL) is set to true and
 // the eInk keeps the image it already holds. not_modified may be NULL if the
 // caller doesn't care.
+// Read Pico: NULL selects the configured URL from the owned request snapshot.
+// Explicit URLs must remain valid for the call; credentials are only sent to
+// the configured origin and ETags only to the exact configured URL.
 esp_err_t fetch_and_display_image_from_url(const char *url, bool *not_modified);
 
 // Trigger image rotation based on configured rotation mode

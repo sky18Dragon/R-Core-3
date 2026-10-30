@@ -13,7 +13,7 @@ esp_err_t read_pico_scan_probe_begin(void);
 // Immutable until next begin. No automatic reference confirmation or panel IO.
 const read_pico_scan_capture_t *read_pico_scan_probe_end(void);
 
-#define READ_PICO_PHASE_MAX 48
+#define READ_PICO_PHASE_MAX 72
 typedef struct {
     int64_t registered_us, start_us, done_us;
     bool started;

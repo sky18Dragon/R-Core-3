@@ -2,6 +2,7 @@
 #define POWER_MANAGER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -27,6 +28,9 @@ void power_manager_reset_sleep_timer(void);
  */
 void power_manager_set_auto_sleep_timeout(uint32_t seconds);
 void power_manager_reset_rotate_timer(void);
+// Seconds until the active-rotation timer fires; -1 when auto-rotate is off
+// or not yet scheduled.
+int64_t power_manager_seconds_to_next_rotation(void);
 
 /**
  * @brief Seconds remaining until the boundary this timer wake was targeting.

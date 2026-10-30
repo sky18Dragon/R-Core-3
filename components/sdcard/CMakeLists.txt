@@ -2,7 +2,7 @@ set(SRCS "")
 set(PRIV_REQUIRES sdmmc)
 
 if(CONFIG_SDCARD_DRIVER_SDIO)
-    list(APPEND SRCS "src/sdcard_sdio.c")
+    list(APPEND SRCS "src/sdcard_sdio.c" "src/sd_sector_diag.c")
     list(APPEND PRIV_REQUIRES esp_driver_sdmmc)
 endif()
 

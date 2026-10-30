@@ -72,6 +72,7 @@ esp_err_t board_hal_init(void)
     // Initialize SD Card (SDIO)
     sdcard_config_t sd_cfg = {
         .mount_point = "/storage",  // Must match FS_MOUNT_POINT in config.h
+        .bus_width = SDCARD_SDMMC_BUS_WIDTH_4,
         .clk_pin = BOARD_HAL_SD_CLK_PIN,
         .cmd_pin = BOARD_HAL_SD_CMD_PIN,
         .d0_pin = BOARD_HAL_SD_D0_PIN,

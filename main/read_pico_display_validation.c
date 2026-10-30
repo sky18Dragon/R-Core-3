@@ -181,24 +181,21 @@ static int draw_pattern(void *unused, read_pico_pattern_t pattern)
     read_pico_edge_summary_t edge = {0};
     bool edge_analyzed = !edge_probe || read_pico_edge_analyze(&gc16->lines, &edge);
     if (edge_probe) {
-        ESP_LOGI(TAG,
-                 "GC16_EDGE software_only=1 complete=%d registered=%lu done=%lu stored=%lu "
-                 "lines_min=%lu lines_max=%lu missing_rows=%lu unequal_pairs=%lu "
-                 "indistinguishable=0x%02x dropped=%lu orphan=%lu late=%lu unfinished=%lu "
-                 "core1_start_prefill=%lu wrong_core=%lu",
-                 edge_analyzed && edge.software_complete,
-                 (unsigned long) gc16->lines.registered_frames,
-                 (unsigned long) gc16->lines.completed_frames,
-                 (unsigned long) gc16->lines.stored_frames,
-                 (unsigned long) edge.min_source_calls, (unsigned long) edge.max_source_calls,
-                 (unsigned long) edge.missing_rows_frames,
-                 (unsigned long) edge.unequal_pair_frames, edge.indistinguishable_boundaries,
-                 (unsigned long) gc16->lines.dropped_frames,
-                 (unsigned long) gc16->lines.orphan_lines,
-                 (unsigned long) gc16->lines.late_lines,
-                 (unsigned long) gc16->lines.unfinished_frames,
-                 (unsigned long) gc16->lines.core1_start_prefill,
-                 (unsigned long) gc16->lines.wrong_core);
+        ESP_LOGI(
+            TAG,
+            "GC16_EDGE software_only=1 complete=%d registered=%lu done=%lu stored=%lu "
+            "lines_min=%lu lines_max=%lu missing_rows=%lu unequal_pairs=%lu "
+            "indistinguishable=0x%02x dropped=%lu orphan=%lu late=%lu unfinished=%lu "
+            "core1_start_prefill=%lu wrong_core=%lu",
+            edge_analyzed && edge.software_complete, (unsigned long) gc16->lines.registered_frames,
+            (unsigned long) gc16->lines.completed_frames, (unsigned long) gc16->lines.stored_frames,
+            (unsigned long) edge.min_source_calls, (unsigned long) edge.max_source_calls,
+            (unsigned long) edge.missing_rows_frames, (unsigned long) edge.unequal_pair_frames,
+            edge.indistinguishable_boundaries, (unsigned long) gc16->lines.dropped_frames,
+            (unsigned long) gc16->lines.orphan_lines, (unsigned long) gc16->lines.late_lines,
+            (unsigned long) gc16->lines.unfinished_frames,
+            (unsigned long) gc16->lines.core1_start_prefill,
+            (unsigned long) gc16->lines.wrong_core);
         for (unsigned i = 0; i < READ_PICO_EDGE_TRACE_ROWS; ++i) {
             uint16_t row = read_pico_edge_trace_row(i);
             ESP_LOGI(TAG, "GC16_EDGE_ROW native_y=%u logical_u=%u trajectory=%08lx", row,
@@ -214,6 +211,75 @@ static int draw_pattern(void *unused, read_pico_pattern_t pattern)
            : !phases->complete || !edge_analyzed || (edge_probe && !edge.software_complete)
                ? ESP_ERR_INVALID_RESPONSE
                : ESP_OK;
+}
+
+static int draw_white_then_labeled(void *unused)
+{
+    (void) unused;
+    memory_report("before_continuous");
+    uint8_t *white = heap_caps_malloc(READ_PICO_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+    uint8_t *target = heap_caps_malloc(READ_PICO_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+    if (white == NULL || target == NULL) {
+        heap_caps_free(white);
+        heap_caps_free(target);
+        return ESP_ERR_NO_MEM;
+    }
+    bool rendered =
+        read_pico_pattern_render(READ_PICO_PATTERN_WHITE, white, READ_PICO_FRAME_BYTES) &&
+        read_pico_pattern_render(READ_PICO_PATTERN_GRAY16_LABELED, target, READ_PICO_FRAME_BYTES);
+    if (!rendered) {
+        heap_caps_free(white);
+        heap_caps_free(target);
+        return ESP_ERR_INVALID_ARG;
+    }
+    memory_report("continuous_allocated");
+    ESP_LOGW(TAG,
+             "GC16_CONTINUOUS_BEGIN first=white second=gray16-labeled; no rail-off or user wait "
+             "between frames");
+    esp_err_t probe = read_pico_phase_probe_begin();
+    if (probe != ESP_OK) {
+        heap_caps_free(white);
+        heap_caps_free(target);
+        return probe;
+    }
+    const int64_t start = esp_timer_get_time();
+    read_pico_refresh_result_t result = read_pico_epaper_display_continuous_pair(
+        white, READ_PICO_FRAME_BYTES, target, READ_PICO_FRAME_BYTES);
+    const read_pico_phase_capture_t *phases = read_pico_phase_probe_end(72);
+    bool faulted = read_pico_epaper_faulted();
+    ESP_LOGI(TAG,
+             "GC16_CONTINUOUS_RETURN completed=%d frames=%u stage=%d frame_error=%d "
+             "operation=%d cleanup=%d elapsed_ms=%ld faulted=%d",
+             result.completed, result.frames_completed, result.error, result.frame_error,
+             result.operation_error, result.cleanup_error,
+             (long) ((esp_timer_get_time() - start) / 1000), faulted);
+    heap_caps_free(white);
+    heap_caps_free(target);
+    esp_err_t observation = observe_exit();
+    memory_report("after_continuous");
+    ESP_LOGI(TAG,
+             "GC16_CONTINUOUS_PHASE software_only=1 complete=%d registered=%lu started=%lu "
+             "done=%lu stored=%lu errors=%lu dropped=%lu expected=72 leading_skip=0 prefill=32",
+             phases->complete, (unsigned long) phases->registered, (unsigned long) phases->started,
+             (unsigned long) phases->completed, (unsigned long) phases->stored,
+             (unsigned long) phases->errors, (unsigned long) phases->dropped);
+    for (uint32_t i = 0; i < phases->stored; ++i) {
+        const read_pico_phase_t *p = &phases->phases[i];
+        ESP_LOGI(TAG,
+                 "GC16_CONTINUOUS_PHASE index=%lu prepare_us=%lld start_to_done_us=%lld "
+                 "gap_us=%lld",
+                 (unsigned long) i, (long long) (p->start_us - p->registered_us),
+                 (long long) (p->done_us - p->start_us),
+                 (long long) (i ? p->registered_us - phases->phases[i - 1].done_us : 0));
+    }
+    if (faulted || !result.completed || result.frames_completed != 2 ||
+        result.error != READ_PICO_REFRESH_OK || result.operation_error || result.cleanup_error)
+        return result.operation_error ? result.operation_error
+               : result.cleanup_error ? result.cleanup_error
+                                      : ESP_FAIL;
+    return observation != ESP_OK ? observation
+           : !phases->complete   ? ESP_ERR_INVALID_RESPONSE
+                                 : ESP_OK;
 }
 
 static int stop(void *unused)
@@ -290,7 +356,8 @@ void app_main(void)
     read_pico_validation_ops_t ops = {.clear_white = clear_white,
                                       .confirm_white = confirm_white,
                                       .stop = stop,
-                                      .draw_pattern = draw_pattern};
+                                      .draw_pattern = draw_pattern,
+                                      .draw_white_then_labeled = draw_white_then_labeled};
     read_pico_validation_session_t session;
     if (!read_pico_validation_init(&session, &ops)) {
         (void) read_pico_board_deinit();
@@ -303,6 +370,7 @@ void app_main(void)
         TAG,
         "Explicit GC16: "
         "gc16-white/black/midgray/gray16/parity/corners/gray16-labeled/gray16-vendor/gray16-page; "
+        "gc16-gray16-labeled-continuous; "
         "pattern-confirm/reject requires visual inspection; each pattern once");
     while (true) {
         uint8_t bytes[32];

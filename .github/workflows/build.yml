@@ -118,7 +118,7 @@ jobs:
           0x8000 build/partition_table/partition-table.bin \
           0x20000 build/esp32-photoframe.bin
 
-        # Copy OTA binary with board name for release
+        # Copy the app binary with board name for release
         cp build/esp32-photoframe.bin firmware/esp32-photoframe-${{ matrix.board }}.bin
 
         # Symbols for decoding crash reports (docs/DEV.md). A separate artifact,

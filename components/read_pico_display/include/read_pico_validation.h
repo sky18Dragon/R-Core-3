@@ -26,6 +26,7 @@ typedef enum {
     READ_PICO_VALIDATION_DRAW_GRAY16_LABELED,
     READ_PICO_VALIDATION_DRAW_GRAY16_VENDOR,
     READ_PICO_VALIDATION_DRAW_GRAY16_PAGE,
+    READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS,
     READ_PICO_VALIDATION_CONFIRM_PATTERN,
     READ_PICO_VALIDATION_REJECT_PATTERN,
 } read_pico_validation_command_t;
@@ -46,6 +47,9 @@ typedef struct {
     int (*stop)(void *context);
     // Optional: NULL preserves a white-only session; never called automatically.
     int (*draw_pattern)(void *context, read_pico_pattern_t pattern);
+    // Optional display-validation control. It must perform white then labeled GC16 as one
+    // bounded rail-on transaction and return only after cleanup; no interactive wait while on.
+    int (*draw_white_then_labeled)(void *context);
 } read_pico_validation_ops_t;
 
 typedef struct {

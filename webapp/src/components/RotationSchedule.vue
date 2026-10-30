@@ -7,10 +7,13 @@ import {
   compileCards,
   compileCard,
   describeCard,
+  describeCardZh,
   nextRuns,
   isValidCron,
   DAY_LABELS,
+  DAY_LABELS_ZH,
 } from "../utils/cron";
+import { locale, t } from "../i18n";
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
@@ -52,7 +55,7 @@ const overBudget = computed(() => totalRules.value > 7);
 
 const upcoming = computed(() =>
   nextRuns(compileCards(cards.value), new Date(), 4).map((d) =>
-    d.toLocaleString([], {
+    d.toLocaleString(locale.value === "zh" ? "zh-CN" : [], {
       weekday: "short",
       hour: "2-digit",
       minute: "2-digit",
@@ -61,14 +64,20 @@ const upcoming = computed(() =>
 );
 
 // Day chips shown Monday-first; values are cron dow (0 = Sunday).
-const dayChips = [1, 2, 3, 4, 5, 6, 0].map((v) => ({ value: v, label: DAY_LABELS[v] }));
+const dayChips = computed(() =>
+  [1, 2, 3, 4, 5, 6, 0].map((v) => ({
+    value: v,
+    label: (locale.value === "zh" ? DAY_LABELS_ZH : DAY_LABELS)[v],
+  }))
+);
+const describe = (card) => (locale.value === "zh" ? describeCardZh(card) : describeCard(card));
 
-const daysOptions = [
-  { value: "everyday", title: "Every day" },
-  { value: "weekdays", title: "Weekdays" },
-  { value: "weekends", title: "Weekends" },
-  { value: "custom", title: "Custom" },
-];
+const daysOptions = computed(() => [
+  { value: "everyday", title: t("Every day") },
+  { value: "weekdays", title: t("Weekdays") },
+  { value: "weekends", title: t("Weekends") },
+  { value: "custom", title: t("Custom") },
+]);
 
 const hourItems = Array.from({ length: 24 }, (_, h) => ({
   value: h,
@@ -159,7 +168,7 @@ function rawValid(card) {
       <v-card variant="tonal" :disabled="disabled">
         <v-card-text>
           <div class="d-flex align-center mb-2">
-            <span class="text-subtitle-2">Schedule {{ idx + 1 }}</span>
+            <span class="text-subtitle-2">{{ t("Schedule {n}", { n: idx + 1 }) }}</span>
             <v-spacer />
             <v-btn
               v-if="cards.length > 1"
@@ -174,10 +183,10 @@ function rawValid(card) {
           <template v-if="card.raw !== null">
             <v-text-field
               v-model="card.raw"
-              label="Cron expression"
+              :label="t('Cron expression')"
               variant="outlined"
               density="compact"
-              hint="minute hour day-of-week"
+              :hint="t('minute hour day-of-week')"
               persistent-hint
               :error="!rawValid(card)"
               :error-messages="rawValid(card) ? [] : ['Invalid cron expression']"
@@ -225,8 +234,8 @@ function rawValid(card) {
               mandatory
               class="mb-3"
             >
-              <v-btn value="interval" size="small">Throughout the day</v-btn>
-              <v-btn value="times" size="small">At specific times</v-btn>
+              <v-btn value="interval" size="small">{{ t("Throughout the day") }}</v-btn>
+              <v-btn value="times" size="small">{{ t("At specific times") }}</v-btn>
             </v-btn-toggle>
 
             <!-- Interval mode -->
@@ -235,7 +244,7 @@ function rawValid(card) {
                 <v-select
                   v-model="card.every"
                   :items="everyItems(card.unit, card.every)"
-                  label="Every"
+                  :label="t('Every')"
                   variant="outlined"
                   density="compact"
                   hide-details
@@ -245,10 +254,10 @@ function rawValid(card) {
                 <v-select
                   v-model="card.unit"
                   :items="[
-                    { value: 'minutes', title: 'minutes' },
-                    { value: 'hours', title: 'hours' },
+                    { value: 'minutes', title: t('minutes') },
+                    { value: 'hours', title: t('hours') },
                   ]"
-                  label="Unit"
+                  :label="t('Unit')"
                   variant="outlined"
                   density="compact"
                   hide-details
@@ -258,7 +267,7 @@ function rawValid(card) {
                 <v-select
                   :model-value="card.fromHour"
                   :items="hourItems"
-                  label="From"
+                  :label="t('From')"
                   variant="outlined"
                   density="compact"
                   hide-details
@@ -269,7 +278,7 @@ function rawValid(card) {
                 <v-select
                   v-model="card.toHour"
                   :items="toHourItems(card)"
-                  label="To"
+                  :label="t('To')"
                   variant="outlined"
                   density="compact"
                   hide-details
@@ -281,7 +290,7 @@ function rawValid(card) {
             <div v-else>
               <div class="d-flex flex-wrap align-center ga-2">
                 <v-text-field
-                  v-for="(t, ti) in card.times"
+                  v-for="(_time, ti) in card.times"
                   :key="ti"
                   v-model="card.times[ti]"
                   type="time"
@@ -293,16 +302,16 @@ function rawValid(card) {
                   @click:append-inner="removeTime(card, ti)"
                 />
                 <v-btn variant="text" size="small" prepend-icon="mdi-plus" @click="addTime(card)">
-                  Add time
+                  {{ t("Add time") }}
                 </v-btn>
               </div>
             </div>
           </template>
 
-          <div class="text-caption text-medium-emphasis mt-3">{{ describeCard(card) }}</div>
+          <div class="text-caption text-medium-emphasis mt-3">{{ describe(card) }}</div>
 
           <v-btn variant="text" size="x-small" class="mt-1 px-0" @click="toggleAdvanced(card)">
-            {{ card.raw !== null ? "Use builder" : "Advanced (cron)" }}
+            {{ card.raw !== null ? t("Use builder") : t("Advanced (cron)") }}
           </v-btn>
         </v-card-text>
       </v-card>
@@ -315,25 +324,35 @@ function rawValid(card) {
       :disabled="disabled || totalRules >= 7"
       @click="addCard"
     >
-      Add another schedule
+      {{ t("Add another schedule") }}
     </v-btn>
 
     <v-alert v-if="overBudget" type="warning" variant="tonal" density="compact" class="mt-3">
-      This uses {{ totalRules }} rules, but the device supports at most 7. Remove a schedule or
-      simplify the specific times.
+      {{
+        t(
+          "This uses {n} rules, but the device supports at most 7. Remove a schedule or simplify the specific times.",
+          { n: totalRules }
+        )
+      }}
     </v-alert>
 
     <div class="mt-4">
-      <div class="text-caption text-medium-emphasis mb-1">Upcoming rotations</div>
+      <div class="text-caption text-medium-emphasis mb-1">{{ t("Upcoming rotations") }}</div>
       <template v-if="upcoming.length">
         <v-chip v-for="(r, i) in upcoming" :key="i" size="small" class="mr-1 mb-1" variant="tonal">
           {{ r }}
         </v-chip>
         <div class="text-caption text-disabled mt-1">
-          Times shown in this browser's timezone; the device follows its own timezone setting.
+          {{
+            t(
+              "Times shown in this browser's timezone; the device follows its own timezone setting."
+            )
+          }}
         </div>
       </template>
-      <div v-else class="text-caption text-disabled">No upcoming rotations for this schedule.</div>
+      <div v-else class="text-caption text-disabled">
+        {{ t("No upcoming rotations for this schedule.") }}
+      </div>
     </div>
   </div>
 </template>

@@ -26,3 +26,6 @@ demo/photoframe-firmware-*
 demo/waveshare_photopainter_73/
 demo/seeedstudio_*/
 host_tests/build/
+
+# Local Claude Code tooling (launch configs, worktrees)
+.claude/

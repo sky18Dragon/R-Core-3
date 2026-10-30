@@ -1,7 +1,13 @@
 import "vuetify/styles";
 import { createVuetify } from "vuetify";
+import { en, zhHans } from "vuetify/locale";
 
 export default createVuetify({
+  locale: {
+    locale: "en",
+    fallback: "en",
+    messages: { en, zhHans },
+  },
   theme: {
     defaultTheme: "light",
     themes: {

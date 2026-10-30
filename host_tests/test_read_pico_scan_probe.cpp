@@ -202,6 +202,25 @@ TEST_F(ReadPicoScanProbe, PhaseTimingPreservesLineCallbackAndMeasuresAll36Frames
     EXPECT_EQ(std::memcmp(p, &frozen, sizeof(frozen)), 0);
 }
 
+TEST_F(ReadPicoScanProbe, PhaseTimingAcceptsExactlyTwoConsecutiveGc16Frames)
+{
+    ASSERT_EQ(read_pico_phase_probe_begin(), ESP_OK);
+    for (int i = 0; i < 72; ++i) {
+        __wrap_epd_lcd_frame_done_cb(done, &done_token);
+        clock_us += 200;
+        __wrap_epd_lcd_start_frame();
+        clock_us += 11216;
+        installed_done(installed_done_arg);
+        clock_us += 30;
+    }
+    const auto *p = read_pico_phase_probe_end(72);
+    EXPECT_TRUE(p->complete);
+    EXPECT_EQ(p->stored, 72u);
+    EXPECT_EQ(p->dropped, 0u);
+    EXPECT_EQ(actual_starts, 72u);
+    EXPECT_EQ(original_done, 72u);
+}
+
 TEST_F(ReadPicoScanProbe, Gray16EdgeProbeDistinguishesExpectedLogicalRowBoundaries)
 {
     ASSERT_EQ(read_pico_gc16_probe_begin(), ESP_OK);
@@ -220,11 +239,9 @@ TEST_F(ReadPicoScanProbe, Gray16EdgeProbeDistinguishesExpectedLogicalRowBoundari
     EXPECT_EQ(capture->lines.wrong_core, 0u);
     EXPECT_EQ(summary.indistinguishable_boundaries, 0);
     for (unsigned pair = 0; pair < READ_PICO_EDGE_TRACE_ROWS / 2; ++pair)
-        EXPECT_EQ(summary.trajectory_hashes[pair * 2],
-                  summary.trajectory_hashes[pair * 2 + 1]);
+        EXPECT_EQ(summary.trajectory_hashes[pair * 2], summary.trajectory_hashes[pair * 2 + 1]);
     for (unsigned pair = 0; pair + 1 < READ_PICO_EDGE_TRACE_ROWS / 2; ++pair)
-        EXPECT_NE(summary.trajectory_hashes[pair * 2],
-                  summary.trajectory_hashes[(pair + 1) * 2]);
+        EXPECT_NE(summary.trajectory_hashes[pair * 2], summary.trajectory_hashes[(pair + 1) * 2]);
     EXPECT_EQ(read_pico_edge_trace_row(0), 683);
     EXPECT_EQ(read_pico_edge_trace_row(11), 556);
     EXPECT_EQ(read_pico_edge_trace_row(12), UINT16_MAX);
@@ -303,7 +320,7 @@ TEST_F(ReadPicoScanProbe, PhaseMissingOrDuplicateStartsAndIncompleteFramesFailCl
 TEST_F(ReadPicoScanProbe, PhaseOverflowIsBoundedAndCountMismatchCannotPass)
 {
     ASSERT_EQ(read_pico_phase_probe_begin(), ESP_OK);
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 74; ++i) {
         __wrap_epd_lcd_frame_done_cb(done, &done_token);
         __wrap_epd_lcd_start_frame();
         ++clock_us;
@@ -311,10 +328,10 @@ TEST_F(ReadPicoScanProbe, PhaseOverflowIsBoundedAndCountMismatchCannotPass)
     }
     const auto *p = read_pico_phase_probe_end(36);
     EXPECT_FALSE(p->complete);
-    EXPECT_EQ(p->stored, 48u);
+    EXPECT_EQ(p->stored, 72u);
     EXPECT_EQ(p->dropped, 2u);
-    EXPECT_EQ(actual_starts, 50u);
-    EXPECT_EQ(original_done, 50u);
+    EXPECT_EQ(actual_starts, 74u);
+    EXPECT_EQ(original_done, 74u);
 }
 TEST_F(ReadPicoScanProbe, FullStaticClearRecordsTailAndPreservesReturnValues)
 {

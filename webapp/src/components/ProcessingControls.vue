@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { computed } from "vue";
 import { getDitherOptions, getPresetOptions } from "@aitjcize/epaper-image-convert";
 import { useAppStore } from "../stores";
@@ -18,32 +19,32 @@ const props = defineProps({
 
 const emit = defineEmits(["update:params", "update:preset", "preset-change"]);
 
-const presetOptions = [
-  ...getPresetOptions(),
-  { value: "custom", title: "Custom", description: "Manually adjusted parameters" },
-];
+const presetOptions = computed(() => [
+  ...getPresetOptions().map((p) => ({ ...p, title: t(p.title) })),
+  { value: "custom", title: t("Custom"), description: t("Manually adjusted parameters") },
+]);
 
 const ditherOptions = getDitherOptions();
 
-const toneModeOptions = [
-  { title: "Contrast", value: "contrast" },
-  { title: "S-Curve", value: "scurve" },
-];
+const toneModeOptions = computed(() => [
+  { title: t("Contrast"), value: "contrast" },
+  { title: t("S-Curve"), value: "scurve" },
+]);
 
 const colorMethodOptions = [
   { title: "RGB", value: "rgb" },
   { title: "LAB", value: "lab" },
 ];
 
-const scaleModeOptions = [
-  { title: "Cover (crop to fill)", value: "cover" },
-  { title: "Fit (letterbox)", value: "fit" },
-];
+const scaleModeOptions = computed(() => [
+  { title: t("Cover (crop to fill)"), value: "cover" },
+  { title: t("Fit (letterbox)"), value: "fit" },
+]);
 
-const backgroundColorOptions = [
-  { title: "White", value: "white" },
-  { title: "Black", value: "black" },
-];
+const backgroundColorOptions = computed(() => [
+  { title: t("White"), value: "white" },
+  { title: t("Black"), value: "black" },
+]);
 
 const isScurveMode = computed(() => props.params.toneMode === "scurve");
 
@@ -63,7 +64,7 @@ function updateParam(key, value) {
     <v-row>
       <v-col cols="12">
         <v-card variant="outlined" class="mb-6">
-          <v-card-subtitle class="pt-3"> Processing Preset </v-card-subtitle>
+          <v-card-subtitle class="pt-3"> {{ t("Processing Preset") }} </v-card-subtitle>
           <v-card-text>
             <v-btn-toggle
               :model-value="preset"
@@ -89,7 +90,7 @@ function updateParam(key, value) {
           :items="scaleModeOptions"
           item-title="title"
           item-value="value"
-          label="Scale Mode"
+          :label="t('Scale Mode')"
           variant="outlined"
           density="compact"
           @update:model-value="updateParam('scaleMode', $event)"
@@ -102,7 +103,7 @@ function updateParam(key, value) {
           :items="backgroundColorOptions"
           item-title="title"
           item-value="value"
-          label="Background Color"
+          :label="t('Background Color')"
           variant="outlined"
           density="compact"
           @update:model-value="updateParam('backgroundColor', $event)"
@@ -118,7 +119,13 @@ function updateParam(key, value) {
           :items="ditherOptions"
           item-title="title"
           item-value="value"
-          label="Dithering Algorithm"
+          :label="t('Dithering Algorithm')"
+          :hint="
+            t(
+              'How the leftover error between the image and the 16 grays is spread to neighbouring pixels.'
+            )
+          "
+          persistent-hint
           variant="outlined"
           density="compact"
           @update:model-value="updateParam('ditherAlgorithm', $event)"
@@ -131,7 +138,9 @@ function updateParam(key, value) {
           :items="colorMethodOptions"
           item-title="title"
           item-value="value"
-          label="Color Matching"
+          :label="t('Color Matching')"
+          :hint="t('Nearest-gray choice: RGB distance or perceptual LAB distance.')"
+          persistent-hint
           variant="outlined"
           density="compact"
           @update:model-value="updateParam('colorMethod', $event)"
@@ -147,7 +156,9 @@ function updateParam(key, value) {
           :min="0.5"
           :max="2.0"
           :step="0.01"
-          label="Exposure"
+          :label="t('Exposure')"
+          :hint="t('Brightness multiplier in linear light: below 1 darker, above 1 brighter.')"
+          persistent-hint
           thumb-label
           color="primary"
           @update:model-value="updateParam('exposure', $event)"
@@ -165,7 +176,7 @@ function updateParam(key, value) {
           :min="0.5"
           :max="2.0"
           :step="0.01"
-          label="Saturation"
+          :label="t('Saturation')"
           thumb-label
           color="primary"
           @update:model-value="updateParam('saturation', $event)"
@@ -180,8 +191,12 @@ function updateParam(key, value) {
       <v-col cols="12" md="4">
         <v-checkbox
           :model-value="params.compressDynamicRange"
-          label="Compress Dynamic Range"
-          hint="Map brightness to display's actual white point"
+          :label="t('Compress Dynamic Range')"
+          :hint="
+            t(
+              'Squeeze the full image range into the panel\'s real black-to-white range: accurate but flatter. Off: deeper blacks.'
+            )
+          "
           persistent-hint
           color="primary"
           @update:model-value="updateParam('compressDynamicRange', $event)"
@@ -197,7 +212,11 @@ function updateParam(key, value) {
           :items="toneModeOptions"
           item-title="title"
           item-value="value"
-          label="Tone Mapping"
+          :label="t('Tone Mapping')"
+          :hint="
+            t('Contrast: one slider around mid-gray. S-Curve: separate shadow/highlight control.')
+          "
+          persistent-hint
           variant="outlined"
           density="compact"
           @update:model-value="updateParam('toneMode', $event)"
@@ -211,7 +230,11 @@ function updateParam(key, value) {
           :min="0.5"
           :max="2.0"
           :step="0.01"
-          label="Contrast"
+          :label="t('Contrast')"
+          :hint="
+            t('Stretches tones around mid-gray: above 1 deepens shadows and lifts highlights.')
+          "
+          persistent-hint
           thumb-label
           color="primary"
           @update:model-value="updateParam('contrast', $event)"
@@ -226,7 +249,7 @@ function updateParam(key, value) {
     <!-- S-Curve Controls -->
     <v-expand-transition>
       <v-card v-if="isScurveMode" variant="tonal" class="mt-4">
-        <v-card-subtitle class="pt-3"> S-Curve Parameters </v-card-subtitle>
+        <v-card-subtitle class="pt-3"> {{ t("S-Curve Parameters") }} </v-card-subtitle>
         <v-card-text>
           <v-row>
             <v-col cols="12" md="6">
@@ -235,7 +258,9 @@ function updateParam(key, value) {
                 :min="0"
                 :max="1"
                 :step="0.01"
-                label="Strength"
+                :label="t('Strength')"
+                :hint="t('How strongly the S-curve is applied (0 = off).')"
+                persistent-hint
                 thumb-label
                 color="primary"
                 @update:model-value="updateParam('strength', $event)"
@@ -252,7 +277,9 @@ function updateParam(key, value) {
                 :min="0"
                 :max="1"
                 :step="0.01"
-                label="Shadow Boost"
+                :label="t('Shadow Boost')"
+                :hint="t('Lifts the dark half of the curve; higher shows more shadow detail.')"
+                persistent-hint
                 thumb-label
                 color="primary"
                 @update:model-value="updateParam('shadowBoost', $event)"
@@ -269,7 +296,9 @@ function updateParam(key, value) {
                 :min="0.5"
                 :max="5"
                 :step="0.01"
-                label="Highlight Compress"
+                :label="t('Highlight Compress')"
+                :hint="t('Rolls off bright tones; higher keeps more highlight detail.')"
+                persistent-hint
                 thumb-label
                 color="primary"
                 @update:model-value="updateParam('highlightCompress', $event)"
@@ -286,7 +315,9 @@ function updateParam(key, value) {
                 :min="0.3"
                 :max="0.7"
                 :step="0.01"
-                label="Midpoint"
+                :label="t('Midpoint')"
+                :hint="t('Where the curve pivots between shadows and highlights.')"
+                persistent-hint
                 thumb-label
                 color="primary"
                 @update:model-value="updateParam('midpoint', $event)"

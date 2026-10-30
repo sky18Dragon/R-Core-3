@@ -7,3 +7,6 @@ dependencies:
     version: ^1.6.39
   espressif/qrcode: ^0.1.0
   joltwallet/littlefs: "*"
+  # Pinned explicitly: zlib comes in through libpng, and a re-solve (e.g. a
+  # different board's component set) otherwise moved the lock to a newer build.
+  espressif/zlib: "==1.3.2~1"

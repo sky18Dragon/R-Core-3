@@ -16,6 +16,7 @@ extern const char *test_board_display_type;  // "spectra6" or "gc16"
 #define BOARD_HAL_DISPLAY_WIDTH test_board_display_width
 #define BOARD_HAL_DISPLAY_HEIGHT test_board_display_height
 #define BOARD_HAL_DISPLAY_TYPE test_board_display_type
+#define BOARD_HAL_DISPLAY_ROTATION_DEG 180
 
 #ifdef __cplusplus
 }

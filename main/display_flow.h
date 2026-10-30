@@ -8,6 +8,8 @@
 
 #include "esp_err.h"
 #include "image_processor.h"
+#include "upload_file.h"
+#include "upload_asset.h"
 
 // Shared building blocks for the "get an image onto the panel" flows (the
 // direct-display endpoint and the URL fetch). They encode the .current.*
@@ -29,9 +31,11 @@ esp_err_t display_flow_read_file(const char *path, uint8_t **out_buf, size_t *ou
  * @brief Stream a PNG/JPG source file to the display
  *
  * PNG uses the fused validate-or-process single-decode path straight from
- * the file; JPG is read into PSRAM and processed from there. With
+ * the file. Read Pico JPG streams compressed input with a budgeted scaled RGB
+ * raster and EXIF/Cover; legacy boards read JPG into PSRAM. With
  * release_source set (MemFS-backed sources), the file is unlinked as soon
- * as an in-RAM copy exists. The source file is not otherwise disposed of --
+ * as an in-RAM copy exists (Read Pico JPG does not unlink here).
+ * The source file is not otherwise disposed of --
  * on success the caller retires it (see display_flow_retire_source).
  *
  * @return ESP_OK, ESP_ERR_NOT_FINISHED (displayed but the pub->save_path
@@ -40,6 +44,15 @@ esp_err_t display_flow_read_file(const char *path, uint8_t **out_buf, size_t *ou
 esp_err_t display_flow_stream_file(const char *path, image_format_t format,
                                    dither_algorithm_t algorithm, const display_publish_t *pub,
                                    bool release_source);
+
+// Read Pico direct display: retain finished exclusive-create ownership until
+// immutable image/preview publication; no fixed-slot retirement/deletion.
+// Publication/decoder/refresh failures retain every derived object. The
+// current name is published by the existing display manager only on refresh.
+esp_err_t display_flow_present_asset(upload_file_t *image, upload_file_t *preview,
+                                     image_format_t format, dither_algorithm_t algorithm);
+esp_err_t display_flow_publish_asset(upload_file_t *image, upload_file_t *preview,
+                                     image_format_t format, upload_asset_t *asset);
 
 /**
  * @brief Move a display-ready BMP or EPDGZ into its .current.* slot

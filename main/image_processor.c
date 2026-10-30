@@ -1,12 +1,14 @@
 #include "image_processor.h"
 
 #include <limits.h>
+#include <fcntl.h>
 #include <math.h>
 #include <png.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "board_hal.h"
@@ -20,6 +22,15 @@
 #include "freertos/task.h"
 #include "jpeg_decoder.h"
 #include "processing_settings.h"
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+#include "jpeg_metadata.h"
+#include "jpeg_buffered_source.h"
+#include "jpeg_stream_probe.h"
+#include "read_pico_sd.h"
+#if defined(ESP_PLATFORM)
+#include "esp_timer.h"
+#endif
+#endif
 
 static const char *TAG = "image_processor";
 
@@ -99,10 +110,14 @@ static uint8_t gray_from_lstar(float lstar)
     return (uint8_t) (v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
-static esp_err_t load_calibrated_palette(void)
+static esp_err_t load_palette(bool defaults_only)
 {
     color_palette_t palette;
-    esp_err_t err = color_palette_load(&palette);
+    esp_err_t err = ESP_OK;
+    if (defaults_only)
+        color_palette_get_defaults(&palette);
+    else
+        err = color_palette_load(&palette);
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to load palette: %s", esp_err_to_name(err));
@@ -124,10 +139,25 @@ static esp_err_t load_calibrated_palette(void)
         float black_l = lstar_from_y(palette.gray_black_y);
         float white_l = lstar_from_y(palette.gray_white_y);
         float gamma = palette.gray_gamma > 0.0f ? palette.gray_gamma : 1.0f;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        // A measured per-code ramp replaces the gamma model, as in the web converter.
+        float levels[COLOR_PALETTE_GRAY_LEVELS];
+        bool has_levels = false;
+        if (!defaults_only) {
+            err = color_palette_load_gray_levels(levels, &has_levels);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to load gray ramp: %s", esp_err_to_name(err));
+                return err;
+            }
+        }
+#endif
         for (int i = 0; i < 16; i++) {
             float t = (float) i / 15.0f;
             float shaped = powf(t, gamma);
             uint8_t v = gray_from_lstar(black_l + shaped * (white_l - black_l));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (has_levels) v = gray_from_lstar(lstar_from_y(levels[i]));
+#endif
             gray_measured[i] = (rgb_t){v, v, v};
         }
     }
@@ -466,14 +496,22 @@ static void dither_row(dither_state_t *st, uint8_t *row)
 
 esp_err_t image_processor_init(void)
 {
-    load_calibrated_palette();
+    esp_err_t err = load_palette(false);
+    if (err != ESP_OK)
+        return err;
     ESP_LOGI(TAG, "Image processor initialized");
     return ESP_OK;
 }
 
+esp_err_t image_processor_init_defaults(void)
+{
+    // Diagnostic only: the same upstream defaults, without opening any NVS namespace.
+    return load_palette(true);
+}
+
 esp_err_t image_processor_reload_palette(void)
 {
-    esp_err_t err = load_calibrated_palette();
+    esp_err_t err = load_palette(false);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reload calibrated palette");
         return err;
@@ -510,6 +548,8 @@ typedef struct {
     const uint8_t *src;
     int src_w;
     int src_h;
+    int stored_w, stored_h;
+    unsigned exif_orientation;
     bool rotate;  // configured orientation differs from the native layout
     int proc_w;   // processing-space dimensions (native, swapped when rotated)
     int proc_h;
@@ -550,11 +590,20 @@ static void background_theoretical_rgb(const char *name, uint8_t rgb[3])
 // rotate is passed in (not re-read from config) so one snapshot governs the
 // whole pass -- geometry, decoder gating, and sink must agree even if the
 // user flips the orientation setting mid-stream
-static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int src_h, bool rotate)
+static esp_err_t geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int src_h, bool rotate,
+                          bool force_cover, const processing_options_t *options)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!force_cover && !options) return ESP_ERR_INVALID_ARG;
+#else
+    (void)options;
+#endif
     geo->src = src;
     geo->src_w = src_w;
     geo->src_h = src_h;
+    geo->stored_w = src_w;
+    geo->stored_h = src_h;
+    geo->exif_orientation = 1;
     geo->get_row = NULL;
     geo->row_ctx = NULL;
 
@@ -578,7 +627,11 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
     // produces). The resample math is shared with cover mode -- off_x/off_y
     // just become the (negative) content origin.
     char bg_name[12] = "";
-    geo->fit = processing_settings_get_scale_mode() == SCALE_MODE_FIT;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    geo->fit = !force_cover && options->scale_mode == SCALE_MODE_FIT;
+#else
+    geo->fit = !force_cover && processing_settings_get_scale_mode() == SCALE_MODE_FIT;
+#endif
     geo->content_x0 = 0;
     geo->content_y0 = 0;
     geo->content_x1 = geo->proc_w;
@@ -598,7 +651,11 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
         geo->off_x = -geo->content_x0;
         geo->off_y = -geo->content_y0;
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        memcpy(bg_name, options->background_color, sizeof(bg_name));
+#else
         processing_settings_get_background_color(bg_name, sizeof(bg_name));
+#endif
         background_theoretical_rgb(bg_name, geo->bg);
         if (board_is_grayscale()) {
             // Grayscale output palette: quantize the background to its ramp
@@ -631,6 +688,7 @@ static void geometry_init(geometry_t *geo, const uint8_t *src, int src_w, int sr
                  src_h, geo->proc_w, geo->proc_h, geo->rotate ? " (rotated to native)" : "",
                  geo->scale, geo->off_x, geo->off_y, geo->box ? "box" : "bilinear");
     }
+    return ESP_OK;
 }
 
 // Emit rows in processing-space order instead of native order: the sink
@@ -657,6 +715,14 @@ static const uint8_t *geometry_src_pixel(const geometry_t *geo, int sx, int sy)
     if (sy >= geo->src_h)
         sy = geo->src_h - 1;
 
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (geo->exif_orientation != 1) {
+        unsigned stored_x, stored_y;
+        jpeg_orientation_map(geo->stored_w, geo->stored_h, geo->exif_orientation,
+                              sx, sy, &stored_x, &stored_y);
+        return geo->src + ((size_t) stored_y * geo->stored_w + stored_x) * 3;
+    }
+#endif
     const uint8_t *row =
         geo->get_row ? geo->get_row(geo->row_ctx, sy) : geo->src + (size_t) sy * geo->src_w * 3;
     return row + sx * 3;
@@ -809,17 +875,378 @@ static esp_err_t run_stream(geometry_t *geo, dither_algorithm_t dither_algorithm
 
 static esp_err_t process_rgb_stream(const uint8_t *rgb_buffer, int width, int height,
                                     dither_algorithm_t dither_algorithm, row_sink_fn sink,
-                                    void *sink_ctx, bool processing_order, bool rotated)
+                                    void *sink_ctx, bool processing_order, bool rotated,
+                                    const processing_options_t *options)
 {
     ESP_LOGI(TAG, "Processing RGB buffer: %dx%d", width, height);
 
     geometry_t geo;
-    geometry_init(&geo, rgb_buffer, width, height, rotated);
+    esp_err_t err = geometry_init(&geo, rgb_buffer, width, height, rotated, false, options);
+    if (err != ESP_OK) return err;
     if (processing_order) {
         geometry_set_processing_order(&geo);
     }
     return run_stream(&geo, dither_algorithm, sink, sink_ctx);
 }
+
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+static esp_err_t process_oriented_rgb(const uint8_t *rgb, int width, int height,
+                                      unsigned orientation, dither_algorithm_t algorithm,
+                                      row_sink_fn sink, void *sink_ctx, bool processing_order,
+                                      bool rotated)
+{
+    geometry_t geo;
+    esp_err_t err = geometry_init(&geo, rgb, orientation >= 5 ? height : width,
+                   orientation >= 5 ? width : height, rotated, true, NULL);
+    if (err != ESP_OK) return err;
+    geo.stored_w = width;
+    geo.stored_h = height;
+    geo.exif_orientation = orientation;
+    if (processing_order)
+        geometry_set_processing_order(&geo);
+    return run_stream(&geo, algorithm, sink, sink_ctx);
+}
+
+typedef struct {
+    FILE *file;
+    size_t size, remaining;
+    size_t bytes_since_yield;
+} jpeg_file_source_t;
+
+static int64_t image_stage_time_us(void)
+{
+#if defined(ESP_PLATFORM)
+    return esp_timer_get_time();
+#else
+    return 0; // Host tests verify behavior, not hardware timing.
+#endif
+}
+
+static bool jpeg_source_ready(void *context);
+
+static esp_err_t image_source_close(FILE *file)
+{
+    if (fclose(file) != 0) {
+        read_pico_sd_note_file_close_failure();
+        set_last_error("Image source close failed; SD teardown locked");
+        return ESP_FAIL;
+    }
+    if (!jpeg_source_ready(NULL)) {
+        set_last_error("Image media lost after close");
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
+}
+
+static bool jpeg_source_ready(void *context)
+{
+    (void) context;
+    read_pico_sd_status_t status;
+    return read_pico_sd_get_status(&status) == ESP_OK && status.present && status.mounted &&
+           status.media_valid && !status.exit_failed;
+}
+
+static bool jpeg_source_read_at(void *context, size_t offset, uint8_t *data, size_t size)
+{
+    jpeg_file_source_t *s = context;
+    return jpeg_source_ready(s) && offset <= s->size && size <= s->size - offset &&
+           fseek(s->file, (long) offset, SEEK_SET) == 0 &&
+           fread(data, 1, size, s->file) == size && !ferror(s->file);
+}
+
+static int jpeg_source_read(void *context, uint8_t *data, size_t size)
+{
+    jpeg_file_source_t *s = context;
+    if (!jpeg_source_ready(s))
+        return -1;
+    if (size > s->remaining)
+        size = s->remaining;
+    // Preserve the old ~32KiB yield interval, independent of input block size.
+    if (s->bytes_since_yield >= 32768) {
+        vTaskDelay(1);
+        s->bytes_since_yield = 0;
+    }
+    size_t got = fread(data, 1, size, s->file);
+    s->bytes_since_yield += got;
+    s->remaining -= got;
+    return ferror(s->file) ? -1 : (int) got;
+}
+
+// Legacy PNG fallback retains compressed input, but never trusts ftell errors,
+// short reads, unchecked closes, or a source that changes length while reading.
+static esp_err_t read_image_source(const char *path, uint8_t **bytes, size_t *size)
+{
+    *bytes = NULL;
+    *size = 0;
+    if (!jpeg_source_ready(NULL))
+        return ESP_ERR_INVALID_STATE;
+    FILE *file = fopen(path, "rb");
+    if (!file)
+        return ESP_FAIL;
+    esp_err_t err = ESP_FAIL;
+    struct stat st;
+    if (fstat(fileno(file), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size > 32 * 1024 * 1024) {
+        set_last_error("Image source must be a nonempty file <=32MiB");
+        goto done;
+    }
+    *size = (size_t) st.st_size;
+    *bytes = heap_caps_malloc(*size, MALLOC_CAP_SPIRAM);
+    if (!*bytes) {
+        set_last_error("Image compressed input allocation failed");
+        err = ESP_ERR_NO_MEM;
+        goto done;
+    }
+    for (size_t offset = 0; offset < *size;) {
+        size_t chunk = *size - offset;
+        if (chunk > 4096)
+            chunk = 4096;
+        if (!jpeg_source_ready(NULL) || fread(*bytes + offset, 1, chunk, file) != chunk ||
+            ferror(file)) {
+            set_last_error("Image source read/media failed");
+            goto done;
+        }
+        offset += chunk;
+        if ((offset & 32767u) == 0)
+            vTaskDelay(1);
+    }
+    uint8_t tail;
+    if (fread(&tail, 1, 1, file) != 0 || ferror(file)) {
+        set_last_error("Image source EOF failed");
+        goto done;
+    }
+    err = ESP_OK;
+done:;
+    esp_err_t close_err = image_source_close(file);
+    if (err == ESP_OK)
+        err = close_err;
+    if (err != ESP_OK) {
+        heap_caps_free(*bytes);
+        *bytes = NULL;
+        *size = 0;
+    }
+    return err;
+}
+
+static esp_err_t finish_image_source(FILE *file, size_t size)
+{
+    long position = ftell(file);
+    if (position < 0 || (size_t) position > size)
+        return ESP_FAIL;
+    uint8_t tail[4096];
+    size_t remaining = size - (size_t) position;
+    while (remaining) {
+        size_t chunk = remaining < sizeof(tail) ? remaining : sizeof(tail);
+        if (!jpeg_source_ready(NULL) || fread(tail, 1, chunk, file) != chunk || ferror(file))
+            return ESP_FAIL;
+        remaining -= chunk;
+        vTaskDelay(1);
+    }
+    if (!jpeg_source_ready(NULL) || fread(tail, 1, 1, file) != 0 || ferror(file))
+        return ESP_FAIL;
+    return ESP_OK;
+}
+
+// Compressed source is streamed; only a budgeted scaled RGB raster is retained.
+// Publish pixels only after all source bytes/EOF and close succeed.
+static esp_err_t decode_jpeg_file(const char *path, uint8_t **rgb, int *width, int *height,
+                                 unsigned *orientation)
+{
+    *rgb = NULL;
+    if (!jpeg_source_ready(NULL)) {
+        set_last_error("JPEG storage unavailable");
+        return ESP_ERR_INVALID_STATE;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        set_last_error("JPEG source open failed");
+        return ESP_FAIL;
+    }
+    esp_err_t err = ESP_FAIL;
+    jpeg_file_source_t source = {.file = file};
+    jpeg_buffered_source_t buffered = {0};
+    struct stat st;
+    void *work = NULL;
+    uint8_t *input_buffer = NULL;
+    int64_t started = image_stage_time_us();
+    jpeg_metadata_t info;
+    unsigned scale;
+    size_t rgb_size;
+    if (fstat(fileno(file), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size > 32 * 1024 * 1024) {
+        set_last_error("JPEG source must be a nonempty file <=32MiB");
+        goto done;
+    }
+    source.size = source.remaining = (size_t) st.st_size;
+    const jpeg_metadata_io_t metadata_io = {&source, jpeg_source_read_at, source.size};
+    jpeg_metadata_error_t metadata_err = jpeg_metadata_read(&metadata_io, &info);
+    if (metadata_err != JPEG_METADATA_OK) {
+        set_last_error(metadata_err == JPEG_METADATA_UNSUPPORTED ?
+                       "JPEG format unsupported (baseline only)" : "JPEG metadata/read invalid");
+        goto done;
+    }
+    if (!jpeg_metadata_scale(&info, 5u * 1024u * 1024u, &scale, &rgb_size)) {
+        set_last_error("JPEG scaled raster exceeds 5MiB budget");
+        err = ESP_ERR_NO_MEM;
+        goto done;
+    }
+    *rgb = heap_caps_malloc(rgb_size, MALLOC_CAP_SPIRAM);
+    work = heap_caps_malloc(3100, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    input_buffer = heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!*rgb || !work || !input_buffer) {
+        set_last_error("JPEG decode allocation failed");
+        err = ESP_ERR_NO_MEM;
+        goto done;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        set_last_error("JPEG source rewind failed");
+        goto done;
+    }
+    const jpeg_stream_probe_io_t file_io = {&source, jpeg_source_ready, jpeg_source_read};
+    if (!jpeg_buffered_source_init(&buffered, &file_io, input_buffer, 4096, source.size)) {
+        set_last_error("JPEG buffered input invalid");
+        goto done;
+    }
+    const jpeg_stream_probe_io_t io = {&buffered, jpeg_buffered_source_ready,
+                                      jpeg_buffered_source_read};
+    jpeg_stream_probe_result_t result = jpeg_stream_decode_rgb(&io, work, 3100, scale,
+                                                              *rgb, rgb_size);
+    if (result.error != JPEG_STREAM_OK || result.width != info.width ||
+        result.height != info.height || result.output_width != (info.width >> scale) ||
+        result.output_height != (info.height >> scale)) {
+        set_last_error("JPEG streamed decode failed");
+        goto done;
+    }
+    uint8_t tail[256];
+    while (buffered.remaining) {
+        if (jpeg_buffered_source_read(&buffered, tail, sizeof(tail)) <= 0) {
+            set_last_error("JPEG trailing source read failed");
+            goto done;
+        }
+    }
+    if (!jpeg_source_ready(&source) || fread(tail, 1, 1, file) != 0 || ferror(file)) {
+        set_last_error("JPEG source EOF/media check failed");
+        goto done;
+    }
+    *width = result.output_width;
+    *height = result.output_height;
+    *orientation = info.orientation;
+    ESP_LOGI(TAG, "JPEG file: %ux%u EXIF=%u scale=1/%u RGB=%zu (budget 5MiB), complete source/EOF",
+             info.width, info.height, info.orientation, 1u << scale, rgb_size);
+    err = ESP_OK;
+done:
+    heap_caps_free(work);
+    heap_caps_free(input_buffer);
+    if (fclose(file) != 0) {
+        read_pico_sd_note_file_close_failure();
+        ESP_LOGE(TAG, "JPEG source close failed; SD teardown locked until reboot");
+        if (err == ESP_OK) {
+            set_last_error("JPEG source close failed");
+            err = ESP_FAIL;
+        }
+    }
+    if (err == ESP_OK && !jpeg_source_ready(NULL)) {
+        set_last_error("JPEG media lost after close");
+        err = ESP_ERR_INVALID_STATE;
+    }
+    if (err != ESP_OK) {
+        heap_caps_free(*rgb);
+        *rgb = NULL;
+    }
+    ESP_LOGI(TAG, "JPEG read/decode/close: %lld ms, physical reads=%zu bytes=%zu cache=4096 result=%s",
+             (long long) ((image_stage_time_us() - started) / 1000), buffered.read_calls,
+             buffered.physical_bytes, esp_err_to_name(err));
+    return err;
+}
+
+// Caller-owned upload/URL bytes: no SD/file operations and no compressed copy.
+// Keep the same baseline metadata, RGB budget and EXIF contract as file JPEGs.
+typedef struct {
+    const uint8_t *data;
+    size_t size, offset, bytes_since_yield;
+} jpeg_memory_source_t;
+
+static bool jpeg_memory_read_at(void *context, size_t offset, uint8_t *data, size_t size)
+{
+    jpeg_memory_source_t *source = context;
+    if (offset > source->size || size > source->size - offset)
+        return false;
+    memcpy(data, source->data + offset, size);
+    return true;
+}
+
+static bool jpeg_memory_ready(void *context)
+{
+    (void) context;
+    return true; // Immutable memory is owned by the caller for this synchronous call.
+}
+
+static int jpeg_memory_read(void *context, uint8_t *data, size_t size)
+{
+    jpeg_memory_source_t *source = context;
+    if (size > source->size - source->offset)
+        size = source->size - source->offset;
+    if (source->bytes_since_yield >= 32768) {
+        vTaskDelay(1);
+        source->bytes_since_yield = 0;
+    }
+    memcpy(data, source->data + source->offset, size);
+    source->offset += size;
+    source->bytes_since_yield += size;
+    return (int) size; // The bounded decoder requests at most 256 bytes.
+}
+
+static esp_err_t decode_read_pico_jpeg_memory(const uint8_t *data, size_t size, uint8_t **rgb,
+                                             int *width, int *height, unsigned *orientation)
+{
+    *rgb = NULL;
+    jpeg_memory_source_t source = {.data = data, .size = size};
+    const jpeg_metadata_io_t metadata_io = {&source, jpeg_memory_read_at, size};
+    jpeg_metadata_t info;
+    jpeg_metadata_error_t metadata_err = jpeg_metadata_read(&metadata_io, &info);
+    if (metadata_err != JPEG_METADATA_OK) {
+        set_last_error(metadata_err == JPEG_METADATA_UNSUPPORTED ?
+                       "JPEG format unsupported (baseline only)" : "JPEG memory metadata/limit invalid");
+        return metadata_err == JPEG_METADATA_UNSUPPORTED ? ESP_ERR_NOT_SUPPORTED : ESP_FAIL;
+    }
+    unsigned scale;
+    size_t rgb_size;
+    if (!jpeg_metadata_scale(&info, 5u * 1024u * 1024u, &scale, &rgb_size)) {
+        set_last_error("JPEG scaled raster exceeds 5MiB budget");
+        return ESP_ERR_NO_MEM;
+    }
+    *rgb = heap_caps_malloc(rgb_size, MALLOC_CAP_SPIRAM);
+    void *work = heap_caps_malloc(3100, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    esp_err_t err = ESP_ERR_NO_MEM;
+    if (!*rgb || !work) {
+        set_last_error("JPEG decode allocation failed");
+        goto done;
+    }
+    const jpeg_stream_probe_io_t io = {&source, jpeg_memory_ready, jpeg_memory_read};
+    jpeg_stream_probe_result_t result = jpeg_stream_decode_rgb(&io, work, 3100, scale,
+                                                              *rgb, rgb_size);
+    err = ESP_FAIL;
+    if (result.error != JPEG_STREAM_OK || result.width != info.width ||
+        result.height != info.height || result.output_width != (info.width >> scale) ||
+        result.output_height != (info.height >> scale)) {
+        set_last_error("JPEG memory decode failed");
+        goto done;
+    }
+    *width = result.output_width;
+    *height = result.output_height;
+    *orientation = info.orientation;
+    ESP_LOGI(TAG, "JPEG memory: %ux%u EXIF=%u scale=1/%u RGB=%zu (budget 5MiB)",
+             info.width, info.height, info.orientation, 1u << scale, rgb_size);
+    err = ESP_OK;
+done:
+    heap_caps_free(work);
+    if (err != ESP_OK) {
+        heap_caps_free(*rgb);
+        *rgb = NULL;
+    }
+    return err;
+}
+#endif
 
 // Streaming PNG writer -- rows are written to the file as they are produced
 typedef struct {
@@ -828,11 +1255,49 @@ typedef struct {
     png_infop info_ptr;
 } png_writer_t;
 
+static int png_file_close(FILE *file)
+{
+    int result = fclose(file);
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (result != 0)
+        read_pico_sd_note_file_close_failure();
+#endif
+    return result;
+}
+
+static void failed_output(const char *path)
+{
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    // A pathname may now name another file. Never delete it during error cleanup.
+    ESP_LOGW(TAG, "Failed output retained (if created), no delete: %s", path);
+#else
+    unlink(path);
+#endif
+}
+
 static esp_err_t png_writer_open(png_writer_t *pw, const char *filename, int width, int height)
 {
     memset(pw, 0, sizeof(*pw));
 
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    // FAT VFS maps O_EXCL|O_CREAT to FA_CREATE_NEW. No existing path is truncated,
+    // including aliases created between a previous stat and this open.
+    if (!jpeg_source_ready(NULL))
+        return ESP_ERR_INVALID_STATE;
+    int fd = open(filename, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        set_last_error("PNG output must be a new file (no overwrite)");
+        return ESP_FAIL;
+    }
+    pw->fp = fdopen(fd, "wb");
+    if (!pw->fp) {
+        if (close(fd) != 0)
+            read_pico_sd_note_file_close_failure();
+        return ESP_FAIL;
+    }
+#else
     pw->fp = fopen(filename, "wb");
+#endif
     if (!pw->fp) {
         ESP_LOGE(TAG, "Failed to open file for writing: %s", filename);
         return ESP_FAIL;
@@ -841,7 +1306,7 @@ static esp_err_t png_writer_open(png_writer_t *pw, const char *filename, int wid
     pw->png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     if (!pw->png_ptr) {
         ESP_LOGE(TAG, "Failed to create PNG write struct");
-        fclose(pw->fp);
+        png_file_close(pw->fp);
         pw->fp = NULL;
         return ESP_FAIL;
     }
@@ -850,7 +1315,7 @@ static esp_err_t png_writer_open(png_writer_t *pw, const char *filename, int wid
     if (!pw->info_ptr) {
         ESP_LOGE(TAG, "Failed to create PNG info struct");
         png_destroy_write_struct(&pw->png_ptr, NULL);
-        fclose(pw->fp);
+        png_file_close(pw->fp);
         memset(pw, 0, sizeof(*pw));
         return ESP_FAIL;
     }
@@ -858,7 +1323,7 @@ static esp_err_t png_writer_open(png_writer_t *pw, const char *filename, int wid
     if (setjmp(png_jmpbuf(pw->png_ptr))) {
         ESP_LOGE(TAG, "PNG encoding error");
         png_destroy_write_struct(&pw->png_ptr, &pw->info_ptr);
-        fclose(pw->fp);
+        png_file_close(pw->fp);
         memset(pw, 0, sizeof(*pw));
         return ESP_FAIL;
     }
@@ -902,7 +1367,8 @@ static esp_err_t png_writer_close(png_writer_t *pw, bool success)
         png_destroy_write_struct(&pw->png_ptr, &pw->info_ptr);
     }
     if (pw->fp) {
-        fclose(pw->fp);
+        if (png_file_close(pw->fp) != 0 && err == ESP_OK)
+            err = ESP_FAIL;
     }
     memset(pw, 0, sizeof(*pw));
 
@@ -939,7 +1405,7 @@ static esp_err_t decode_jpg_buffer(const uint8_t *jpg_data, size_t jpg_size, uin
 
     *rgb_buffer = (uint8_t *) heap_caps_malloc(outimg.output_len, MALLOC_CAP_SPIRAM);
     if (!*rgb_buffer) {
-        ESP_LOGE(TAG, "Failed to allocate JPG RGB buffer of %u bytes", outimg.output_len);
+        ESP_LOGE(TAG, "Failed to allocate JPG RGB buffer of %zu bytes", outimg.output_len);
         return ESP_ERR_NO_MEM;
     }
 
@@ -1263,19 +1729,36 @@ static const uint8_t *png_stream_get_row(void *ctx, int src_y)
 
 static esp_err_t png_stream_run(png_stream_src_t *src, dither_algorithm_t dither_algorithm,
                                 row_sink_fn sink, void *sink_ctx, bool processing_order,
-                                bool rotated)
+                                bool rotated, const processing_options_t *options)
 {
     ESP_LOGI(TAG, "Streaming PNG: %dx%d (%d-row window)", src->width, src->height, src->ring_rows);
 
     geometry_t geo;
-    geometry_init(&geo, NULL, src->width, src->height, rotated);
+    esp_err_t err = geometry_init(&geo, NULL, src->width, src->height, rotated, false, options);
+    if (err != ESP_OK) return err;
     if (processing_order) {
         geometry_set_processing_order(&geo);
     }
     geo.get_row = png_stream_get_row;
     geo.row_ctx = src;
 
-    esp_err_t err = run_stream(&geo, dither_algorithm, sink, sink_ctx);
+    err = run_stream(&geo, dither_algorithm, sink, sink_ctx);
+    if (err == ESP_OK && !src->error) {
+        // Cover can crop the last source rows. Still validate all IDAT data and
+        // IEND, so corrupt cropped-away content is not silently published.
+        for (int y = src->rows_decoded; y < src->height && !src->error; ++y) {
+            png_stream_get_row(src, y);
+            if ((y & 15) == 0)
+                vTaskDelay(1);
+        }
+        if (!src->error) {
+            if (setjmp(png_jmpbuf(src->png_ptr))) {
+                set_last_error("PNG end/chunk validation failed");
+                src->error = true;
+            } else
+                png_read_end(src->png_ptr, src->info_ptr);
+        }
+    }
     if (err == ESP_OK && src->error) {
         err = ESP_FAIL;
     }
@@ -1325,7 +1808,8 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
                                              dither_algorithm_t dither_algorithm,
                                              const display_publish_t *pub)
 {
-    if (!input_data || input_size == 0) {
+    if (!input_data || input_size == 0 || dither_algorithm < DITHER_FLOYD_STEINBERG ||
+        dither_algorithm > DITHER_SIERRA) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1336,6 +1820,18 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     last_error_msg[0] = '\0';
 
     esp_err_t err;
+    processing_options_t options = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Read once before opening a display stream. Fixed EXIF JPEG Cover and
+    // caller-supplied dithering remain independent of these layout options.
+    if (format == IMAGE_FORMAT_PNG) {
+        err = processing_settings_copy_options(&options);
+        if (err != ESP_OK) {
+            set_last_error("Processing options unavailable or invalid");
+            return err;
+        }
+    }
+#endif
 
     // The display sink accepts processing-order rows, so PNGs stream
     // straight from the decoder regardless of rotation -- no source buffer,
@@ -1360,7 +1856,7 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
             err = display_manager_begin_rgb_stream();
             if (err == ESP_OK) {
                 err = png_stream_run(&stream, dither_algorithm, display_row_sink, &sink_ctx, true,
-                                     sink_ctx.rotated);
+                                     sink_ctx.rotated, &options);
                 {
                     esp_err_t end_err = display_manager_end_rgb_stream(err == ESP_OK, pub);
                     if (err == ESP_OK) {
@@ -1377,9 +1873,17 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     // Decode input to RGB
     uint8_t *rgb_buffer = NULL;
     int width = 0, height = 0;
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    unsigned jpeg_orientation = 1;
+#endif
 
     if (format == IMAGE_FORMAT_JPG) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        err = decode_read_pico_jpeg_memory(input_data, input_size, &rgb_buffer, &width, &height,
+                                          &jpeg_orientation);
+#else
         err = decode_jpg_buffer(input_data, input_size, &rgb_buffer, &width, &height);
+#endif
     } else if (format == IMAGE_FORMAT_PNG) {
         err = decode_png_buffer(input_data, input_size, &rgb_buffer, &width, &height);
     } else {
@@ -1396,8 +1900,14 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     // Stream processed rows straight into the display buffer, then refresh
     err = display_manager_begin_rgb_stream();
     if (err == ESP_OK) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        if (format == IMAGE_FORMAT_JPG)
+            err = process_oriented_rgb(rgb_buffer, width, height, jpeg_orientation, dither_algorithm,
+                                       display_row_sink, &sink_ctx, true, sink_ctx.rotated);
+        else
+#endif
         err = process_rgb_stream(rgb_buffer, width, height, dither_algorithm, display_row_sink,
-                                 &sink_ctx, true, sink_ctx.rotated);
+                                 &sink_ctx, true, sink_ctx.rotated, &options);
 
         // Every row has been painted; release the decoded source before end
         // runs the snapshot (its zlib state needs PSRAM a near-full decode
@@ -1415,9 +1925,48 @@ esp_err_t image_processor_process_to_display(const uint8_t *input_data, size_t i
     return err;
 }
 
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t image_processor_process_jpeg_file_to_display(const char *path,
+                                                       dither_algorithm_t algorithm,
+                                                       const display_publish_t *pub)
+{
+    if (!path || algorithm < DITHER_FLOYD_STEINBERG || algorithm > DITHER_SIERRA)
+        return ESP_ERR_INVALID_ARG;
+    last_error_msg[0] = '\0';
+    uint8_t *rgb = NULL;
+    int width, height;
+    unsigned orientation;
+    display_sink_ctx_t sink = {.rotated = orientation_needs_rotation()};
+    sink.proc_w = sink.rotated ? BOARD_HAL_DISPLAY_HEIGHT : BOARD_HAL_DISPLAY_WIDTH;
+    sink.proc_h = sink.rotated ? BOARD_HAL_DISPLAY_WIDTH : BOARD_HAL_DISPLAY_HEIGHT;
+    esp_err_t err = decode_jpeg_file(path, &rgb, &width, &height, &orientation);
+    if (err != ESP_OK)
+        return err;
+    err = display_manager_begin_rgb_stream();
+    if (err == ESP_OK) {
+        int64_t render_started = image_stage_time_us();
+        err = process_oriented_rgb(rgb, width, height, orientation, algorithm,
+                                   display_row_sink, &sink, true, sink.rotated);
+        ESP_LOGI(TAG, "JPEG geometry/gray/dither/paint: %lld ms result=%s",
+                 (long long) ((image_stage_time_us() - render_started) / 1000),
+                 esp_err_to_name(err));
+        heap_caps_free(rgb);
+        rgb = NULL;
+        esp_err_t end_err = display_manager_end_rgb_stream(err == ESP_OK, pub);
+        if (err == ESP_OK)
+            err = end_err;
+    }
+    heap_caps_free(rgb);
+    return err;
+}
+#endif
+
 esp_err_t image_processor_process(const char *input_path, const char *output_path,
                                   dither_algorithm_t dither_algorithm)
 {
+    if (!input_path || !output_path || dither_algorithm < DITHER_FLOYD_STEINBERG ||
+        dither_algorithm > DITHER_SIERRA)
+        return ESP_ERR_INVALID_ARG;
     const char *algo_names[] = {"floyd-steinberg", "stucki", "burkes", "sierra"};
     ESP_LOGI(TAG, "Processing %s -> %s (dither: %s)", input_path, output_path,
              algo_names[dither_algorithm]);
@@ -1430,8 +1979,58 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
         ESP_LOGE(TAG, "Unsupported image format for processing");
         return ESP_FAIL;
     }
+    processing_options_t options = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Reject unavailable geometry before an output file can be created.
+    if (format == IMAGE_FORMAT_PNG) {
+        esp_err_t options_error = processing_settings_copy_options(&options);
+        if (options_error != ESP_OK) {
+            set_last_error("Processing options unavailable or invalid");
+            return options_error;
+        }
+    }
+#endif
 
-    // Read entire file into buffer
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (format == IMAGE_FORMAT_JPG) {
+        struct stat input_st, output_st;
+        if (strcmp(input_path, output_path) == 0 ||
+            (stat(input_path, &input_st) == 0 && stat(output_path, &output_st) == 0 &&
+             input_st.st_dev == output_st.st_dev && input_st.st_ino == output_st.st_ino)) {
+            set_last_error("JPEG source/output alias refused");
+            return ESP_ERR_INVALID_ARG;
+        }
+        uint8_t *rgb = NULL;
+        int width, height;
+        unsigned orientation;
+        bool rotated = orientation_needs_rotation();
+        esp_err_t err = decode_jpeg_file(input_path, &rgb, &width, &height, &orientation);
+        if (err != ESP_OK)
+            return err;
+        png_writer_t writer;
+        err = png_writer_open(&writer, output_path, BOARD_HAL_DISPLAY_WIDTH, BOARD_HAL_DISPLAY_HEIGHT);
+        if (err == ESP_OK) {
+            err = process_oriented_rgb(rgb, width, height, orientation, dither_algorithm,
+                                       png_writer_row_sink, &writer, false, rotated);
+            esp_err_t close_err = png_writer_close(&writer, err == ESP_OK);
+            if (err == ESP_OK)
+                err = close_err;
+            if (err != ESP_OK)
+                failed_output(output_path);
+        }
+        heap_caps_free(rgb);
+        return err;
+    }
+#endif
+
+    // Read entire PNG source into buffer; new board verifies close before output.
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    uint8_t *file_buffer = NULL;
+    size_t file_size = 0;
+    esp_err_t input_err = read_image_source(input_path, &file_buffer, &file_size);
+    if (input_err != ESP_OK)
+        return input_err;
+#else
     FILE *fp = fopen(input_path, "rb");
     if (!fp) {
         ESP_LOGE(TAG, "Failed to open input file: %s", input_path);
@@ -1457,6 +2056,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
         heap_caps_free(file_buffer);
         return ESP_FAIL;
     }
+#endif
 
     esp_err_t err;
     bool rotated = orientation_needs_rotation();
@@ -1477,7 +2077,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
                                   BOARD_HAL_DISPLAY_HEIGHT);
             if (err == ESP_OK) {
                 err = png_stream_run(&stream, dither_algorithm, png_writer_row_sink, &writer, false,
-                                     rotated);
+                                     rotated, &options);
                 esp_err_t close_err = png_writer_close(&writer, err == ESP_OK);
                 if (err == ESP_OK) {
                     err = close_err;
@@ -1489,7 +2089,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
             if (err == ESP_OK) {
                 ESP_LOGI(TAG, "Successfully wrote PNG to %s", output_path);
             } else {
-                unlink(output_path);
+                failed_output(output_path);
             }
             return err;
         }
@@ -1524,7 +2124,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
     err = png_writer_open(&writer, output_path, BOARD_HAL_DISPLAY_WIDTH, BOARD_HAL_DISPLAY_HEIGHT);
     if (err == ESP_OK) {
         err = process_rgb_stream(rgb_buffer, width, height, dither_algorithm, png_writer_row_sink,
-                                 &writer, false, rotated);
+                                 &writer, false, rotated, &options);
         // Keep the processing error (e.g. ESP_ERR_NO_MEM, which callers map
         // to a specific response); only a failed finalize of an otherwise
         // successful write becomes the result.
@@ -1539,7 +2139,7 @@ esp_err_t image_processor_process(const char *input_path, const char *output_pat
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "Successfully wrote PNG to %s", output_path);
     } else {
-        unlink(output_path);
+        failed_output(output_path);
     }
 
     return err;
@@ -1635,7 +2235,7 @@ static bool check_processed_png(png_structp png_ptr, png_infop info_ptr, bool pa
         }
 
         if (valid && paint_rows) {
-            display_manager_push_rgb_row(y, (const uint8_t *) row, width);
+            valid = display_manager_push_rgb_row(y, (const uint8_t *) row, width) == ESP_OK;
         }
 
         // Yield periodically so the IDLE task can feed the watchdog
@@ -1643,6 +2243,10 @@ static bool check_processed_png(png_structp png_ptr, png_infop info_ptr, bool pa
             vTaskDelay(1);
         }
     }
+
+    // Verify IEND and trailing PNG chunks before allowing a physical refresh.
+    if (valid)
+        png_read_end(png_ptr, info_ptr);
 
     free((void *) row);
     return valid;
@@ -1652,9 +2256,16 @@ esp_err_t image_processor_process_or_display_png(const char *path,
                                                  dither_algorithm_t dither_algorithm,
                                                  const display_publish_t *pub, bool release_source)
 {
-    if (!path) {
+    if (!path || dither_algorithm < DITHER_FLOYD_STEINBERG || dither_algorithm > DITHER_SIERRA) {
         return ESP_ERR_INVALID_ARG;
     }
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    // Persistent SD originals are not MemFS scratch objects; caller-owned temporary
+    // lifecycle must be handled separately, never by this decoding entry point.
+    release_source = false;
+    if (!jpeg_source_ready(NULL))
+        return ESP_ERR_INVALID_STATE;
+#endif
 
     // Fused fast path: a pre-processed PNG validates and paints straight
     // from the file in a single decode, with no RAM copy of the upload (a
@@ -1666,6 +2277,15 @@ esp_err_t image_processor_process_or_display_png(const char *path,
         ESP_LOGE(TAG, "Failed to open %s", path);
         return ESP_FAIL;
     }
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    struct stat source_stat;
+    if (fstat(fileno(fp), &source_stat) != 0 || !S_ISREG(source_stat.st_mode) ||
+        source_stat.st_size <= 0 || source_stat.st_size > 32 * 1024 * 1024) {
+        image_source_close(fp);
+        set_last_error("PNG source must be a nonempty file <=32MiB");
+        return ESP_FAIL;
+    }
+#endif
 
     uint8_t sig[8];
     if (fread(sig, 1, 8, fp) == 8 && png_sig_cmp(sig, 0, 8) == 0) {
@@ -1678,17 +2298,38 @@ esp_err_t image_processor_process_or_display_png(const char *path,
             esp_err_t err = display_manager_begin_rgb_stream();
             if (err != ESP_OK) {
                 png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+                image_source_close(fp);
+#else
                 fclose(fp);
+#endif
                 return err;
             }
 
             bool displayed = check_processed_png(png_ptr, info_ptr, true);
-            esp_err_t end_err = display_manager_end_rgb_stream(displayed, pub);
             png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+            bool read_failed = ferror(fp) != 0 ||
+                               (displayed && finish_image_source(fp, (size_t) source_stat.st_size) != ESP_OK);
+            esp_err_t close_err = image_source_close(fp);
+            fp = NULL;
+            if (read_failed || close_err != ESP_OK) {
+                display_manager_end_rgb_stream(false, NULL);
+                return close_err != ESP_OK ? close_err : ESP_FAIL;
+            }
+#endif
+            esp_err_t end_err = display_manager_end_rgb_stream(displayed, pub);
 
             if (displayed) {
+#if !defined(CONFIG_BOARD_DRIVER_READ_PICO) || !CONFIG_BOARD_DRIVER_READ_PICO
                 fclose(fp);
+#endif
                 ESP_LOGI(TAG, "Displayed pre-processed PNG in a single decode");
+                return end_err;
+            }
+            if (end_err != ESP_OK) {
+                if (fp)
+                    png_file_close(fp);
                 return end_err;
             }
             ESP_LOGI(TAG, "PNG needs processing");
@@ -1696,9 +2337,24 @@ esp_err_t image_processor_process_or_display_png(const char *path,
             png_destroy_read_struct(&png_ptr, NULL, NULL);
         }
     }
-    fclose(fp);
+    if (fp) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t close_err = image_source_close(fp);
+        if (close_err != ESP_OK)
+            return close_err;
+#else
+        fclose(fp);
+#endif
+    }
 
     // Fallback: full processing needs the compressed source in RAM
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    uint8_t *file_buffer = NULL;
+    size_t file_size = 0;
+    esp_err_t input_err = read_image_source(path, &file_buffer, &file_size);
+    if (input_err != ESP_OK)
+        return input_err;
+#else
     fp = fopen(path, "rb");
     if (!fp) {
         return ESP_FAIL;
@@ -1721,6 +2377,7 @@ esp_err_t image_processor_process_or_display_png(const char *path,
         heap_caps_free(file_buffer);
         return ESP_FAIL;
     }
+#endif
 
     if (release_source) {
         // MemFS-backed sources live in PSRAM; drop the file now that the
@@ -1736,6 +2393,12 @@ esp_err_t image_processor_process_or_display_png(const char *path,
 
 image_format_t image_processor_detect_format(const char *input_path)
 {
+    if (!input_path)
+        return IMAGE_FORMAT_UNKNOWN;
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (!jpeg_source_ready(NULL))
+        return IMAGE_FORMAT_UNKNOWN;
+#endif
     FILE *fp = fopen(input_path, "rb");
     if (!fp) {
         ESP_LOGE(TAG, "Failed to open file for format detection: %s", input_path);
@@ -1744,7 +2407,19 @@ image_format_t image_processor_detect_format(const char *input_path)
 
     uint8_t magic[8];
     size_t read = fread(magic, 1, 8, fp);
-    fclose(fp);
+    bool read_failed = ferror(fp) != 0;
+    if (fclose(fp) != 0) {
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+        read_pico_sd_note_file_close_failure();
+#endif
+        return IMAGE_FORMAT_UNKNOWN;
+    }
+#if defined(CONFIG_BOARD_DRIVER_READ_PICO) && CONFIG_BOARD_DRIVER_READ_PICO
+    if (!jpeg_source_ready(NULL))
+        return IMAGE_FORMAT_UNKNOWN;
+#endif
+    if (read_failed)
+        return IMAGE_FORMAT_UNKNOWN;
 
     if (read < 2) {
         return IMAGE_FORMAT_UNKNOWN;

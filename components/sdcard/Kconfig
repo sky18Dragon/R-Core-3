@@ -6,11 +6,11 @@ config HAS_SDCARD
         This flag is used to conditionally compile SD card-related code.
 
 config SDCARD_DRIVER_SDIO
-    bool "SDIO SD Card Driver"
+    bool "SDMMC SD Card Driver"
     select HAS_SDCARD
     help
-        Use SDIO interface for SD card (4-bit mode).
-        Typically used on boards with dedicated SDMMC pins.
+        Use the native SDMMC host in board-selected 1-bit or 4-bit mode.
+        The board configuration must provide the bus width and required pins.
 
         This is automatically selected by board drivers that use SDIO.
 

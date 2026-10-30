@@ -319,3 +319,33 @@ export function describeCard(card) {
   const times = card.times.map(timeLabel).join(", ");
   return `Rotate at ${times}, ${days}`;
 }
+
+// Simplified Chinese summary for the UI language switch (same structured input).
+export const DAY_LABELS_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+function daysLabelZh(days) {
+  if (days === "weekdays") return "工作日";
+  if (days === "weekends") return "周末";
+  if (Array.isArray(days) && days.length > 0 && days.length < 7) {
+    return days
+      .slice()
+      .sort((a, b) => a - b)
+      .map((d) => DAY_LABELS_ZH[d])
+      .join("、");
+  }
+  return "每天";
+}
+
+export function describeCardZh(card) {
+  if (card.raw) return `自定义：${card.raw}`;
+  const days = daysLabelZh(card.days);
+  if (card.mode === "interval") {
+    const unit = card.unit === "hours" ? "小时" : "分钟";
+    const every = card.every === 1 ? `每${unit}` : `每 ${card.every} ${unit}`;
+    const pad = (h) => `${String(h).padStart(2, "0")}:00`;
+    const window =
+      card.fromHour <= 0 && card.toHour >= 23 ? "" : `，${pad(card.fromHour)}–${pad(card.toHour)}`;
+    return `${days}${window}，${every}轮播一次`;
+  }
+  return `${days} ${card.times.join("、")} 轮播`;
+}

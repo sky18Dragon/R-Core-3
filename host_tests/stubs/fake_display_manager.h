@@ -13,6 +13,7 @@ extern "C" {
 
 // Drop any captured frame and adopt the current test_board_display_* dims.
 void fake_display_reset(void);
+void fake_display_set_current_image(const char *path);
 
 // Captured frame state (valid after a begin/…/end cycle)
 int fake_display_frame_width(void);

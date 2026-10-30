@@ -30,7 +30,7 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 # exist on this target, and the choice below is what takes effect.
 CONFIG_SPIRAM_SPEED_40M=y
 
-# No internal flash storage: the 16MB flash is fully allocated to OTA slots and
+# No internal flash storage: the 16MB flash is fully allocated to the app and
 # the board has a microSD slot.
 CONFIG_USE_INTERNAL_FLASH_STORAGE=n
 

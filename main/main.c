@@ -35,11 +35,29 @@
 #include "image_processor.h"
 #include "mdns_service.h"
 #include "memfs.h"
+#include "nvs_bootstrap.h"
 #include "nvs_flash.h"
-#include "ota_manager.h"
 #include "periodic_tasks.h"
 #include "power_manager.h"
 #include "processing_settings.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_board.h"
+#include "read_pico_background.h"
+#include "read_pico_sntp.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_epaper.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "upload_sweep.h"
+#define UPLOAD_SWEEP_MAX_PER_BOOT 64
+#endif
+#if CONFIG_READ_PICO_PMU_SLEEP
+#include "read_pico_frame_sleep.h"
+#endif
+#if CONFIG_READ_PICO_TOUCH
+#include "read_pico_touch_nav.h"
+#endif
+#endif
+#endif
 #include "splash_screen.h"
 #include "storage.h"
 #include "utils.h"
@@ -56,16 +74,32 @@ static void log_wall_clock(const char *label);
 // periodic sync below waits on this rather than on "is the clock already set",
 // because on a timer wake the retained RTC clock is already a valid (but
 // drifted) time — so it would otherwise return before the correction lands.
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static volatile bool s_sntp_time_applied = false;
 
 static void sntp_time_sync_notification(struct timeval *tv)
 {
     s_sntp_time_applied = true;
 }
+#else
+static bool sntp_allowed(void)
+{
+    return periodic_tasks_is_active() && wifi_manager_is_connected();
+}
+#endif
 
 // Periodic callback for SNTP sync
 static esp_err_t sntp_sync_periodic_callback(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!sntp_allowed()) return ESP_ERR_INVALID_STATE;
+    char server[NTP_SERVER_MAX_LEN];
+    esp_err_t copied = config_manager_copy_ntp_server(server, sizeof(server));
+    if (copied != ESP_OK) return copied;
+    time_t now;
+    esp_err_t synced = read_pico_sntp_sync(server, sntp_allowed, periodic_tasks_is_active, &now);
+    if (synced != ESP_OK) return synced;
+#else
     ESP_LOGI(TAG, "Periodic SNTP sync triggered");
 
     s_sntp_time_applied = false;
@@ -95,19 +129,29 @@ static esp_err_t sntp_sync_periodic_callback(void)
 
     time_t now = 0;
     time(&now);
+#endif
     log_wall_clock("SNTP sync");
 
     // Update external RTC with synced time
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!sntp_allowed()) return ESP_ERR_INVALID_STATE;
+#endif
     if (board_hal_rtc_is_available()) {
         esp_err_t ret = board_hal_rtc_set_time(now);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Updated external RTC with SNTP time");
         } else {
             ESP_LOGW(TAG, "Failed to update external RTC: %s", esp_err_to_name(ret));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return ret;
+#endif
         }
     }
 
     // Reset rotate timer now that the clock is corrected
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!sntp_allowed()) return ESP_ERR_INVALID_STATE;
+#endif
     power_manager_reset_rotate_timer();
 
     return ESP_OK;
@@ -117,12 +161,22 @@ static esp_err_t sntp_sync_periodic_callback(void)
 // gives up after its retries or WIFI_CONNECT_TIMEOUT_MS), so there is nothing
 // left to wait for once it returns. On ESP_ERR_TIMEOUT the link is still up and
 // trying; callers that won't wait for it must call wifi_manager_stop_connecting().
-static esp_err_t connect_to_wifi(void)
+static esp_err_t connect_to_wifi(bool *credentials_failed)
 {
+    if (credentials_failed) *credentials_failed = false;
     char wifi_ssid[WIFI_SSID_MAX_LEN] = {0};
     char wifi_password[WIFI_PASS_MAX_LEN] = {0};
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t loaded = wifi_manager_load_credentials(wifi_ssid, wifi_password);
+    if (loaded != ESP_OK) {
+        if (credentials_failed) *credentials_failed = true;
+        ESP_LOGE(TAG, "Credential load failed (%s); no connect/erase/restart", esp_err_to_name(loaded));
+        return loaded;
+    }
+#else
     ESP_ERROR_CHECK(wifi_manager_load_credentials(wifi_ssid, wifi_password));
+#endif
     ESP_LOGI(TAG, "Connecting to WiFi SSID: %s", wifi_ssid);
     int64_t start_us = esp_timer_get_time();
     esp_err_t err = wifi_manager_connect(wifi_ssid, wifi_password);
@@ -136,10 +190,69 @@ static esp_err_t connect_to_wifi(void)
     return err;
 }
 
-// The saved network can't be joined: drop its credentials and restart into
-// captive-portal provisioning. Does not return.
-static void forget_wifi_and_reprovision(void)
+// Legacy boards erase/restart; Read Pico retains credentials and uses a new
+// AP save session. Failed startup/exit or cancellation returns on the new board.
+static void recover_wifi_connection(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    read_pico_sntp_request_stop();
+    periodic_tasks_request_stop();
+    // Do not change radio/HTTP while another owned callback is still using it.
+    esp_err_t background = read_pico_background_cancel_and_wait(pdMS_TO_TICKS(2000));
+    if (background != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery deferred: background exit unconfirmed (%s)",
+                 esp_err_to_name(background));
+        return;
+    }
+    esp_err_t periodic_exit = periodic_tasks_stop();
+    if (periodic_exit != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery deferred: periodic exit unconfirmed (%s)",
+                 esp_err_to_name(periodic_exit));
+        return;
+    }
+    esp_err_t sntp_exit = read_pico_sntp_stop();
+    if (sntp_exit != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery deferred: SNTP exit unconfirmed (%s)", esp_err_to_name(sntp_exit));
+        return;
+    }
+    // Preserve the saved pair. Re-enter the upstream captive portal in this
+    // boot, waiting for a NEW completed save rather than the old NVS presence.
+    esp_err_t radio_stopped = wifi_manager_stop_connecting_checked();
+    if (radio_stopped != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery radio exit unconfirmed (%s); no provisioning/restart",
+                 esp_err_to_name(radio_stopped));
+        return;
+    }
+    esp_err_t stopped = http_server_stop();
+    if (stopped != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery refused: HTTP stop failed (%s); credentials retained",
+                 esp_err_to_name(stopped));
+        return;
+    }
+    power_manager_set_auto_sleep_timeout(OOBE_AUTO_SLEEP_TIMEOUT_SEC);
+    esp_err_t recovery = wifi_provisioning_start_ap();
+    if (recovery != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery AP failed (%s); credentials retained, no automatic erase/restart",
+                 esp_err_to_name(recovery));
+        return;
+    }
+    ESP_LOGW(TAG, "WiFi failed; saved credentials retained. Waiting for a new AP configuration save");
+    while (!wifi_provisioning_session_complete()) {
+        if (!wifi_provisioning_is_active()) {
+            ESP_LOGE(TAG, "WiFi recovery AP cancelled; no automatic restart");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    esp_err_t ap_stopped = wifi_provisioning_stop_ap();
+    if (ap_stopped != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi recovery AP exit unconfirmed (%s); no automatic restart",
+                 esp_err_to_name(ap_stopped));
+        return;
+    }
+    esp_restart();
+#else
     ESP_LOGW(TAG, "Failed to connect to WiFi - clearing credentials");
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
@@ -151,6 +264,7 @@ static void forget_wifi_and_reprovision(void)
     ESP_LOGI(TAG, "Restarting to enter provisioning mode...");
     vTaskDelay(pdMS_TO_TICKS(2000));
     esp_restart();
+#endif
 }
 
 // Network-dependent part of an interactive boot, run once WiFi has an IP:
@@ -160,11 +274,32 @@ static void forget_wifi_and_reprovision(void)
 // succeed nor sends the HA online notification twice.
 static void startup_online_work(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!read_pico_background_running() || !http_server_is_ready()) {
+        ESP_LOGE(TAG, "Online startup skipped: HTTP not ready");
+        return;
+    }
+    char ip_str[16] = {0};
+    esp_err_t address = wifi_manager_get_ip(ip_str, sizeof(ip_str));
+    if (address != ESP_OK) {
+        ESP_LOGE(TAG, "Online startup skipped: current address not verified (%s)", esp_err_to_name(address));
+        return; // No uninitialized address log, setup NVS change or online notification.
+    }
+#else
     char ip_str[16];
     wifi_manager_get_ip(ip_str, sizeof(ip_str));
+#endif
 
     // Get sanitized hostname for mDNS
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    char device_name[DEVICE_NAME_MAX_LEN];
+    if (config_manager_copy_device_name(device_name, sizeof(device_name)) != ESP_OK) {
+        ESP_LOGE(TAG, "Online startup skipped: device name snapshot unavailable");
+        return;
+    }
+#else
     const char *device_name = config_manager_get_device_name();
+#endif
     char hostname[64];
     sanitize_hostname(device_name, hostname, sizeof(hostname));
 
@@ -193,9 +328,6 @@ static void startup_online_work(void)
     ESP_LOGI(TAG, "Sending online notification to Home Assistant");
     ha_notify_online(NULL);
 
-    // Delay OTA check to avoid competing with boot-time network activity
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    ota_check_for_update(NULL, 0);
 }
 
 // Interactive boot whose connect timed out (see app_main): wait for the
@@ -206,22 +338,51 @@ static void late_wifi_task(void *arg)
     // dropped again before this task got to run can still have woken it, so
     // confirm the link is up and otherwise wait for the next IP.
     do {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+        EventGroupHandle_t events = wifi_manager_get_event_group();
+        if (!events) return;
+        EventBits_t bits = xEventGroupWaitBits(events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                             pdFALSE, pdFALSE, pdMS_TO_TICKS(100));
+#else
         EventBits_t bits =
             xEventGroupWaitBits(wifi_manager_get_event_group(), WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                 pdFALSE, pdFALSE, portMAX_DELAY);
+#endif
         if ((bits & WIFI_FAIL_BIT) && !wifi_manager_is_connected()) {
             // The background retries only give up when the AP keeps refusing
             // the password -- the same verdict app_main acts on at boot.
-            forget_wifi_and_reprovision();
+            recover_wifi_connection();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            return; // Failed recovery does not repeatedly start servers or erase settings.
+#endif
         }
         if (!wifi_manager_is_connected()) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     } while (!wifi_manager_is_connected());
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
     ESP_LOGI(TAG, "WiFi came up late - running startup network tasks");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t periodic = periodic_tasks_check_and_run();
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    if (periodic != ESP_OK)
+        ESP_LOGW(TAG, "R1: late time sync unavailable (%s); continuing", esp_err_to_name(periodic));
+#else
+    if (periodic != ESP_OK) {
+        ESP_LOGE(TAG, "Late online startup skipped: periodic batch failed (%s)", esp_err_to_name(periodic));
+        return;
+    }
+#endif
+#else
     periodic_tasks_check_and_run();
+#endif
     startup_online_work();
+#if !CONFIG_BOARD_DRIVER_READ_PICO
     vTaskDelete(NULL);
+#endif
 }
 
 static void button_task(void *arg)
@@ -241,6 +402,9 @@ static void button_task(void *arg)
     uint32_t key_press_time = 0;
 
     while (1) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
         if (BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC) {
             current_boot_state = gpio_get_level(BOARD_HAL_WAKEUP_KEY);
 
@@ -302,6 +466,9 @@ static void button_task(void *arg)
             last_clear_state = current_clear_state;
         }
 
+#if CONFIG_READ_PICO_TOUCH
+        read_pico_touch_nav_poll(esp_timer_get_time() / 1000);
+#endif
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -310,11 +477,27 @@ static void button_task(void *arg)
 // both the pre-rotation HA path and the post-rotation config-sync window can
 // call it freely without tracking who started it. (Deep sleep reboots the app,
 // so the guard resets each wake.)
-static void ensure_http_server_running(void)
+static esp_err_t ensure_http_server_running(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    static bool mdns_started = false;
+    esp_err_t error = ESP_OK;
+    if (!mdns_started) {
+        error = mdns_service_init();
+        if (error != ESP_OK) {
+            ESP_LOGE(TAG, "mDNS startup failed: %s; no HTTP success", esp_err_to_name(error));
+            return error;
+        }
+        mdns_started = true;
+    }
+    error = http_server_init();
+    if (error == ESP_OK) error = http_server_set_ready_checked();
+    if (error != ESP_OK) ESP_LOGE(TAG, "HTTP startup/readiness failed: %s", esp_err_to_name(error));
+    return error;
+#else
     static bool started = false;
     if (started) {
-        return;
+        return ESP_OK;
     }
     // Start mDNS so HA / the LAN can resolve photoframe.local.
     ESP_ERROR_CHECK(mdns_service_init());
@@ -322,6 +505,8 @@ static void ensure_http_server_running(void)
     http_server_set_ready();
     started = true;
     ESP_LOGI(TAG, "HTTP server started");
+    return ESP_OK;
+#endif
 }
 
 // Log the current wall-clock in a uniform, greppable format:
@@ -361,6 +546,9 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
         ESP_LOGI(TAG, "Woke %d seconds before scheduled rotation, going back to sleep",
                  early_seconds);
         power_manager_enter_sleep();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return; // PMU sleep gate returns; do not fall through into rotation.
+#endif
         // Won't reach here after sleep
     }
 
@@ -368,15 +556,43 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
     if (rotation_mode == ROTATION_MODE_URL || ha_configured) {
         ESP_LOGI(TAG, "Initializing WiFi for %s",
                  rotation_mode == ROTATION_MODE_URL ? "URL rotation" : "HA battery post");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t wifi_init = wifi_manager_init();
+        if (wifi_init != ESP_OK) {
+            ESP_LOGE(TAG, "Wake WiFi initialization failed (%s); no network work/restart",
+                     esp_err_to_name(wifi_init));
+            return;
+        }
+#else
         ESP_ERROR_CHECK(wifi_manager_init());
+#endif
 
-        if (connect_to_wifi() == ESP_OK) {
+        bool credentials_failed = false;
+        if (connect_to_wifi(&credentials_failed) == ESP_OK) {
             wifi_connected = true;
             ESP_LOGI(TAG, "WiFi connected");
         } else {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (credentials_failed) {
+                esp_err_t stopped = wifi_manager_stop_connecting_checked();
+                if (stopped != ESP_OK)
+                    ESP_LOGE(TAG, "Wake radio exit unconfirmed: %s", esp_err_to_name(stopped));
+                ESP_LOGE(TAG, "Wake credential read failed; no network work or automatic repair");
+                return;
+            }
+#endif
             // This wake only needs the network up front; don't leave the radio
             // retrying through the rotation and until sleep (#121).
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            esp_err_t stopped = wifi_manager_stop_connecting_checked();
+            if (stopped != ESP_OK) {
+                ESP_LOGE(TAG, "Wake radio exit unconfirmed (%s); no further wake work",
+                         esp_err_to_name(stopped));
+                return;
+            }
+#else
             wifi_manager_stop_connecting();
+#endif
             ESP_LOGW(TAG, "WiFi unavailable");
         }
     }
@@ -384,11 +600,19 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
     if (wifi_connected) {
         power_manager_reset_sleep_timer();
 
-        // Check and run periodic tasks (OTA check, SNTP sync if due). When SNTP
+        // Check and run periodic tasks (SNTP sync if due). When SNTP
         // actually corrects the clock it logs a "Wall-clock (SNTP sync)" line —
         // the trustworthy anchor on RTC-less boards.
         ESP_LOGI(TAG, "Checking periodic tasks...");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t periodic = periodic_tasks_check_and_run();
+        if (periodic != ESP_OK) {
+            ESP_LOGE(TAG, "Wake periodic work failed: %s", esp_err_to_name(periodic));
+            return;
+        }
+#else
         periodic_tasks_check_and_run();
+#endif
     }
 
     // Re-check now that the clock is as corrected as it will get (NTP sync
@@ -398,6 +622,9 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
         ESP_LOGI(TAG, "Woke %d seconds before scheduled rotation, going back to sleep",
                  early_seconds);
         power_manager_enter_sleep();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return; // A declined PMU sleep does not authorize more wake work.
+#endif
         // Won't reach here after sleep
     }
 
@@ -416,6 +643,9 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
         utils_set_last_fetch_error("WiFi unavailable");
         power_manager_record_network_wake(false);
         power_manager_enter_sleep();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return;
+#endif
         // Won't reach here after sleep
     }
 
@@ -423,7 +653,11 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
     // notify response can carry the rotation decision.
     if (wifi_connected && ha_configured) {
         power_manager_reset_sleep_timer();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (ensure_http_server_running() != ESP_OK) return;
+#else
         ensure_http_server_running();
+#endif
 
         // Piggyback the rotation decision on the online notification. The gate
         // is moot for a ROTATE button press (that always rotates), so don't ask
@@ -446,6 +680,9 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
         ESP_LOGI(TAG, "Rotation skipped by Home Assistant, going back to sleep");
         power_manager_record_network_wake(!ha_unreachable);
         power_manager_enter_sleep();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return;
+#endif
         // Won't reach here after sleep
     }
 
@@ -475,7 +712,11 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
         hold_sec = server_wait;
     }
     if (wifi_connected && hold_sec > 0) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (ensure_http_server_running() != ESP_OK) return;
+#else
         ensure_http_server_running();  // no-op if the HA path already started it
+#endif
         ESP_LOGI(TAG, "HTTP server available for config sync (%d s)", hold_sec);
         vTaskDelay(pdMS_TO_TICKS(hold_sec * 1000));
         ESP_LOGI(TAG, "HTTP server window closed");
@@ -487,8 +728,34 @@ void deep_sleep_wake_main(wakeup_source_t wakeup_src)
     // Won't reach here after sleep
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static void photoframe_boot(void)
+#else
 void app_main(void)
+#endif
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Before board/storage/file startup: never auto-erase existing Demo/calibration NVS.
+    esp_err_t nvs_start = photoframe_nvs_init(false);
+    if (nvs_start != ESP_OK) {
+        ESP_LOGE(TAG, "NVS startup refused (%s); migration required, no erase or business startup",
+                 esp_err_to_name(nvs_start));
+        return;
+    }
+    esp_err_t config_start = config_manager_init();
+    if (config_start != ESP_OK) {
+        ESP_LOGE(TAG, "Config load refused (%s); no board/storage/display/network startup "
+                     "or automatic repair", esp_err_to_name(config_start));
+        return;
+    }
+    char checked_ssid[WIFI_SSID_MAX_LEN], checked_password[WIFI_PASS_MAX_LEN];
+    esp_err_t credential_check = wifi_manager_load_credentials(checked_ssid, checked_password);
+    if (credential_check != ESP_OK && credential_check != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "Credential pair refused (%s); no board/storage/network startup or repair",
+                 esp_err_to_name(credential_check));
+        return;
+    }
+#endif
     // Check reset reason to detect crashes
     esp_reset_reason_t reset_reason = esp_reset_reason();
     const char *reset_reason_str;
@@ -530,23 +797,40 @@ void app_main(void)
     // Initialize Board HAL
     ESP_LOGI(TAG, "Initializing Board HAL...");
     ESP_ERROR_CHECK(board_hal_init());
+#if CONFIG_READ_PICO_PMU_SLEEP
+    frame_sleep_boot();  // HOST_READY + wake reason (opt-in sleep builds only)
+#endif
 
     // Initialize the storage subsystem (handles SD, LittleFS, MemFS fallbacks)
     ESP_LOGI(TAG, "Initializing storage subsystem...");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Read Pico has no fallback storage. A missing/unmountable card must not abort into a
+    // panic-reboot loop: stop startup once, without retry, format or fallback.
+    esp_err_t storage_start = storage_init();
+    if (storage_start != ESP_OK) {
+        esp_err_t hal_release = read_pico_board_deinit();
+        ESP_LOGE(TAG,
+                 "Storage unavailable (%s); insert/check the SD card and restart. "
+                 "No retry, format or fallback. HAL release: %s",
+                 esp_err_to_name(storage_start), esp_err_to_name(hal_release));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(storage_init());
+#endif
 
     // Bring up NVS, config, and debug-log capture as early as possible — before
     // the external-RTC / I2C init below — so the persistent log covers the RTC
     // path and the wake decision, where a crash-then-reset is suspected (#105).
     // None of these depend on the RTC or the AXP2101 power-rail delay.
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
+#if !CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t ret = photoframe_nvs_init(true);  // Preserve legacy board recovery only.
     ESP_ERROR_CHECK(ret);
+#endif
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
     ESP_ERROR_CHECK(config_manager_init());
+#endif
 
     // Start mirroring console logs to storage if debug logging is enabled.
     debug_log_init();
@@ -614,7 +898,9 @@ void app_main(void)
         ESP_LOGW(TAG,
                  "External RTC unavailable/invalid, will force SNTP sync after WiFi connection");
         // Force SNTP sync to run on next periodic_tasks_check_and_run()
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         periodic_tasks_force_run(SNTP_TASK_NAME);
+#endif
     }
 
     // One boot-time anchor for log correlation, whatever the source. On
@@ -625,26 +911,74 @@ void app_main(void)
 
     // Initialize periodic tasks system
     ESP_LOGI(TAG, "Initializing periodic tasks...");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t periodic_start = periodic_tasks_init();
+    if (periodic_start == ESP_OK)
+        periodic_start = periodic_tasks_register(SNTP_TASK_NAME, sntp_sync_periodic_callback, 24 * 60 * 60);
+    if (periodic_start == ESP_OK && !time_restored)
+        periodic_start = periodic_tasks_force_run(SNTP_TASK_NAME);
+    if (periodic_start != ESP_OK) {
+        ESP_LOGE(TAG, "Periodic startup refused: %s", esp_err_to_name(periodic_start));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(periodic_tasks_init());
-
     // Register SNTP sync as a daily task
     ESP_ERROR_CHECK(
         periodic_tasks_register(SNTP_TASK_NAME, sntp_sync_periodic_callback, 24 * 60 * 60));
+#endif
     ESP_LOGI(TAG, "Registered SNTP sync as daily task");
 
     ESP_ERROR_CHECK(image_processor_init());
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    esp_err_t display_start = display_manager_init();
+    if (display_start == ESP_OK) display_start = read_pico_epaper_prepare_local_frame();
+    if (display_start != ESP_OK) {
+        ESP_LOGE(TAG, "R1 display startup refused (%s); no Web or rotation startup",
+                 esp_err_to_name(display_start));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(display_manager_init());
+#endif
 
     ESP_ERROR_CHECK(processing_settings_init());
 
     ESP_ERROR_CHECK(color_palette_init());
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t power_start = power_manager_init();
+    if (power_start != ESP_OK) {
+        ESP_LOGE(TAG, "Power task startup failed (%s); no background activation",
+                 esp_err_to_name(power_start));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(power_manager_init());
+#endif
 
-    ESP_ERROR_CHECK(ota_manager_init());
-
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t metadata_start = album_manager_init();
+    if (metadata_start != ESP_OK) {
+        ESP_LOGE(TAG, "Post-power initialization failed (%s); background remains gated",
+                 esp_err_to_name(metadata_start));
+        return;
+    }
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Before HTTP starts, so no upload can own a temporary yet: remove
+    // unpublished upload temporaries left by an interrupted request.
+    upload_sweep_result_t sweep;
+    if (upload_sweep_orphans(IMAGE_DIRECTORY, UPLOAD_SWEEP_MAX_PER_BOOT, &sweep) == 0 &&
+        (sweep.removed || sweep.failed)) {
+        ESP_LOGI(TAG, "Removed %u orphaned upload temporaries (%llu bytes)%s; %u could not be removed",
+                 sweep.removed, (unsigned long long) sweep.bytes,
+                 sweep.truncated ? ", more remain" : "", sweep.failed);
+    }
+#endif
+#else
     ESP_ERROR_CHECK(album_manager_init());
+#endif
 
     // Check wake-up source
     wakeup_source_t wakeup_src = power_manager_get_wakeup_source();
@@ -655,6 +989,9 @@ void app_main(void)
         ESP_LOGI(TAG, "CLEAR button wakeup detected - clearing display and sleeping");
         display_manager_clear();      // Clear screen
         power_manager_enter_sleep();  // Go back to sleep
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return; // Sleep is gated; do not start the normal online boot afterward.
+#endif
         // Won't reach here
         break;
 
@@ -662,6 +999,9 @@ void app_main(void)
     case WAKEUP_SOURCE_ROTATE_BUTTON:
         ESP_LOGI(TAG, "Entering deep sleep wake path (timer or rotate button)");
         deep_sleep_wake_main(wakeup_src);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return; // Also covers wake failure/declined sleep; no second startup.
+#endif
         // Won't reach here after sleep
         break;
 
@@ -675,31 +1015,87 @@ void app_main(void)
         break;
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t wifi_init = wifi_manager_init();
+    if (wifi_init != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi initialization failed (%s); no provisioning/network restart",
+                 esp_err_to_name(wifi_init));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(wifi_manager_init());
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t provision_init = wifi_provisioning_init();
+    if (provision_init != ESP_OK) {
+        ESP_LOGE(TAG, "Provisioning initialization failed (%s); background remains gated",
+                 esp_err_to_name(provision_init));
+        return;
+    }
+#else
     ESP_ERROR_CHECK(wifi_provisioning_init());
+#endif
 
-    if (!wifi_provisioning_is_provisioned()) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    char loaded_ssid[WIFI_SSID_MAX_LEN], loaded_password[WIFI_PASS_MAX_LEN];
+    esp_err_t provision_state = wifi_manager_load_credentials(loaded_ssid, loaded_password);
+    if (provision_state != ESP_OK && provision_state != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "Credential read failed (%s); no import/reprovisioning/erase/restart",
+                 esp_err_to_name(provision_state));
+        return;
+    }
+    bool provisioned = provision_state == ESP_OK;
+#else
+    bool provisioned = wifi_provisioning_is_provisioned();
+#endif
+    if (!provisioned) {
         bool creds_loaded = false;
 
         // Try to load WiFi credentials from storage
         char sd_ssid[WIFI_SSID_MAX_LEN] = {0};
         char sd_password[WIFI_PASS_MAX_LEN] = {0};
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        wifi_text_t imported;
+        esp_err_t import_result = storage_read_wifi_config(&imported);
+        if (import_result != ESP_OK && import_result != ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "WiFi file import refused (%s); file retained, no save/AP fallback/restart",
+                     esp_err_to_name(import_result));
+            return;
+        }
+        if (import_result == ESP_OK) {
+            memcpy(sd_ssid, imported.ssid, sizeof(sd_ssid));
+            memcpy(sd_password, imported.password, sizeof(sd_password));
+#else
         if (storage_read_wifi_credentials(sd_ssid, sd_password) == ESP_OK) {
+#endif
             ESP_LOGI(TAG, "===========================================");
             ESP_LOGI(TAG, "WiFi credentials found on storage!");
             ESP_LOGI(TAG, "Saving to NVS and connecting...");
             ESP_LOGI(TAG, "===========================================");
 
             // Save credentials to NVS
-            if (wifi_manager_save_credentials(sd_ssid, sd_password) == ESP_OK) {
+            esp_err_t saved = wifi_manager_save_credentials(sd_ssid, sd_password);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            if (saved == ESP_OK && imported.has_device_name)
+                saved = config_manager_set_device_name_checked(imported.device_name);
+#endif
+            if (saved == ESP_OK) {
                 ESP_LOGI(TAG, "WiFi credentials saved to NVS");
                 ESP_LOGI(TAG, "Restarting to connect with new credentials...");
                 vTaskDelay(pdMS_TO_TICKS(2000));
                 esp_restart();
                 creds_loaded = true;
             } else {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                // Two credential keys plus optional name are not an atomic
+                // transaction. Report possible partial save; never claim rollback.
+                ESP_LOGE(TAG, "WiFi import save failed (%s); possible partial NVS result, "
+                             "file retained, no AP fallback or restart", esp_err_to_name(saved));
+                return;
+#else
                 ESP_LOGE(TAG, "Failed to save WiFi credentials to NVS");
+#endif
             }
         }
 
@@ -730,9 +1126,24 @@ void app_main(void)
             ESP_LOGI(TAG, "3. Enter your WiFi credentials");
             ESP_LOGI(TAG, "===========================================");
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            esp_err_t ap_start = wifi_provisioning_start_ap();
+            if (ap_start != ESP_OK) {
+                ESP_LOGE(TAG, "Provisioning AP failed (%s); no automatic erase/restart",
+                         esp_err_to_name(ap_start));
+                return;
+            }
+#else
             ESP_ERROR_CHECK(wifi_provisioning_start_ap());
+#endif
 
-            while (!wifi_provisioning_is_provisioned()) {
+            while (!wifi_provisioning_session_complete()) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                if (!wifi_provisioning_is_active()) {
+                    ESP_LOGE(TAG, "Provisioning AP cancelled; no automatic restart");
+                    return;
+                }
+#endif
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
 
@@ -746,20 +1157,58 @@ void app_main(void)
 
             ESP_LOGI(TAG, "WiFi credentials saved! Restarting...");
             vTaskDelay(pdMS_TO_TICKS(3000));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            esp_err_t ap_stopped = wifi_provisioning_stop_ap();
+            if (ap_stopped != ESP_OK) {
+                ESP_LOGE(TAG, "Provisioning AP exit unconfirmed (%s); no automatic restart",
+                         esp_err_to_name(ap_stopped));
+                return;
+            }
+#endif
             esp_restart();
         }
     }
 
-    esp_err_t wifi_err = connect_to_wifi();
+    bool credentials_failed = false;
+    esp_err_t wifi_err = connect_to_wifi(&credentials_failed);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (credentials_failed) return; // Read errors are not AP rejections or absent configuration.
+#endif
     if (wifi_err == ESP_OK) {
-        // Check and run periodic tasks (OTA check, SNTP sync if due)
+        // Check and run periodic tasks (SNTP sync if due)
         // Note: If RTC was invalid at boot, sntp_sync was already forced via
         // periodic_tasks_force_run()
         ESP_LOGI(TAG, "Checking periodic tasks...");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t periodic = periodic_tasks_check_and_run();
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        // No external RTC: SNTP is forced every boot and fails on a LAN without Internet.
+        // Local Web/SD rotation does not need wall-clock time, so keep starting HTTP; the
+        // forced request stays pending for the hourly worker. Cancellation is still caught
+        // by the background/HTTP readiness checks below.
+        if (periodic != ESP_OK)
+            ESP_LOGW(TAG, "R1: time sync unavailable (%s); continuing with local Web/SD frame",
+                     esp_err_to_name(periodic));
+#else
+        if (periodic != ESP_OK) {
+            ESP_LOGE(TAG, "Online startup refused: periodic work failed (%s)", esp_err_to_name(periodic));
+            return;
+        }
+#endif
+#else
         periodic_tasks_check_and_run();
+#endif
 
         // Start mDNS service
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t mdns_started = mdns_service_init();
+        if (mdns_started != ESP_OK) {
+            ESP_LOGE(TAG, "mDNS startup failed (%s); no HTTP/startup success", esp_err_to_name(mdns_started));
+            return;
+        }
+#else
         ESP_ERROR_CHECK(mdns_service_init());
+#endif
     } else if (wifi_err == ESP_ERR_TIMEOUT) {
         // Slow rather than failed: e.g. associated but DHCP hasn't answered,
         // or the AP is still booting after a power cut. That says nothing
@@ -776,20 +1225,95 @@ void app_main(void)
             ESP_LOGW(TAG, "mDNS not started; the frame is reachable by IP only");
         }
     } else {
-        forget_wifi_and_reprovision();
+        recover_wifi_connection();
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return; // Recovery owns its AP and restart; do not start a second HTTP server.
+#endif
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t background_start = read_pico_background_add(READ_PICO_BACKGROUND_BUTTON,
+                                                          button_task, NULL, 8192, 5);
+    uint32_t required = READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_PERIODIC) |
+                        READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_ROTATION) |
+                        READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_BUTTON);
+    if (background_start == ESP_OK && wifi_err != ESP_OK) {
+        required |= READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_LATE_WIFI);
+        background_start = read_pico_background_add(READ_PICO_BACKGROUND_LATE_WIFI,
+                                                     late_wifi_task, NULL, 8192, 5);
+    }
+    if (background_start != ESP_OK) {
+        ESP_LOGE(TAG, "Background creation failed (%s); no new HTTP publication",
+                 esp_err_to_name(background_start));
+        return;
+    }
+    esp_err_t http_started = http_server_init();
+    if (http_started == ESP_OK)
+        http_started = read_pico_background_activate(required, http_server_set_ready_checked);
+    if (http_started != ESP_OK) {
+        read_pico_background_cancel();
+        esp_err_t http_exit = http_server_stop();
+        ESP_LOGE(TAG, "HTTP startup/readiness failed (%s); no startup success or late WiFi task execution",
+                 esp_err_to_name(http_started));
+        if (http_exit != ESP_OK)
+            ESP_LOGE(TAG, "HTTP startup cleanup unconfirmed: %s", esp_err_to_name(http_exit));
+        return;
+    }
+#else
     xTaskCreate(button_task, "button_task", 8192, NULL, 5, NULL);
-
     ESP_ERROR_CHECK(http_server_init());
     http_server_set_ready();
+#endif
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
     ESP_LOGI(TAG, "PhotoFrame started successfully");
 
     if (wifi_err == ESP_OK) {
         startup_online_work();
     } else {
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         // ESP_ERR_TIMEOUT: late_wifi_task takes over once the network is up.
         xTaskCreate(late_wifi_task, "late_wifi", 8192, NULL, 5, NULL);
+#endif
     }
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+void app_main(void)
+{
+    photoframe_boot();
+    if (!read_pico_background_running()) {
+        read_pico_sntp_request_stop();
+        periodic_tasks_request_stop();
+        read_pico_background_cancel();
+        esp_err_t exited = read_pico_background_cancel_and_wait(pdMS_TO_TICKS(2000));
+        if (exited != ESP_OK) {
+            ESP_LOGE(TAG, "Background exit unconfirmed (%s); no further HTTP cleanup",
+                     esp_err_to_name(exited));
+            return;
+        }
+        esp_err_t periodic_exit = periodic_tasks_stop();
+        if (periodic_exit != ESP_OK) {
+            ESP_LOGE(TAG, "Periodic exit unconfirmed (%s); no further HTTP cleanup",
+                     esp_err_to_name(periodic_exit));
+            return;
+        }
+        esp_err_t sntp_exit = read_pico_sntp_stop();
+        if (sntp_exit != ESP_OK) {
+            ESP_LOGE(TAG, "SNTP exit unconfirmed (%s); no further HTTP cleanup", esp_err_to_name(sntp_exit));
+            return;
+        }
+        // A wake config window may have published FRAME HTTP without starting
+        // normal background tasks. Close it only after owned callbacks return.
+        if (http_server_is_ready()) {
+            esp_err_t http_exit = http_server_stop();
+            if (http_exit != ESP_OK)
+                ESP_LOGE(TAG, "Boot-return HTTP exit unconfirmed: %s", esp_err_to_name(http_exit));
+        }
+        ESP_LOGW(TAG, "Background startup not active; cooperative cancellation requested, "
+                      "not whole-device cleanup");
+    }
+}
+#endif

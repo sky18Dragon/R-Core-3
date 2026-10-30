@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "../i18n";
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import ToneCurve from "./ToneCurve.vue";
 import { useAppStore, useSettingsStore } from "../stores";
@@ -85,6 +86,7 @@ function grayscalePalette() {
     blackY: settingsStore.palette?.black_y ?? 0.009,
     whiteY: settingsStore.palette?.white_y ?? 0.65,
     gamma: settingsStore.palette?.gamma ?? 1.42,
+    levelsY: settingsStore.palette?.levels_y ?? null, // measured per-code ramp, when set
   });
 }
 
@@ -537,21 +539,21 @@ onUnmounted(() => {
         >
           <v-btn value="cover" size="small">
             <v-icon start size="small">mdi-crop-free</v-icon>
-            Cover
+            {{ t("Cover") }}
           </v-btn>
           <v-btn value="fit" size="small">
             <v-icon start size="small">mdi-fit-to-screen</v-icon>
-            Fit
+            {{ t("Fit") }}
           </v-btn>
           <v-btn value="custom" size="small">
             <v-icon start size="small">mdi-cursor-move</v-icon>
-            Custom
+            {{ t("Custom") }}
           </v-btn>
         </v-btn-toggle>
 
         <!-- Background color selector (only for fit/custom modes) -->
         <div v-if="scaleMode !== 'cover'" class="d-flex align-center mb-3">
-          <span class="text-caption text-medium-emphasis mr-2">Background:</span>
+          <span class="text-caption text-medium-emphasis mr-2">{{ t("Background:") }}</span>
           <v-btn-toggle
             v-model="bgColorMode"
             mandatory
@@ -559,8 +561,8 @@ onUnmounted(() => {
             variant="outlined"
             density="compact"
           >
-            <v-btn value="black" size="small">Black</v-btn>
-            <v-btn value="white" size="small">White</v-btn>
+            <v-btn value="black" size="small">{{ t("Black") }}</v-btn>
+            <v-btn value="white" size="small">{{ t("White") }}</v-btn>
           </v-btn-toggle>
         </div>
 
@@ -597,11 +599,11 @@ onUnmounted(() => {
             </div>
             <div class="comparison-labels d-flex justify-space-between mt-2">
               <template v-if="scaleMode !== 'custom'">
-                <span class="text-caption">← Original</span>
-                <span class="text-caption">Processed →</span>
+                <span class="text-caption">{{ t("← Original") }}</span>
+                <span class="text-caption">{{ t("Processed →") }}</span>
               </template>
               <span v-else class="text-caption text-medium-emphasis">
-                Drag to pan, scroll to zoom
+                {{ t("Drag to pan, scroll to zoom") }}
               </span>
             </div>
           </div>
@@ -611,7 +613,7 @@ onUnmounted(() => {
                `defer` lets the target (rendered later in the tree) resolve. -->
           <Teleport defer :to="toneCurveTeleport" :disabled="!toneCurveTeleport">
             <v-card variant="outlined" class="tone-curve-card">
-              <v-card-subtitle class="pt-2"> Tone Curve </v-card-subtitle>
+              <v-card-subtitle class="pt-2"> {{ t("Tone Curve") }} </v-card-subtitle>
               <div class="d-flex justify-center pa-4">
                 <ToneCurve
                   :params="params"

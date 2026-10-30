@@ -15,10 +15,11 @@ enum {
     READ_PICO_EDGE_TRACE_ROWS = 12,
     READ_PICO_EDGE_TRACE_MAX_FRAMES = 48,
     READ_PICO_EDGE_EXPECTED_FRAMES = 36,
-    // The LCD driver emits 688 rounded display rows, then refills both four-line
-    // bounce buffers once more before VSYNC completion.
+    // Both geometries observed so far produce 696 software callbacks: the pinned
+    // driver emits 688 rows plus two four-line refills; the exact-line candidate
+    // emits 684 rows plus two six-line refills. This is not a physical line count.
     READ_PICO_EDGE_EXPECTED_SOURCE_CALLS = 696,
-    READ_PICO_EDGE_START_PREFILL_CALLS = 8,
+    READ_PICO_EDGE_START_PREFILL_CALLS = 12,
 };
 
 typedef struct {
@@ -58,8 +59,9 @@ typedef struct {
 typedef struct {
     uint32_t registered_frames, completed_frames, stored_frames;
     uint32_t dropped_frames, orphan_lines, late_lines, unfinished_frames;
-    // A GC16 producer pinned to CPU1 may synchronously supply rows 0..7 while
-    // epd_lcd_start_frame fills its two bounce buffers. Later CPU1 callbacks are faults.
+    // The display-validation overlay synchronously prefills rows 0..11 on CPU1
+    // while epd_lcd_start_frame fills its two six-line buffers. Later CPU1
+    // callbacks are faults.
     uint32_t core1_start_prefill, wrong_core;
     read_pico_edge_frame_t frames[READ_PICO_EDGE_TRACE_MAX_FRAMES];
 } read_pico_edge_capture_t;

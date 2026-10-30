@@ -1,6 +1,8 @@
 #include "display_manager.h"
 
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -11,6 +13,9 @@
 #include "GUI_EPDGZfile.h"
 #include "GUI_PNGfile.h"
 #include "GUI_Paint.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "image_history.h"
+#endif
 #include "GUI_RawBuffer.h"
 #include "album_manager.h"
 #include "board_hal.h"
@@ -28,6 +33,10 @@
 #include "storage.h"
 #include "utils.h"
 #include "zlib.h"
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_sd.h"
+#include "read_pico_upload.h"
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
 #include "read_pico_epaper.h"
 #endif
@@ -54,8 +63,19 @@ static UWORD display_white_color(void)
 }
 
 static SemaphoreHandle_t display_mutex = NULL;
-static char current_image[64] = {0};
-static char last_displayed_image[256] = {0};  // Internal state: last displayed image path
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static image_history_t display_history;  // guarded by display_mutex
+#endif
+static char current_image[DISPLAY_IMAGE_PATH_CAPACITY] = {0};
+#if CONFIG_BOARD_DRIVER_READ_PICO
+static bool current_record_known;
+#endif
+static char last_displayed_image[DISPLAY_IMAGE_PATH_CAPACITY] = {0};
+
+static bool image_path_fits(const char *path)
+{
+    return path == NULL || strnlen(path, DISPLAY_IMAGE_PATH_CAPACITY) < DISPLAY_IMAGE_PATH_CAPACITY;
+}
 
 static uint8_t *epd_image_buffer = NULL;
 static uint32_t image_buffer_size;
@@ -96,12 +116,11 @@ static void load_last_displayed_image(void)
 // Save last displayed image to NVS
 static void save_last_displayed_image(const char *filename)
 {
-    if (filename == NULL) {
+    if (filename == NULL || !image_path_fits(filename)) {
         return;
     }
 
-    strncpy(last_displayed_image, filename, sizeof(last_displayed_image) - 1);
-    last_displayed_image[sizeof(last_displayed_image) - 1] = '\0';
+    memcpy(last_displayed_image, filename, strlen(filename) + 1);
 
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
@@ -114,16 +133,53 @@ static void save_last_displayed_image(const char *filename)
 }
 
 // Helper function to create link file pointing to current image
-static void create_image_link(const char *target_path)
+static bool create_image_link(const char *target_path)
 {
     FILE *fp = fopen(CURRENT_IMAGE_LINK, "w");
     if (fp) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        size_t size = strlen(target_path);
+        bool ok = fwrite(target_path, 1, size, fp) == size && !ferror(fp) &&
+                  fflush(fp) == 0 && fsync(fileno(fp)) == 0;
+        if (fclose(fp) != 0) {
+            read_pico_sd_note_file_close_failure();
+            ok = false;
+        }
+        read_pico_sd_status_t status;
+        ok = ok && read_pico_sd_get_status(&status) == ESP_OK && status.present &&
+             status.mounted && status.media_valid && !status.exit_failed;
+        current_record_known = true;
+        return ok;
+#else
         fprintf(fp, "%s", target_path);
         fclose(fp);
         ESP_LOGD(TAG, "Created link file pointing to: %s", target_path);
+        return true;
+#endif
     } else {
         ESP_LOGE(TAG, "Failed to create link file");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        return false;
+#else
+        return true; // Preserve upstream's legacy metadata-error policy.
+#endif
     }
+}
+
+static bool clear_image_record(void)
+{
+    current_image[0] = 0;
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    current_record_known = true;
+    errno = 0;
+    bool removed = unlink(CURRENT_IMAGE_LINK) == 0 || errno == ENOENT;
+    read_pico_sd_status_t status;
+    return removed && read_pico_sd_get_status(&status) == ESP_OK && status.present &&
+           status.mounted && status.media_valid && !status.exit_failed;
+#else
+    unlink(CURRENT_IMAGE_LINK);
+    return true;
+#endif
 }
 
 esp_err_t display_manager_init(void)
@@ -161,9 +217,11 @@ void display_manager_initialize_paint(void)
 
 esp_err_t display_manager_show_image(const char *filename)
 {
-    if (!filename || strlen(filename) == 0) {
+    if (!filename || filename[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!image_path_fits(filename))
+        return ESP_ERR_INVALID_SIZE;
 
     if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to acquire display mutex");
@@ -227,15 +285,19 @@ esp_err_t display_manager_show_image(const char *filename)
     ESP_LOGI(TAG, "E-paper display update complete");
     ESP_LOGI(TAG, "Free heap after display: %lu bytes", esp_get_free_heap_size());
 
-    strncpy(current_image, filename, sizeof(current_image) - 1);
+    memcpy(current_image, filename, strlen(filename) + 1);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    current_record_known = true;
+    image_history_push(&display_history, filename);
+#endif
 
-    create_image_link(filename);
+    bool linked = create_image_link(filename);
     ESP_LOGD(TAG, "Created link to: %s", filename);
 
     xSemaphoreGive(display_mutex);
 
     ESP_LOGI(TAG, "Image displayed successfully");
-    return ESP_OK;
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
 }
 
 esp_err_t display_manager_show_rgb_buffer(const uint8_t *rgb_buffer, int width, int height)
@@ -280,12 +342,20 @@ esp_err_t display_manager_show_rgb_buffer(const uint8_t *rgb_buffer, int width, 
     ESP_LOGI(TAG, "Free heap after display: %lu bytes", esp_get_free_heap_size());
 
     // Clear current_image since we displayed from buffer, not file
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    bool linked = clear_image_record();
+#else
     current_image[0] = '\0';
+#endif
 
     xSemaphoreGive(display_mutex);
 
     ESP_LOGI(TAG, "RGB buffer displayed successfully");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
+#else
     return ESP_OK;
+#endif
 }
 
 esp_err_t display_manager_begin_rgb_stream(void)
@@ -348,11 +418,24 @@ static esp_err_t display_save_frame_epdgz(const char *path)
     const size_t row_bytes = ((size_t) width + 1) / 2;
     const size_t chunk = 4096;
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // Hidden exclusive staging prevents album consumers from opening a
+    // half-written .epdgz. Only a complete synced/closed owner may publish.
+    char directory[512], temporary[512];
+    const char *slash = strrchr(path, '/');
+    if (!slash || slash == path || (size_t)(slash - path) >= sizeof(directory)) return ESP_FAIL;
+    memcpy(directory, path, slash - path);
+    directory[slash - path] = 0;
+    upload_file_t snapshot = {.fd = -1};
+    if (!read_pico_upload_begin(&snapshot, directory, temporary, sizeof(temporary),
+                                32u * 1024u * 1024u)) return ESP_FAIL;
+#else
     FILE *fp = fopen(path, "wb");
     if (!fp) {
         ESP_LOGE(TAG, "Failed to open %s for writing", path);
         return ESP_FAIL;
     }
+#endif
 
     uint8_t *row = (uint8_t *) heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM);
     uint8_t *out = (uint8_t *) heap_caps_malloc(chunk, MALLOC_CAP_SPIRAM);
@@ -385,7 +468,13 @@ static esp_err_t display_save_frame_epdgz(const char *path)
                 break;
             }
             size_t have = chunk - strm.avail_out;
-            if (have > 0 && fwrite(out, 1, have, fp) != have) {
+            if (have > 0 &&
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                !upload_file_write(&snapshot, out, have)
+#else
+                fwrite(out, 1, have, fp) != have
+#endif
+                ) {
                 ESP_LOGE(TAG, "Failed to write frame snapshot");
                 err = ESP_FAIL;
                 break;
@@ -407,14 +496,31 @@ static esp_err_t display_save_frame_epdgz(const char *path)
     if (out) {
         heap_caps_free(out);
     }
-    // Buffered writes can surface a full-disk error only at close
-    if (fclose(fp) != 0 && err == ESP_OK) {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (err != ESP_OK) upload_file_abort(&snapshot);
+    else if (!upload_file_finish(&snapshot, snapshot.bytes) ||
+             !upload_file_publish(&snapshot, snapshot.source, path)) err = ESP_FAIL;
+#else
+    // Buffered writes can surface a full-disk error only at close.
+    if (fclose(fp) != 0) {
         ESP_LOGE(TAG, "Failed to finalize frame snapshot");
-        err = ESP_FAIL;
+        if (err == ESP_OK)
+            err = ESP_FAIL;
     }
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    read_pico_sd_status_t status;
+    if (err == ESP_OK && (read_pico_sd_get_status(&status) != ESP_OK || !status.present ||
+                         !status.mounted || !status.media_valid || status.exit_failed))
+        err = ESP_ERR_INVALID_STATE;
+#endif
 
     if (err != ESP_OK) {
+#if !CONFIG_BOARD_DRIVER_READ_PICO
         unlink(path);
+#endif
+        // Read Pico retains a partial derived file for explicit owner cleanup.
+        // Never unlink a path that another consumer may have replaced.
     } else {
         ESP_LOGI(TAG, "Saved frame snapshot: %s", path);
     }
@@ -442,6 +548,14 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
 {
     esp_err_t result = ESP_OK;
 
+    // Check every possible publication path BEFORE refreshing or creating a snapshot.
+    // Even a fallback must fit: its use cannot be predicted until after the refresh.
+    if (show && pub && (!image_path_fits(pub->display_name) || !image_path_fits(pub->save_path) ||
+                       !image_path_fits(pub->fallback_name))) {
+        xSemaphoreGive(display_mutex);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     if (show) {
         ESP_LOGI(TAG, "Starting e-paper display update (this takes ~30 seconds)");
         esp_err_t refresh = refresh_panel();
@@ -465,13 +579,15 @@ esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub
         if (record) {
             // Recorded while the mutex is still held so the reported state
             // cannot race a queued display
-            strncpy(current_image, record, sizeof(current_image) - 1);
-            create_image_link(record);
+            memcpy(current_image, record, strlen(record) + 1);
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            current_record_known = true;
+#endif
+            if (!create_image_link(record)) result = ESP_ERR_NOT_FINISHED;
         } else {
             // Displayed from an anonymous buffer (or no usable fallback):
             // remove the stale link rather than reporting the previous image
-            current_image[0] = '\0';
-            unlink(CURRENT_IMAGE_LINK);
+            if (!clear_image_record()) result = ESP_ERR_NOT_FINISHED;
         }
     }
 
@@ -498,12 +614,11 @@ esp_err_t display_manager_clear(void)
 #endif
 
     // Remove the current image link so API returns 404
-    unlink(CURRENT_IMAGE_LINK);
-    current_image[0] = '\0';
+    bool linked = clear_image_record();
     save_last_displayed_image("");
 
     xSemaphoreGive(display_mutex);
-    return ESP_OK;
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
 }
 
 esp_err_t display_manager_show_calibration(void)
@@ -533,11 +648,37 @@ esp_err_t display_manager_show_calibration(void)
         return refresh;
     }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    bool linked = clear_image_record();
+#endif
     xSemaphoreGive(display_mutex);
 
     ESP_LOGI(TAG, "Calibration pattern displayed successfully");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
+#else
     return ESP_OK;
+#endif
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+bool display_manager_take_previous(char *out, size_t capacity)
+{
+    if (!display_mutex || xSemaphoreTake(display_mutex, 0) != pdTRUE)
+        return false;
+    bool found = image_history_back(&display_history, out, capacity);
+    xSemaphoreGive(display_mutex);
+    return found;
+}
+
+void display_manager_forget_history(const char *path)
+{
+    if (!display_mutex || xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE)
+        return;
+    image_history_forget(&display_history, path);
+    xSemaphoreGive(display_mutex);
+}
+#endif
 
 bool display_manager_is_busy(void)
 {
@@ -555,6 +696,19 @@ const char *display_manager_get_current_image(void)
 {
     return current_image;
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+bool display_manager_copy_current_image(char *out, size_t capacity, bool *known)
+{
+    if (!out || capacity < sizeof(current_image) || !known || !display_mutex ||
+        xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE)
+        return false;
+    memcpy(out, current_image, sizeof(current_image));
+    *known = current_record_known;
+    xSemaphoreGive(display_mutex);
+    return true;
+}
+#endif
 
 static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
 {

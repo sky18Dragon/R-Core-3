@@ -1,0 +1,3 @@
+# R1 local Web/SD frame candidate: automatic screen clear and product startup.
+# Build-only CLI. Deployment requires explicit authorization; not yet accepted.
+CONFIG_READ_PICO_LOCAL_FRAME=y

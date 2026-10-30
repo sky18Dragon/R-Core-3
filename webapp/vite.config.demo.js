@@ -21,6 +21,21 @@ function renameHtmlPlugin() {
 
 // Demo build config - outputs to demo folder for GitHub Pages
 export default defineConfig({
+  resolve: {
+    // Project copy with GC16 measured-ramp support; see third_party/epaper-image-convert/UPSTREAM.md
+    alias: {
+      "@aitjcize/epaper-image-convert": resolve(
+        __dirname,
+        "../third_party/epaper-image-convert/src/index.js"
+      ),
+      // Its Node-only dynamic imports resolve from webapp's installed packages, as before.
+      canvas: resolve(
+        __dirname,
+        "node_modules/@aitjcize/epaper-image-convert/node_modules/canvas/browser.js"
+      ),
+      exifreader: resolve(__dirname, "node_modules/exifreader"),
+    },
+  },
   plugins: [vue(), vuetify({ autoImport: true }), renameHtmlPlugin()],
   base: "/esp32-photoframe/",
   publicDir: resolve(__dirname, "../demo"), // Serve demo folder as public (for sample.jpg, manifests)

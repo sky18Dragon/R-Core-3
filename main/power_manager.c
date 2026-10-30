@@ -24,9 +24,17 @@
 #include "ha_integration.h"
 #include "network_backoff.h"
 #include "periodic_tasks.h"
+#include "power_gpio_mask.h"
 #include "storage.h"
 #include "utils.h"
 #include "wifi_manager.h"
+#if CONFIG_READ_PICO_PMU_SLEEP
+#include "read_pico_frame_sleep.h"
+#endif
+#if CONFIG_BOARD_DRIVER_READ_PICO
+#include "read_pico_background.h"
+#include "http_server.h"
+#endif
 
 // RTC memory to store expected wakeup time (persists across deep sleep)
 RTC_DATA_ATTR static time_t expected_wakeup_time = 0;
@@ -80,31 +88,71 @@ static uint64_t ext1_button_mask(void)
 {
     uint64_t mask = 0;
     if (!WAKEUP_KEY_ON_EXT0 && BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC) {
-        mask |= (1ULL << BOARD_HAL_WAKEUP_KEY);
+        mask |= power_gpio_mask(BOARD_HAL_WAKEUP_KEY);
     }
     if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC) {
-        mask |= (1ULL << BOARD_HAL_ROTATE_KEY);
+        mask |= power_gpio_mask(BOARD_HAL_ROTATE_KEY);
     }
     if (CLEAR_KEY_CAN_WAKE && BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC) {
-        // The ternary keeps the shift well-defined when the board defines no
-        // clear key (GPIO_NUM_NC is -1); the runtime guard above skips it.
-        mask |= (1ULL << (BOARD_HAL_CLEAR_KEY < 0 ? 0 : BOARD_HAL_CLEAR_KEY));
+        mask |= power_gpio_mask(BOARD_HAL_CLEAR_KEY);
     }
     return mask;
 }
 
+#if !CONFIG_BOARD_DRIVER_READ_PICO
 static TaskHandle_t sleep_timer_task_handle = NULL;
 static TaskHandle_t rotation_timer_task_handle = NULL;
+#endif
 static int64_t next_sleep_time = 0;  // Use absolute time for sleep timer
 static uint32_t auto_sleep_timeout_sec = AUTO_SLEEP_TIMEOUT_SEC;
 static wakeup_source_t wakeup_source = WAKEUP_SOURCE_NONE;
 static int64_t next_rotation_time = 0;  // Use absolute time for rotation
+// Written by the rotation task and by manual changes (touch/web tasks); a
+// 64-bit value is not read/written atomically on this CPU, so go through these.
+static portMUX_TYPE rotation_time_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static int64_t rotation_time_get(void)
+{
+    taskENTER_CRITICAL(&rotation_time_lock);
+    int64_t value = next_rotation_time;
+    taskEXIT_CRITICAL(&rotation_time_lock);
+    return value;
+}
+
+static void rotation_time_set(int64_t value)
+{
+    taskENTER_CRITICAL(&rotation_time_lock);
+    next_rotation_time = value;
+    taskEXIT_CRITICAL(&rotation_time_lock);
+}
 static uint64_t ext1_wakeup_pin_mask = 0;
 
 static void rotation_timer_task(void *arg)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        // Always-on frame: bring the station back after outages that outlast
+        // the quick reconnect retries (router reboot), without a restart.
+        wifi_manager_supervise(esp_timer_get_time() / 1000);
+#if CONFIG_READ_PICO_PMU_SLEEP
+        // A timed PMU wake exists to show the next image: do it once, then
+        // let the sleep decision take over.
+        static bool alarm_rotation_done;
+        if (!alarm_rotation_done) {
+            alarm_rotation_done = true;
+            if (frame_sleep_woke_by_alarm() && config_manager_get_auto_rotate()) {
+                ESP_LOGI(TAG, "Woken by PMU alarm: rotating");
+                trigger_image_rotation();
+                power_manager_reset_rotate_timer();
+            }
+        }
+        frame_sleep_tick(esp_timer_get_time() / 1000);
+#endif
+#endif
+#endif
 
         // Run active rotation when:
         // 1. USB is connected (device stays awake), OR
@@ -121,16 +169,17 @@ static void rotation_timer_task(void *arg)
         if (config_manager_get_auto_rotate()) {
             int64_t now = esp_timer_get_time();  // Get absolute time in microseconds
 
-            if (next_rotation_time == 0) {
+            int64_t scheduled = rotation_time_get();
+            if (scheduled == 0) {
                 // Initialize next rotation time
                 int seconds_until_next = get_seconds_until_next_wakeup();
 
-                next_rotation_time = now + (seconds_until_next * 1000000LL);
+                rotation_time_set(now + (seconds_until_next * 1000000LL));
                 const char *reason =
                     board_hal_is_usb_connected() ? "USB powered" : "deep sleep disabled";
                 ESP_LOGI(TAG, "Active rotation scheduled in %d seconds (%s, %s)",
                          seconds_until_next, "cron", reason);
-            } else if (now >= next_rotation_time) {
+            } else if (now >= scheduled) {
                 // Time to rotate
                 const char *reason =
                     board_hal_is_usb_connected() ? "USB powered" : "deep sleep disabled";
@@ -142,12 +191,12 @@ static void rotation_timer_task(void *arg)
                 // Schedule next rotation
                 int seconds_until_next = get_seconds_until_next_wakeup();
 
-                next_rotation_time = esp_timer_get_time() + (seconds_until_next * 1000000LL);
+                rotation_time_set(esp_timer_get_time() + (seconds_until_next * 1000000LL));
                 ESP_LOGI(TAG, "Next rotation scheduled in %d seconds (%s)", seconds_until_next,
                          "cron");
             }
         } else {
-            next_rotation_time = 0;  // Reset if auto-rotate disabled
+            rotation_time_set(0);  // Reset if auto-rotate disabled
         }
     }
 }
@@ -159,6 +208,9 @@ static void sleep_timer_task(void *arg)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        if (!read_pico_background_running() || !http_server_is_ready()) return;
+#endif
 
         // Tiered WiFi power-save policy: disable modem power save (full RX,
         // low latency, fast web UI) only when a user may actually be looking —
@@ -274,6 +326,9 @@ static void power_manager_disable_auto_light_sleep(void)
 
 esp_err_t power_manager_init(void)
 {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    if (!read_pico_background_preparing()) return ESP_ERR_INVALID_STATE;
+#endif
     bool deep_sleep_enabled = config_manager_get_deep_sleep_enabled();
     ESP_LOGI(TAG, "Deep sleep %s", deep_sleep_enabled ? "enabled" : "disabled");
 
@@ -301,7 +356,12 @@ esp_err_t power_manager_init(void)
             // If drift exceeds 30 seconds, force NTP sync
             if (drift > 30 || drift < -30) {
                 ESP_LOGW(TAG, "Time drift exceeds 30s, will force NTP sync");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+                esp_err_t forced = periodic_tasks_force_run(SNTP_TASK_NAME);
+                if (forced != ESP_OK) return forced;
+#else
                 periodic_tasks_force_run(SNTP_TASK_NAME);
+#endif
             }
             expected_wakeup_time = 0;  // Reset after checking
         }
@@ -316,15 +376,15 @@ esp_err_t power_manager_init(void)
         ext1_wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
 
         if (BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC &&
-            (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_WAKEUP_KEY))) {
+            (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_WAKEUP_KEY))) {
             wakeup_source = WAKEUP_SOURCE_BOOT_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by BOOT button (GPIO %d)", BOARD_HAL_WAKEUP_KEY);
         } else if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC &&
-                   (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_ROTATE_KEY))) {
+                   (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_ROTATE_KEY))) {
             wakeup_source = WAKEUP_SOURCE_ROTATE_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by ROTATE button (GPIO %d)", BOARD_HAL_ROTATE_KEY);
         } else if (BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC &&
-                   (ext1_wakeup_pin_mask & (1ULL << BOARD_HAL_CLEAR_KEY))) {
+                   (ext1_wakeup_pin_mask & power_gpio_mask(BOARD_HAL_CLEAR_KEY))) {
             wakeup_source = WAKEUP_SOURCE_CLEAR_BUTTON;
             ESP_LOGI(TAG, "Wakeup caused by CLEAR button (GPIO %d)", BOARD_HAL_CLEAR_KEY);
         } else {
@@ -351,13 +411,13 @@ esp_err_t power_manager_init(void)
     // Configure button GPIOs as input with pull-ups
     uint64_t pin_mask = 0;
     if (BOARD_HAL_WAKEUP_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << BOARD_HAL_WAKEUP_KEY);
+        pin_mask |= power_gpio_mask(BOARD_HAL_WAKEUP_KEY);
     }
     if (BOARD_HAL_ROTATE_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << BOARD_HAL_ROTATE_KEY);
+        pin_mask |= power_gpio_mask(BOARD_HAL_ROTATE_KEY);
     }
     if (BOARD_HAL_CLEAR_KEY != GPIO_NUM_NC) {
-        pin_mask |= (1ULL << (BOARD_HAL_CLEAR_KEY < 0 ? 0 : BOARD_HAL_CLEAR_KEY));
+        pin_mask |= power_gpio_mask(BOARD_HAL_CLEAR_KEY);
     }
 
     if (pin_mask != 0) {
@@ -405,9 +465,21 @@ esp_err_t power_manager_init(void)
         wakeup_source == WAKEUP_SOURCE_CLEAR_BUTTON || wakeup_source == WAKEUP_SOURCE_TIMER) {
         ESP_LOGI(TAG, "Woken by ROTATE button, KEY button or timer, disabling auto-sleep timer");
     } else {
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        esp_err_t error = read_pico_background_add(READ_PICO_BACKGROUND_SLEEP, sleep_timer_task,
+                                                    NULL, 4096, 5);
+        if (error != ESP_OK) return error;
+#else
         xTaskCreate(sleep_timer_task, "sleep_timer", 4096, NULL, 5, &sleep_timer_task_handle);
+#endif
     }
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    esp_err_t error = read_pico_background_add(READ_PICO_BACKGROUND_ROTATION, rotation_timer_task,
+                                                NULL, 16384, 5);
+    if (error != ESP_OK) return error;
+#else
     xTaskCreate(rotation_timer_task, "rotation_timer", 16384, NULL, 5, &rotation_timer_task_handle);
+#endif
 
     power_manager_enable_auto_light_sleep();
 
@@ -417,6 +489,12 @@ esp_err_t power_manager_init(void)
 
 void power_manager_enter_sleep(void)
 {
+#ifdef CONFIG_BOARD_DRIVER_READ_PICO
+    // PMU power-off/wake policy has not been accepted. Native ESP sleep is not
+    // a substitute for this board's power contract; do not stop WiFi or SD first.
+    ESP_LOGE(TAG, "Read Pico sleep is unavailable pending PMU/wake validation");
+    return;
+#endif
     power_manager_disable_auto_light_sleep();
 
     // Report how close this wake came to exhausting its stack. Every sleep
@@ -550,6 +628,9 @@ void power_manager_enter_sleep(void)
 void power_manager_reset_sleep_timer(void)
 {
     next_sleep_time = esp_timer_get_time() + ((int64_t) auto_sleep_timeout_sec * 1000000LL);
+#if CONFIG_READ_PICO_PMU_SLEEP
+    frame_sleep_note_activity();
+#endif
 }
 
 void power_manager_set_auto_sleep_timeout(uint32_t seconds)
@@ -559,11 +640,20 @@ void power_manager_set_auto_sleep_timeout(uint32_t seconds)
     ESP_LOGI(TAG, "Auto-sleep timeout set to %lu seconds", (unsigned long) seconds);
 }
 
+int64_t power_manager_seconds_to_next_rotation(void)
+{
+    int64_t scheduled = rotation_time_get();
+    if (!config_manager_get_auto_rotate() || scheduled == 0)
+        return -1;
+    int64_t remaining = (scheduled - esp_timer_get_time()) / 1000000LL;
+    return remaining > 0 ? remaining : 0;
+}
+
 void power_manager_reset_rotate_timer(void)
 {
     int seconds_until_next = get_seconds_until_next_wakeup();
 
-    next_rotation_time = esp_timer_get_time() + (seconds_until_next * 1000000LL);
+    rotation_time_set(esp_timer_get_time() + (seconds_until_next * 1000000LL));
     ESP_LOGI(TAG, "Rotation timer reset, next rotation in %d seconds (%s)", seconds_until_next,
              "cron");
 }

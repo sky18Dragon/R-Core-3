@@ -4,14 +4,25 @@ if("${SDKCONFIG_DEFAULTS}" MATCHES "sdkconfig.defaults.read_pico" OR
     if(CONFIG_READ_PICO_DISPLAY_VALIDATION)
         list(APPEND READ_PICO_SOURCES "src/read_pico_scan_probe.c" "src/read_pico_vendor_gray16.c")
     endif()
+    if(CONFIG_READ_PICO_PHOTO_VALIDATION)
+        list(APPEND READ_PICO_SOURCES "src/read_pico_scan_probe.c")
+    endif()
+    if(CONFIG_READ_PICO_LOCAL_FRAME)
+        list(APPEND READ_PICO_SOURCES "src/read_pico_white_first.c")
+    endif()
     idf_component_register(
         SRCS ${READ_PICO_SOURCES}
         INCLUDE_DIRS "include"
         REQUIRES epaper read_pico_display
         PRIV_REQUIRES board_hal epdiy e0470_epaper_waveform read_pico_timing sy7636a
-                      esp_driver_i2c esp_driver_gpio esp_rom esp_hw_support freertos esp_timer
+                      esp_driver_i2c esp_driver_gpio esp_rom esp_hw_support esp_pm freertos esp_timer
     )
     if(CONFIG_READ_PICO_DISPLAY_VALIDATION)
+        target_link_options(${COMPONENT_LIB} INTERFACE
+            "-Wl,--wrap=epd_lcd_line_source_cb" "-Wl,--wrap=epd_lcd_frame_done_cb"
+            "-Wl,--wrap=epd_lcd_start_frame")
+    endif()
+    if(CONFIG_READ_PICO_PHOTO_VALIDATION)
         target_link_options(${COMPONENT_LIB} INTERFACE
             "-Wl,--wrap=epd_lcd_line_source_cb" "-Wl,--wrap=epd_lcd_frame_done_cb"
             "-Wl,--wrap=epd_lcd_start_frame")

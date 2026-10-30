@@ -11,7 +11,7 @@ namespace
 struct Fake {
     int clears = 0, confirmations = 0, stops = 0;
     int clear_error = 0, confirmation_error = 0, stop_error = 0;
-    int draws = 0, draw_error = 0;
+    int draws = 0, draw_error = 0, continuous_draws = 0, continuous_error = 0;
     read_pico_pattern_t pattern = READ_PICO_PATTERN_COUNT;
 };
 int clear(void *p)
@@ -38,6 +38,12 @@ int draw(void *p, read_pico_pattern_t pattern)
     ++f.draws;
     f.pattern = pattern;
     return f.draw_error;
+}
+int draw_continuous(void *p)
+{
+    auto &f = *static_cast<Fake *>(p);
+    ++f.continuous_draws;
+    return f.continuous_error;
 }
 read_pico_validation_session_t begin(Fake &f)
 {
@@ -319,19 +325,68 @@ TEST(ReadPicoValidation, StopFromPendingPatternIsTerminalAndDoesNotConfirm)
 
 TEST(ReadPicoValidation, PatternParserAcceptsOnlyExactAsciiWhitelist)
 {
-    const char *commands[] = {"gc16-white",          "gc16-black",         "gc16-midgray",
-                              "gc16-gray16",         "gc16-parity",        "gc16-corners",
-                              "gc16-gray16-labeled", "gc16-gray16-vendor", "gc16-gray16-page",
-                              "pattern-confirm",     "pattern-reject"};
-    for (unsigned p = 0; p < sizeof(commands) / sizeof(commands[0]); ++p) {
-        auto c = static_cast<read_pico_validation_command_t>(READ_PICO_VALIDATION_DRAW_WHITE + p);
-        EXPECT_EQ(line(std::string(commands[p]) + "\n"), c);
-        EXPECT_EQ(line(std::string(commands[p]) + " x\n"), READ_PICO_VALIDATION_INVALID);
-        EXPECT_EQ(line(std::string(commands[p]) + "\t\n"), READ_PICO_VALIDATION_INVALID);
+    const struct {
+        const char *name;
+        read_pico_validation_command_t command;
+    } commands[] = {
+        {"gc16-white", READ_PICO_VALIDATION_DRAW_WHITE},
+        {"gc16-black", READ_PICO_VALIDATION_DRAW_BLACK},
+        {"gc16-midgray", READ_PICO_VALIDATION_DRAW_MIDGRAY},
+        {"gc16-gray16", READ_PICO_VALIDATION_DRAW_GRAY16},
+        {"gc16-parity", READ_PICO_VALIDATION_DRAW_PARITY},
+        {"gc16-corners", READ_PICO_VALIDATION_DRAW_CORNERS},
+        {"gc16-gray16-labeled", READ_PICO_VALIDATION_DRAW_GRAY16_LABELED},
+        {"gc16-gray16-vendor", READ_PICO_VALIDATION_DRAW_GRAY16_VENDOR},
+        {"gc16-gray16-page", READ_PICO_VALIDATION_DRAW_GRAY16_PAGE},
+        {"gc16-gray16-labeled-continuous", READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS},
+        {"pattern-confirm", READ_PICO_VALIDATION_CONFIRM_PATTERN},
+        {"pattern-reject", READ_PICO_VALIDATION_REJECT_PATTERN},
+    };
+    for (const auto &item : commands) {
+        EXPECT_EQ(line(std::string(item.name) + "\n"), item.command);
+        EXPECT_EQ(line(std::string(item.name) + " x\n"), READ_PICO_VALIDATION_INVALID);
+        EXPECT_EQ(line(std::string(item.name) + "\t\n"), READ_PICO_VALIDATION_INVALID);
     }
     EXPECT_EQ(line("gc16-all\n"), READ_PICO_VALIDATION_INVALID);
     EXPECT_EQ(line("GC16-GRAY16\n"), READ_PICO_VALIDATION_INVALID);
     EXPECT_EQ(line(std::string("gc16-gray16\0\n", 13)), READ_PICO_VALIDATION_INVALID);
+}
+
+TEST(ReadPicoValidation, ContinuousControlRequiresFreshReferenceAndUsesLabeledVisualGate)
+{
+    Fake f;
+    auto s = begin(f);
+    s.ops.draw_white_then_labeled = draw_continuous;
+    auto c = READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS;
+    EXPECT_FALSE(read_pico_validation_apply(&s, c));
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_CLEAR_WHITE));
+    EXPECT_FALSE(read_pico_validation_apply(&s, c));
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_CONFIRM_WHITE));
+    ASSERT_TRUE(read_pico_validation_apply(&s, c));
+    EXPECT_EQ(f.continuous_draws, 1);
+    EXPECT_EQ(s.state, READ_PICO_VALIDATION_WAIT_PATTERN);
+    EXPECT_EQ(s.pending_pattern, READ_PICO_PATTERN_GRAY16_LABELED);
+    EXPECT_EQ(s.drawn_mask, 0x40u);
+    EXPECT_FALSE(read_pico_validation_apply(&s, c));
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_REJECT_PATTERN));
+    EXPECT_EQ(s.state, READ_PICO_VALIDATION_FAULT);
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_STOP));
+}
+
+TEST(ReadPicoValidation, ContinuousControlFailureLatchesWithoutDrawingMask)
+{
+    Fake f;
+    f.continuous_error = 91;
+    auto s = begin(f);
+    s.ops.draw_white_then_labeled = draw_continuous;
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_CLEAR_WHITE));
+    ASSERT_TRUE(read_pico_validation_apply(&s, READ_PICO_VALIDATION_CONFIRM_WHITE));
+    EXPECT_FALSE(
+        read_pico_validation_apply(&s, READ_PICO_VALIDATION_DRAW_GRAY16_LABELED_CONTINUOUS));
+    EXPECT_EQ(s.state, READ_PICO_VALIDATION_FAULT);
+    EXPECT_EQ(s.operation_error, 91);
+    EXPECT_EQ(s.drawn_mask, 0u);
+    EXPECT_EQ(f.continuous_draws, 1);
 }
 
 TEST(ReadPicoValidation, NumberedGrayPatternRetainsWhiteAndVisualOneShotGates)
