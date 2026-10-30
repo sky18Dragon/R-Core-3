@@ -1,34 +1,29 @@
 <script setup>
-import { t } from "../i18n";
-import { ref, onMounted, onUnmounted } from "vue";
+import { t, locale, setLocale } from "../i18n";
+import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 
-// Inline SVG icon paths (works offline during provisioning)
-const ICON_PATHS = {
-  wifiStrength1:
-    "M12 3C7.79 3 3.7 4.41.38 7C4.41 12.06 7.89 16.37 12 21.5c4.08-5.08 8.24-10.26 11.65-14.5C20.32 4.41 16.22 3 12 3m0 2c3.07 0 6.09.86 8.71 2.45l-5.1 6.36A8.4 8.4 0 0 0 12 13c-1.25 0-2.5.28-3.61.8L3.27 7.44C5.91 5.85 8.93 5 12 5",
-  wifiStrength2:
-    "M12 3C7.79 3 3.7 4.41.38 7C4.41 12.06 7.89 16.37 12 21.5c4.08-5.08 8.24-10.26 11.65-14.5C20.32 4.41 16.22 3 12 3m0 2c3.07 0 6.09.86 8.71 2.45l-3.21 3.98C16.26 10.74 14.37 10 12 10c-2.38 0-4.26.75-5.5 1.43L3.27 7.44C5.91 5.85 8.93 5 12 5",
-  wifiStrength3:
-    "M12 3C7.79 3 3.7 4.41.38 7C4.41 12.06 7.89 16.37 12 21.5c4.08-5.08 8.24-10.26 11.65-14.5C20.32 4.41 16.22 3 12 3m0 2c3.07 0 6.09.86 8.71 2.45l-1.94 2.43C17.26 9 14.88 8 12 8C9 8 6.68 9 5.21 9.84l-1.94-2.4C5.91 5.85 8.93 5 12 5",
-  wifiStrength4:
-    "M12 3C7.79 3 3.7 4.41.38 7C4.41 12.06 7.89 16.37 12 21.5c4.08-5.08 8.24-10.26 11.65-14.5C20.32 4.41 16.22 3 12 3",
-  refresh:
-    "M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 0 0-8 8a8 8 0 0 0 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18a6 6 0 0 1-6-6a6 6 0 0 1 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z",
-  eye: "M12 9a3 3 0 0 0-3 3a3 3 0 0 0 3 3a3 3 0 0 0 3-3a3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5a5 5 0 0 1 5-5a5 5 0 0 1 5 5a5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5",
-  eyeOff:
-    "M11.83 9L15 12.16V12a3 3 0 0 0-3-3zm-4.3.8l1.55 1.55c-.05.21-.08.42-.08.65a3 3 0 0 0 3 3c.22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53a5 5 0 0 1-5-5c0-.79.2-1.53.53-2.2M2 4.27l2.28 2.28l.45.45C3.08 8.3 1.78 10 1 12c1.73 4.39 6 7.5 11 7.5c1.55 0 3.03-.3 4.38-.84l.43.42L19.73 22L21 20.73L3.27 3M12 7a5 5 0 0 1 5 5c0 .64-.13 1.26-.36 1.82l2.93 2.93c1.5-1.25 2.7-2.89 3.43-4.75c-1.73-4.39-6-7.5-11-7.5c-1.4 0-2.74.25-4 .7l2.17 2.15C10.74 7.13 11.35 7 12 7",
-};
+// Wi-Fi setup page served by the frame's own hotspot (/provision). The phone has
+// no internet here, so everything is inline: no icon font, no web font, no CDN.
+// Strictly black / white / grey; state is always carried by an icon and a sentence,
+// never by colour alone.
 
 const ssid = ref("");
 const password = ref("");
 const deviceName = ref("PhotoFrame");
 const showPassword = ref(false);
-const loading = ref(false);
-const status = ref(null); // 'success' | 'error' | 'info' | null
-const statusMessage = ref("");
+const manualEntry = ref(false);
+const attempted = ref(false);
+
+// 'form' | 'connecting' | 'saved'
+const phase = ref("form");
+const failure = ref("");
+const savedHostname = ref("");
+const showNextSteps = ref(false);
+const notice = ref(null);
 
 const networks = ref([]);
 const scanning = ref(false);
+const scanFailed = ref(false);
 
 // Advanced network settings (#43): static IP + DNS override for networks
 // without DHCP. Collapsed by default — almost everyone uses DHCP.
@@ -39,41 +34,119 @@ const staticNetmask = ref("255.255.255.0");
 const staticGateway = ref("");
 const dnsServer = ref("");
 
-function signalIcon(rssi) {
-  if (rssi >= -50) return ICON_PATHS.wifiStrength4;
-  if (rssi >= -60) return ICON_PATHS.wifiStrength3;
-  if (rssi >= -70) return ICON_PATHS.wifiStrength2;
-  return ICON_PATHS.wifiStrength1;
+const busy = computed(() => phase.value === "connecting");
+
+// Signal strength -> 1..4 filled bars plus a spoken label.
+function signalLevel(rssi) {
+  if (rssi >= -50) return 4;
+  if (rssi >= -60) return 3;
+  if (rssi >= -70) return 2;
+  return 1;
+}
+
+function signalLabel(level) {
+  return ["", t("Weak signal"), t("Fair signal"), t("Good signal"), t("Strong signal")][level];
+}
+
+function authLabel(auth) {
+  return auth === "Open" ? t("Open network") : auth;
 }
 
 async function scanNetworks() {
   scanning.value = true;
+  scanFailed.value = false;
   try {
-    const response = await fetch("/api/wifi/scan");
-    if (response.ok) {
-      const data = await response.json();
-      networks.value = data.map((n) => ({
-        title: n.ssid,
-        subtitle: `${n.rssi} dBm · ${n.auth}`,
-        value: n.ssid,
-        rssi: n.rssi,
-        iconPath: signalIcon(n.rssi),
-      }));
+    // A scan that never answers must not leave the list spinning with Rescan disabled.
+    // (AbortController rather than AbortSignal.timeout(): older phone browsers lack it.)
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 20000);
+    let response;
+    try {
+      response = await fetch("/api/wifi/scan", { signal: abort.signal });
+    } finally {
+      clearTimeout(timer);
     }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    networks.value = data.map((n) => {
+      const level = signalLevel(n.rssi);
+      return {
+        ssid: n.ssid,
+        level,
+        secured: n.auth !== "Open",
+        detail: `${signalLabel(level)} · ${authLabel(n.auth)}`,
+      };
+    });
   } catch (e) {
     console.error("WiFi scan failed:", e);
+    scanFailed.value = true;
   } finally {
     scanning.value = false;
   }
 }
 
+const selectedNetwork = computed(() =>
+  manualEntry.value ? null : networks.value.find((n) => n.ssid === ssid.value) || null
+);
+
+// A scanned open network needs no password; everything else (including a typed name) may.
+const needsPassword = computed(() => !selectedNetwork.value || selectedNetwork.value.secured);
+
+function chooseNetwork(n) {
+  if (busy.value) return;
+  manualEntry.value = false;
+  ssid.value = n.ssid;
+  if (!n.secured) password.value = "";
+}
+
+function chooseOther() {
+  if (busy.value) return;
+  if (!manualEntry.value) ssid.value = "";
+  manualEntry.value = true;
+}
+
+// Mirrors the firmware's wifi_text_credentials_valid(): SSID 1-32 bytes, password empty
+// or 8-64 printable ASCII characters.
+const ssidError = computed(() => {
+  const bytes = new TextEncoder().encode(ssid.value).length;
+  if (bytes === 0) return t("Choose a network or enter its name.");
+  if (bytes > 32) return t("The network name is too long (32 bytes at most).");
+  return "";
+});
+
+const passwordError = computed(() => {
+  if (!needsPassword.value) return "";
+  const p = password.value;
+  if (p === "") {
+    return selectedNetwork.value ? t("Enter the network password.") : "";
+  }
+  if (p.length < 8 || p.length > 64 || /[^\x20-\x7e]/.test(p)) {
+    return t("The password must be 8 to 64 standard keyboard characters.");
+  }
+  return "";
+});
+
+const formError = computed(() => (attempted.value ? ssidError.value || passwordError.value : ""));
+
 let keepAliveInterval = null;
+let restoreChrome = null;
 
 onMounted(() => {
   scanNetworks();
   keepAliveInterval = setInterval(() => {
     fetch("/api/keep_alive").catch(() => {});
   }, 60000);
+
+  // The page background is set on <body> so overscroll matches; undone on leave so
+  // the other routes are untouched.
+  const prevBg = document.body.style.background;
+  const prevTitle = document.title;
+  document.body.style.background = "#f7f7f7";
+  document.title = t("PhotoFrame Setup");
+  restoreChrome = () => {
+    document.body.style.background = prevBg;
+    document.title = prevTitle;
+  };
 });
 
 onUnmounted(() => {
@@ -81,16 +154,37 @@ onUnmounted(() => {
     clearInterval(keepAliveInterval);
     keepAliveInterval = null;
   }
+  if (restoreChrome) restoreChrome();
 });
 
+// The notice sits by the button, which may be off-screen on a phone: bring it into view.
+function revealNotice() {
+  nextTick(() => notice.value?.scrollIntoView({ block: "center", behavior: "smooth" }));
+}
+
+function failureMessage(status, text) {
+  if (status === 409) return t("This setup session has expired. Reload the page and try again.");
+  if (text.includes("Connection Failed") || text.includes("connect")) {
+    return t(
+      "WiFi Connection Failed. Please check your password, SSID, and ensure it's a 2.4GHz network."
+    );
+  }
+  return t("An error occurred. Please try again.");
+}
+
 async function submitForm() {
-  loading.value = true;
-  status.value = "info";
-  statusMessage.value = t("Testing WiFi connection...");
+  attempted.value = true;
+  if (ssidError.value || passwordError.value) {
+    revealNotice();
+    return;
+  }
+
+  phase.value = "connecting";
+  failure.value = "";
 
   const formData = new URLSearchParams();
   formData.append("ssid", ssid.value);
-  formData.append("password", password.value);
+  formData.append("password", needsPassword.value ? password.value : "");
   formData.append("deviceName", deviceName.value);
   formData.append("ipMode", ipMode.value);
   if (ipMode.value === "static") {
@@ -112,263 +206,828 @@ async function submitForm() {
     });
 
     if (response.ok) {
-      status.value = "success";
-      // Generate mDNS hostname from device name (lowercase, spaces to hyphens)
-      const hostname = deviceName.value.toLowerCase().replace(/\s+/g, "-");
-      statusMessage.value = t(
-        'Credentials saved! Device will restart in 3 seconds and attempt to connect to "{ssid}".',
-        { ssid: ssid.value }
-      );
-
+      // mDNS hostname from the device name (lowercase, spaces to hyphens)
+      savedHostname.value = deviceName.value.toLowerCase().replace(/\s+/g, "-");
+      phase.value = "saved";
       setTimeout(() => {
-        statusMessage.value += `\n\nRestarting now... Close this page and reconnect to your WiFi network, then visit http://${hostname}.local`;
+        showNextSteps.value = true;
       }, 3000);
     } else {
-      loading.value = false;
-      status.value = "error";
-
-      const text = await response.text();
-      if (text.includes("Connection Failed") || text.includes("connect")) {
-        statusMessage.value = t(
-          "WiFi Connection Failed. Please check your password, SSID, and ensure it's a 2.4GHz network."
-        );
-      } else {
-        statusMessage.value = t("An error occurred. Please try again.");
-      }
+      phase.value = "form";
+      failure.value = failureMessage(response.status, await response.text());
+      revealNotice();
     }
-  } catch (error) {
-    loading.value = false;
-    status.value = "error";
-    statusMessage.value = t("Error: ") + error.message;
+  } catch (_error) {
+    phase.value = "form";
+    failure.value = t(
+      "Cannot reach the frame. Make sure your phone is still connected to its WiFi hotspot."
+    );
+    revealNotice();
   }
 }
 </script>
 
 <template>
-  <v-app>
-    <v-main class="provision-main bg-grey-lighten-4">
-      <v-card class="provision-card" elevation="12">
-        <v-card-title class="text-h6"> {{ t("PhotoFrame Setup") }} </v-card-title>
+  <div class="pv">
+    <main class="pv-shell">
+      <!-- ───── Header ───── -->
+      <header class="pv-hero">
+        <svg class="pv-glyph" viewBox="0 0 72 52" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="69" height="49" rx="6" class="g-frame" />
+          <rect x="8" y="8" width="56" height="36" rx="1.5" class="g-paper" />
+          <circle cx="23" cy="20" r="4" class="g-ink-mid" />
+          <path d="M8 44 L28 26 L40 36 L48 29 L64 44 Z" class="g-ink" />
+        </svg>
+        <h1>{{ t("PhotoFrame Setup") }}</h1>
+        <p class="pv-lede">{{ t("Connect your PhotoFrame to WiFi") }}</p>
+      </header>
 
-        <v-card-subtitle class="mb-2"> {{ t("Connect your PhotoFrame to WiFi") }} </v-card-subtitle>
+      <!-- ───── Connecting ───── -->
+      <section v-if="phase === 'connecting'" class="pv-state" role="status" aria-live="polite">
+        <span class="pv-spinner" aria-hidden="true"></span>
+        <h2>{{ t("Testing WiFi connection...") }}</h2>
+        <p>{{ t("Keep this page open. It can take a little while.") }}</p>
+      </section>
 
-        <v-form @submit.prevent="submitForm">
-          <v-combobox
-            v-model="ssid"
-            :items="networks"
-            item-title="title"
-            item-value="value"
-            :label="t('WiFi Network Name (SSID)')"
-            variant="outlined"
-            required
-            :disabled="loading"
-            :loading="scanning"
-            class="mb-2"
-            :placeholder="t('Select or type a network name')"
-            @update:model-value="
-              (val) => {
-                if (val && typeof val === 'object') ssid = val.value;
-              }
-            "
-          >
-            <template #item="{ item, props: itemProps }">
-              <v-list-item v-bind="itemProps">
-                <template #prepend>
-                  <svg viewBox="0 0 24 24" class="wifi-icon mr-2">
-                    <path :d="item.raw.iconPath" fill="currentColor" />
-                  </svg>
-                </template>
-                <template #append>
-                  <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
-                </template>
-              </v-list-item>
-            </template>
-            <template #append>
-              <v-btn
-                variant="text"
-                icon
-                width="44"
-                height="44"
-                :loading="scanning"
-                :disabled="loading"
-                :aria-label="t('Rescan networks')"
-                @click.stop="scanNetworks"
-              >
-                <svg viewBox="0 0 24 24" class="btn-icon">
-                  <path :d="ICON_PATHS.refresh" fill="currentColor" />
-                </svg>
-              </v-btn>
-            </template>
-          </v-combobox>
+      <!-- ───── Saved ───── -->
+      <section v-else-if="phase === 'saved'" class="pv-state" role="status" aria-live="polite">
+        <svg class="pv-badge" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="22" class="b-fill" />
+          <path d="M14 25 L21 32 L34 17" class="b-mark" />
+        </svg>
+        <h2>{{ t("Setup complete") }}</h2>
+        <p>
+          {{
+            t(
+              'Credentials saved! Device will restart in 3 seconds and attempt to connect to "{ssid}".',
+              { ssid }
+            )
+          }}
+        </p>
+        <ol v-if="showNextSteps" class="pv-steps">
+          <li>{{ t("Close this page.") }}</li>
+          <li>{{ t("Reconnect your phone to your usual WiFi network.") }}</li>
+          <li>
+            {{ t("Then open") }} <strong>http://{{ savedHostname }}.local</strong>
+          </li>
+        </ol>
+      </section>
 
-          <v-text-field
-            v-model="password"
-            :label="t('WiFi Password')"
-            :type="showPassword ? 'text' : 'password'"
-            variant="outlined"
-            :disabled="loading"
-            :hint="t('Leave blank for open networks')"
-            class="mb-2"
-          >
-            <template #append-inner>
-              <span class="password-toggle" @click="showPassword = !showPassword">
-                <svg viewBox="0 0 24 24" class="btn-icon">
-                  <path
-                    :d="showPassword ? ICON_PATHS.eyeOff : ICON_PATHS.eye"
-                    fill="currentColor"
-                  />
-                </svg>
-              </span>
-            </template>
-          </v-text-field>
+      <!-- ───── Form ───── -->
+      <form v-else class="pv-form" novalidate @submit.prevent="submitForm">
+        <!-- Network -->
+        <section aria-labelledby="pv-net-h">
+          <div class="pv-section-head">
+            <h2 id="pv-net-h">{{ t("Network") }}</h2>
+            <button type="button" class="pv-link" :disabled="scanning" @click="scanNetworks">
+              {{ scanning ? t("Scanning…") : t("Rescan networks") }}
+            </button>
+          </div>
 
-          <v-text-field
-            v-model="deviceName"
-            :label="t('Device Name')"
-            variant="outlined"
-            :disabled="loading"
-            :hint="t('Used for mDNS hostname')"
-            class="mb-2"
-          />
-
-          <div class="mb-4">
-            <button
-              type="button"
-              class="advanced-toggle"
-              :disabled="loading"
-              @click="showAdvanced = !showAdvanced"
+          <div class="pv-group" role="radiogroup" :aria-labelledby="'pv-net-h'">
+            <div v-if="scanning && !networks.length" class="pv-row pv-row-note" role="status">
+              <span class="pv-spinner pv-spinner-sm" aria-hidden="true"></span>
+              <span>{{ t("Scanning for networks…") }}</span>
+            </div>
+            <div
+              v-else-if="!networks.length"
+              class="pv-row pv-row-note"
+              :role="scanFailed ? 'alert' : null"
             >
-              {{ showAdvanced ? "▾" : "▸" }} {{ t("Advanced network settings") }}
+              <svg class="pv-ico" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9.25" class="i-line" />
+                <path d="M12 7.5 V13" class="i-line" />
+                <circle cx="12" cy="16.5" r="1.1" class="i-dot" />
+              </svg>
+              <span>{{
+                scanFailed
+                  ? t("Could not scan for networks. You can type the name instead.")
+                  : t("No networks found.")
+              }}</span>
+            </div>
+
+            <button
+              v-for="n in networks"
+              :key="n.ssid"
+              type="button"
+              class="pv-row pv-row-btn"
+              role="radio"
+              :aria-checked="!manualEntry && ssid === n.ssid"
+              @click="chooseNetwork(n)"
+            >
+              <svg class="pv-ico" viewBox="0 0 24 24" aria-hidden="true">
+                <rect
+                  v-for="i in 4"
+                  :key="i"
+                  :x="2 + (i - 1) * 5.5"
+                  :y="20 - i * 4.5"
+                  width="3.5"
+                  :height="i * 4.5"
+                  rx="1"
+                  :class="i <= n.level ? 'i-solid' : 'i-faint'"
+                />
+              </svg>
+              <span class="pv-row-main">
+                <span class="pv-row-title">{{ n.ssid }}</span>
+                <span class="pv-row-sub">{{ n.detail }}</span>
+              </span>
+              <svg v-if="n.secured" class="pv-ico pv-ico-sm" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="10.5" width="14" height="10" rx="2.2" class="i-solid" />
+                <path d="M8.5 10.5 V8 a3.5 3.5 0 0 1 7 0 V10.5" class="i-line" />
+              </svg>
+              <svg
+                class="pv-tick"
+                :class="{ on: !manualEntry && ssid === n.ssid }"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M5 12.5 L10 17.5 L19 7" />
+              </svg>
             </button>
 
-            <div v-if="showAdvanced" class="mt-2">
-              <v-select
-                v-model="ipMode"
-                :items="[
-                  { title: t('Automatic (DHCP)'), value: 'dhcp' },
-                  { title: t('Static IP'), value: 'static' },
-                ]"
-                :label="t('IP Configuration')"
-                variant="outlined"
-                density="compact"
-                :disabled="loading"
-                class="mb-2"
-              />
+            <button
+              type="button"
+              class="pv-row pv-row-btn"
+              role="radio"
+              :aria-checked="manualEntry"
+              @click="chooseOther"
+            >
+              <svg class="pv-ico" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5 V19 M5 12 H19" class="i-line" />
+              </svg>
+              <span class="pv-row-main">
+                <span class="pv-row-title">{{ t("Other network…") }}</span>
+                <span class="pv-row-sub">{{ t("Hidden or not listed") }}</span>
+              </span>
+              <svg
+                class="pv-tick"
+                :class="{ on: manualEntry }"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M5 12.5 L10 17.5 L19 7" />
+              </svg>
+            </button>
 
-              <template v-if="ipMode === 'static'">
-                <v-text-field
-                  v-model="staticIp"
-                  :label="t('IP Address')"
-                  variant="outlined"
-                  density="compact"
-                  :disabled="loading"
-                  placeholder="192.168.1.50"
-                  class="mb-2"
-                />
-                <v-text-field
-                  v-model="staticNetmask"
-                  :label="t('Netmask')"
-                  variant="outlined"
-                  density="compact"
-                  :disabled="loading"
-                  class="mb-2"
-                />
-                <v-text-field
-                  v-model="staticGateway"
-                  :label="t('Gateway')"
-                  variant="outlined"
-                  density="compact"
-                  :disabled="loading"
-                  placeholder="192.168.1.1"
-                  class="mb-2"
-                />
-              </template>
-
-              <v-text-field
-                v-model="dnsServer"
-                :label="t('DNS Server (optional)')"
-                variant="outlined"
-                density="compact"
-                :disabled="loading"
-                :hint="
-                  ipMode === 'static'
-                    ? 'Leave empty to use the gateway'
-                    : 'Leave empty to use DHCP-provided DNS'
-                "
-                persistent-hint
-                class="mb-2"
+            <div v-if="manualEntry" class="pv-row pv-field">
+              <label for="pv-ssid">{{ t("Network name") }}</label>
+              <input
+                id="pv-ssid"
+                v-model="ssid"
+                type="text"
+                autocomplete="off"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck="false"
+                :placeholder="t('Required')"
               />
             </div>
           </div>
+        </section>
 
-          <v-btn type="submit" color="primary" size="x-large" block :loading="loading">
-            {{ t("Connect to WiFi") }}
-          </v-btn>
-        </v-form>
+        <!-- Password -->
+        <section v-if="needsPassword" aria-labelledby="pv-pw-h">
+          <div class="pv-section-head">
+            <h2 id="pv-pw-h">{{ t("WiFi Password") }}</h2>
+          </div>
+          <div class="pv-group">
+            <div class="pv-row pv-field">
+              <label for="pv-password">{{ t("Password") }}</label>
+              <input
+                id="pv-password"
+                v-model="password"
+                :type="showPassword ? 'text' : 'password'"
+                autocomplete="off"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck="false"
+                :aria-invalid="attempted && !!passwordError"
+                :placeholder="selectedNetwork ? t('Required') : t('Optional')"
+              />
+              <button
+                type="button"
+                class="pv-link pv-link-inline"
+                :aria-pressed="showPassword"
+                @click="showPassword = !showPassword"
+              >
+                {{ showPassword ? t("Hide") : t("Show") }}
+              </button>
+            </div>
+          </div>
+          <p v-if="!selectedNetwork" class="pv-foot">{{ t("Leave blank for open networks") }}</p>
+        </section>
 
-        <v-alert v-if="status" :type="status" variant="tonal" class="mt-4" :icon="false">
-          <div style="white-space: pre-line">{{ statusMessage }}</div>
-        </v-alert>
-      </v-card>
-    </v-main>
-  </v-app>
+        <!-- Device name -->
+        <section aria-labelledby="pv-dev-h">
+          <div class="pv-section-head">
+            <h2 id="pv-dev-h">{{ t("Device Name") }}</h2>
+          </div>
+          <div class="pv-group">
+            <div class="pv-row pv-field">
+              <label for="pv-name">{{ t("Name") }}</label>
+              <input
+                id="pv-name"
+                v-model="deviceName"
+                type="text"
+                autocomplete="off"
+                autocapitalize="words"
+                spellcheck="false"
+              />
+            </div>
+          </div>
+          <p class="pv-foot">{{ t("Used for mDNS hostname") }}</p>
+        </section>
+
+        <!-- Advanced -->
+        <section>
+          <div class="pv-group">
+            <button
+              type="button"
+              class="pv-row pv-row-btn pv-disclosure"
+              :aria-expanded="showAdvanced"
+              aria-controls="pv-advanced"
+              @click="showAdvanced = !showAdvanced"
+            >
+              <span class="pv-row-main">
+                <span class="pv-row-title">{{ t("Advanced network settings") }}</span>
+              </span>
+              <svg
+                class="pv-chev"
+                :class="{ open: showAdvanced }"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M9 5.5 L15.5 12 L9 18.5" />
+              </svg>
+            </button>
+          </div>
+
+          <div v-show="showAdvanced" id="pv-advanced" class="pv-advanced">
+            <div class="pv-segment" role="radiogroup" :aria-label="t('IP Configuration')">
+              <button
+                type="button"
+                role="radio"
+                :aria-checked="ipMode === 'dhcp'"
+                @click="ipMode = 'dhcp'"
+              >
+                {{ t("Automatic (DHCP)") }}
+              </button>
+              <button
+                type="button"
+                role="radio"
+                :aria-checked="ipMode === 'static'"
+                @click="ipMode = 'static'"
+              >
+                {{ t("Static IP") }}
+              </button>
+            </div>
+
+            <div class="pv-group">
+              <template v-if="ipMode === 'static'">
+                <div class="pv-row pv-field">
+                  <label for="pv-ip">{{ t("IP Address") }}</label>
+                  <input
+                    id="pv-ip"
+                    v-model="staticIp"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
+                    placeholder="192.168.1.50"
+                  />
+                </div>
+                <div class="pv-row pv-field">
+                  <label for="pv-mask">{{ t("Netmask") }}</label>
+                  <input
+                    id="pv-mask"
+                    v-model="staticNetmask"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
+                  />
+                </div>
+                <div class="pv-row pv-field">
+                  <label for="pv-gw">{{ t("Gateway") }}</label>
+                  <input
+                    id="pv-gw"
+                    v-model="staticGateway"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
+                    placeholder="192.168.1.1"
+                  />
+                </div>
+              </template>
+              <div class="pv-row pv-field">
+                <label for="pv-dns">{{ t("DNS Server") }}</label>
+                <input
+                  id="pv-dns"
+                  v-model="dnsServer"
+                  type="text"
+                  inputmode="decimal"
+                  autocomplete="off"
+                  :placeholder="t('Optional')"
+                />
+              </div>
+            </div>
+            <p class="pv-foot">
+              {{
+                ipMode === "static"
+                  ? t("Leave empty to use the gateway")
+                  : t("Leave empty to use DHCP-provided DNS")
+              }}
+            </p>
+          </div>
+        </section>
+
+        <!-- Messages: icon + words, never colour alone -->
+        <div v-if="failure || formError" ref="notice" class="pv-notice" role="alert">
+          <svg class="pv-ico" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.25" class="i-line" />
+            <path d="M12 7.5 V13" class="i-line" />
+            <circle cx="12" cy="16.5" r="1.1" class="i-dot" />
+          </svg>
+          <div>
+            <strong>{{ failure ? t("Could not connect") : t("Check your entries") }}</strong>
+            <span>{{ failure || formError }}</span>
+          </div>
+        </div>
+
+        <button type="submit" class="pv-primary">{{ t("Connect to WiFi") }}</button>
+      </form>
+
+      <footer class="pv-foot-bar">
+        <button
+          type="button"
+          class="pv-link"
+          :aria-pressed="locale === 'en'"
+          @click="setLocale('en')"
+        >
+          English
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          class="pv-link"
+          :aria-pressed="locale === 'zh'"
+          @click="setLocale('zh')"
+        >
+          中文
+        </button>
+      </footer>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.provision-main {
+/* ── Tokens: black / white / grey only ── */
+.pv {
+  --bg: #f7f7f7;
+  --surface: #ffffff;
+  --fill: #f0f0f0;
+  --ink: #111111;
+  --ink-2: #666666;
+  --ink-3: #999999;
+  --line: #e0e0e0;
+  --faint: #c9c9c9;
+  --r-group: 12px;
+  --r-ctl: 14px;
+
   min-height: 100vh;
   min-height: 100dvh;
-  padding: 16px;
+  background: var(--bg);
+  color: var(--ink);
+  color-scheme: light;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue",
+    "Noto Sans SC", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+.pv *,
+.pv *::before,
+.pv *::after {
+  box-sizing: border-box;
+}
+
+.pv-shell {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+/* ── Hero ── */
+.pv-hero {
+  text-align: center;
+  padding: 24px 0 28px;
+}
+
+.pv-glyph {
+  width: 72px;
+  height: 52px;
+  margin-bottom: 20px;
+}
+.g-frame {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+.g-paper {
+  fill: var(--fill);
+}
+.g-ink-mid {
+  fill: var(--faint);
+}
+.g-ink {
+  fill: var(--ink-2);
+}
+
+.pv h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.pv-lede {
+  margin: 8px 0 0;
+  color: var(--ink-2);
+  font-size: 17px;
+}
+
+/* ── Sections ── */
+.pv-form section {
+  margin-bottom: 24px;
+}
+.pv-section-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 40px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 16px 6px;
+}
+.pv h2 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+.pv-foot {
+  margin: 8px 16px 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink-2);
 }
 
-.provision-card {
-  width: 100%;
-  max-width: 380px;
-  padding: 20px;
+/* ── Grouped list ── */
+.pv-group {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-group);
+  overflow: hidden;
 }
-
-.wifi-icon {
-  width: 20px;
-  height: 20px;
-}
-
-.btn-icon {
-  width: 22px;
-  height: 22px;
-}
-
-.password-toggle {
-  cursor: pointer;
-  user-select: none;
+.pv-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  /* 44px touch target around the 22px icon */
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 16px;
+}
+.pv-group > .pv-row + .pv-row {
+  border-top: 1px solid var(--line);
+}
+.pv-row-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pv-row-btn:active {
+  background: var(--fill);
+}
+.pv-row-note {
+  color: var(--ink-2);
+  font-size: 15px;
+}
+.pv-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pv-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-row-sub {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* ── Icons ── */
+.pv-ico {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+.pv-ico-sm {
+  width: 18px;
+  height: 18px;
+}
+.i-solid {
+  fill: var(--ink);
+}
+.i-faint {
+  fill: var(--faint);
+}
+.i-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.i-dot {
+  fill: var(--ink);
+}
+.pv-tick {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  visibility: hidden;
+}
+.pv-tick.on {
+  visibility: visible;
+}
+.pv-chev {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s steps(3);
+}
+.pv-chev.open {
+  transform: rotate(90deg);
+}
+
+/* ── Fields ── */
+.pv-field label {
+  flex: none;
+  min-width: 96px;
+  font-size: 17px;
+  white-space: nowrap;
+}
+.pv-field input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: right;
+  caret-color: var(--ink);
+  border-radius: 8px;
+}
+.pv-field input::placeholder {
+  color: #767676;
+}
+.pv-field:focus-within {
+  background: var(--fill);
+}
+
+/* ── Links / small buttons ── */
+.pv-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  min-height: 24px;
+}
+.pv-link:disabled {
+  color: var(--ink-3);
+  text-decoration: none;
+  cursor: default;
+}
+.pv-link-inline {
+  flex: none;
   min-width: 44px;
   min-height: 44px;
-  margin: -10px;
-  opacity: 0.6;
+  margin-right: -8px;
 }
 
-.password-toggle:hover {
-  opacity: 1;
+/* ── Advanced ── */
+.pv-advanced {
+  margin-top: 12px;
 }
-
-.advanced-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  color: rgb(var(--v-theme-primary));
+.pv-segment {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 12px;
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.pv-segment button {
+  flex: 1;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 15px;
   cursor: pointer;
-  font-size: 0.875rem;
+}
+.pv-segment button[aria-checked="true"] {
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
 }
 
-.advanced-toggle:disabled {
-  opacity: 0.5;
-  cursor: default;
+/* ── Notice (error / validation) ── */
+.pv-notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 2px solid var(--ink);
+  border-radius: var(--r-group);
+  font-size: 15px;
+}
+.pv-notice > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pv-notice strong {
+  font-weight: 600;
+}
+.pv-notice span {
+  color: var(--ink-2);
+}
+
+/* ── Primary action ── */
+.pv-primary {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--ink);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pv-primary:active {
+  background: #3a3a3a;
+}
+
+/* ── Progress / result states ── */
+.pv-state {
+  text-align: center;
+  padding: 16px 8px 32px;
+}
+.pv-state h2 {
+  margin: 20px 0 8px;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.pv-state p {
+  margin: 0 auto;
+  max-width: 32ch;
+  color: var(--ink-2);
+  font-size: 15px;
+  white-space: pre-line;
+}
+.pv-badge {
+  width: 56px;
+  height: 56px;
+}
+.b-fill {
+  fill: var(--ink);
+}
+.b-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pv-steps {
+  margin: 24px 0 0;
+  padding: 16px 16px 16px 36px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-group);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.pv-steps li + li {
+  margin-top: 6px;
+}
+.pv-steps strong {
+  overflow-wrap: anywhere;
+}
+
+/* Stepped spinner: reads as a page refresh rather than a smooth web animation. */
+.pv-spinner {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--line);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: pv-spin 0.9s steps(8) infinite;
+}
+.pv-spinner-sm {
+  width: 20px;
+  height: 20px;
+  border-width: 3px;
+}
+@keyframes pv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Footer ── */
+.pv-foot-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 32px;
+  color: var(--ink-3);
+}
+.pv-foot-bar .pv-link {
+  min-height: 44px;
+  min-width: 44px;
+  font-weight: 400;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.pv-foot-bar .pv-link[aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* ── Focus: a plain black ring, visible on every surface ── */
+.pv button:focus-visible,
+.pv input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.pv-row-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-spinner {
+    animation-duration: 3.6s;
+  }
+  .pv-chev {
+    transition: none;
+  }
+}
+
+@media (min-width: 600px) {
+  .pv-shell {
+    padding-top: 56px;
+  }
 }
 </style>
