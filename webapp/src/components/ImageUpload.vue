@@ -1,6 +1,7 @@
 <script setup>
 import { t } from "../i18n";
 import { ref, onMounted, computed, watch } from "vue";
+import { useDisplay } from "vuetify";
 import { useAppStore, useSettingsStore } from "../stores";
 import ImageProcessing from "./ImageProcessing.vue";
 import ProcessingControls from "./ProcessingControls.vue";
@@ -12,6 +13,11 @@ const settingsStore = useSettingsStore();
 function toggleWideEdit() {
   wideEdit.value = !wideEdit.value;
 }
+
+// Wide edit puts the controls beside the preview, which only fits on wide
+// screens; on phones and small tablets the saved preference is ignored.
+const { mdAndUp } = useDisplay();
+const wideActive = computed(() => wideEdit.value && mdAndUp.value);
 
 // In wide-edit mode the processing controls render next to the preview (as well
 // as in Settings > Processing); both bind the same store, so these mirror the
@@ -33,7 +39,6 @@ const selectedFile = ref(null);
 const previewUrl = ref(null);
 const showPreview = ref(false);
 const processedResult = ref(null);
-const sourceCanvas = ref(null);
 const imageProcessingRef = ref(null);
 
 // Display dimensions
@@ -88,30 +93,13 @@ async function processFile(file) {
   // Create preview URL
   previewUrl.value = URL.createObjectURL(file);
   showPreview.value = true;
-
-  // Load image and create source canvas for upload processing
-  const img = await loadImage(file);
-  sourceCanvas.value = document.createElement("canvas");
-  sourceCanvas.value.width = img.width;
-  sourceCanvas.value.height = img.height;
-  const ctx = sourceCanvas.value.getContext("2d");
-  ctx.drawImage(img, 0, 0);
-
-  // Switch to processing tab so user can adjust settings
-  settingsStore.activeSettingsTab = "processing";
-}
-
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
-  });
 }
 
 async function uploadImage(mode = "upload") {
-  if (!selectedFile.value || !sourceCanvas.value || !imageProcessor) return;
+  // The preview editor owns the decoded (downscaled, rotated) image; process
+  // exactly that canvas so what is uploaded matches what the preview shows.
+  const sourceCanvas = imageProcessingRef.value?.getSourceCanvas();
+  if (!selectedFile.value || !sourceCanvas || !imageProcessor) return;
 
   uploading.value = true;
   uploadProgress.value = 0;
@@ -168,7 +156,7 @@ async function uploadImage(mode = "upload") {
     // Process image with theoretical palette for device at native dimensions.
     // The library handles rotation, scaling (cover/fit/custom), and clean
     // background replacement after dithering.
-    const result = imageProcessor.processImage(sourceCanvas.value, {
+    const result = imageProcessor.processImage(sourceCanvas, {
       displayWidth: targetWidth,
       displayHeight: targetHeight,
       palette,
@@ -209,7 +197,7 @@ async function uploadImage(mode = "upload") {
     // Generate thumbnail from the post-layout, pre-dither canvas returned by
     // processImage so the gallery preview matches what the device actually
     // displays (cover / fit / custom scaleMode, zoom, pan, and bg colour all
-    // reflected). Using sourceCanvas directly would show the raw input.
+    // reflected). Using the source canvas directly would show the raw input.
     const thumbCanvas = imageProcessor.generateThumbnail(result.originalCanvas, THUMBNAIL_MAX_DIM);
     const thumbnailBlob = await new Promise((resolve) => {
       thumbCanvas.toBlob(resolve, "image/jpeg", 0.85);
@@ -255,16 +243,25 @@ async function uploadImage(mode = "upload") {
   }
 }
 
+// Keep this photo's processing tweaks as the defaults for new uploads.
+const savingDefaults = ref(false);
+async function saveAsDefault() {
+  savingDefaults.value = true;
+  const ok = await settingsStore.saveSettings();
+  savingDefaults.value = false;
+  showMessage(
+    ok ? t("Saved as the default for new uploads") : t("Failed to save settings"),
+    ok ? "success" : "error"
+  );
+}
+
 function resetUpload() {
   selectedFile.value = null;
   previewUrl.value = null;
   showPreview.value = false;
-  sourceCanvas.value = null;
   if (fileInput.value) {
     fileInput.value.value = "";
   }
-  // Switch back to general tab after upload/cancel
-  settingsStore.activeSettingsTab = "general";
 }
 
 // AI Generation Logic
@@ -343,8 +340,9 @@ function openAiDialog() {
   const googleKey = settingsStore.deviceSettings.aiCredentials.googleApiKey;
 
   if (!openaiKey && !googleKey) {
-    showMessage(t("Please configure an API Key in Settings > AI Generation first."), "error");
-    settingsStore.activeSettingsTab = "ai";
+    showMessage(t("Please configure an API Key in System settings > Experimental first."), "error");
+    settingsStore.systemSection = "experimental";
+    settingsStore.systemSettingsOpen = true;
     return;
   }
 
@@ -496,22 +494,25 @@ async function generateAiImage() {
 </script>
 
 <template>
-  <v-card class="mt-4" :class="{ 'wide-edit-card': wideEdit && showPreview }">
-    <v-card-title class="d-flex align-center">
+  <v-card class="upload-card mt-4" :class="{ 'wide-edit-card': wideActive && showPreview }">
+    <v-card-title class="d-flex align-center flex-wrap text-wrap">
       <v-icon icon="mdi-upload" class="mr-2" />
       {{ t("Upload Image") }}
       <v-spacer />
       <v-btn
-        v-if="showPreview"
-        :icon="wideEdit ? 'mdi-arrow-collapse-horizontal' : 'mdi-arrow-split-vertical'"
+        v-if="showPreview && mdAndUp"
+        :icon="wideActive ? 'mdi-arrow-collapse-horizontal' : 'mdi-arrow-split-vertical'"
         size="small"
         variant="text"
-        :color="wideEdit ? 'primary' : undefined"
-        :title="wideEdit ? t('Exit wide edit') : t('Wide edit — controls beside the preview')"
+        :color="wideActive ? 'primary' : undefined"
+        :title="wideActive ? t('Exit wide edit') : t('Wide edit — controls beside the preview')"
         class="mr-1"
         @click="toggleWideEdit"
       />
-      <template v-if="canSaveToAlbum && appStore.systemInfo.storage_total > 0">
+      <div
+        v-if="canSaveToAlbum && appStore.systemInfo.storage_total > 0"
+        class="storage-info d-flex align-center"
+      >
         <v-icon
           :icon="appStore.systemInfo.sdcard_inserted ? 'mdi-sd' : 'mdi-database'"
           size="small"
@@ -531,7 +532,7 @@ async function generateAiImage() {
           :title="t('Format storage')"
           @click="showFormatConfirm = true"
         />
-      </template>
+      </div>
     </v-card-title>
 
     <v-card-text>
@@ -570,18 +571,47 @@ async function generateAiImage() {
 
       <!-- Preview Area with Processing. In wide-edit mode the processing
            controls render beside the preview instead of in the Settings tab. -->
-      <div v-else :class="{ 'edit-split': wideEdit }">
+      <div v-else :class="{ 'edit-split': wideActive }">
         <div class="edit-preview">
           <ImageProcessing
             ref="imageProcessingRef"
             :image-file="selectedFile"
             :params="settingsStore.params"
             :palette="settingsStore.palette"
-            :tone-curve-teleport="wideEdit ? '#tone-curve-slot' : null"
+            :tone-curve-teleport="wideActive ? '#tone-curve-slot' : null"
             @processed="processedResult = $event"
           />
+          <!-- Per-photo adjustments live with the preview; wide-edit moves them beside it -->
+          <v-expansion-panels v-if="!wideActive" variant="accordion" class="mt-4">
+            <v-expansion-panel>
+              <v-expansion-panel-title>
+                <v-icon icon="mdi-tune" class="mr-3" />
+                {{ t("Processing") }}
+              </v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <ProcessingControls
+                  :params="settingsStore.params"
+                  :preset="settingsStore.preset"
+                  @update:params="onParamsUpdate"
+                  @update:preset="settingsStore.preset = $event"
+                  @preset-change="onPresetChange"
+                />
+                <div class="d-flex justify-end mt-2">
+                  <v-btn
+                    variant="text"
+                    size="small"
+                    :loading="savingDefaults"
+                    :disabled="!settingsStore.processingDirty"
+                    @click="saveAsDefault"
+                  >
+                    {{ t("Set as default") }}
+                  </v-btn>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
         </div>
-        <div v-if="wideEdit" class="edit-controls">
+        <div v-if="wideActive" class="edit-controls">
           <!-- ImageProcessing teleports the Tone Curve card in here -->
           <div id="tone-curve-slot" class="mb-4"></div>
           <ProcessingControls
@@ -591,11 +621,22 @@ async function generateAiImage() {
             @update:preset="settingsStore.preset = $event"
             @preset-change="onPresetChange"
           />
+          <div class="d-flex justify-end mt-2">
+            <v-btn
+              variant="text"
+              size="small"
+              :loading="savingDefaults"
+              :disabled="!settingsStore.processingDirty"
+              @click="saveAsDefault"
+            >
+              {{ t("Set as default") }}
+            </v-btn>
+          </div>
         </div>
       </div>
     </v-card-text>
 
-    <v-card-actions v-if="showPreview" class="px-4 pb-4">
+    <v-card-actions v-if="showPreview" class="upload-actions px-4 pb-4">
       <v-btn variant="text" @click="resetUpload"> {{ t("Cancel") }} </v-btn>
       <v-spacer />
       <v-select
@@ -606,12 +647,12 @@ async function generateAiImage() {
         variant="outlined"
         density="compact"
         hide-details
-        style="max-width: 200px"
-        class="mr-2"
+        class="album-select mr-2"
       />
       <v-btn
         v-if="canSaveToAlbum"
         color="secondary"
+        variant="tonal"
         class="mr-2"
         :loading="uploading"
         @click="uploadImage('display')"
@@ -619,7 +660,7 @@ async function generateAiImage() {
         <v-icon icon="mdi-monitor" start />
         {{ t("Display") }}
       </v-btn>
-      <v-btn color="primary" :loading="uploading" @click="uploadImage('upload')">
+      <v-btn color="primary" variant="flat" :loading="uploading" @click="uploadImage('upload')">
         <v-icon :icon="canSaveToAlbum ? 'mdi-upload' : 'mdi-monitor'" start />
         {{ canSaveToAlbum ? t("Upload") : t("Display") }}
       </v-btn>
@@ -701,6 +742,44 @@ async function generateAiImage() {
 </template>
 
 <style scoped>
+.album-select {
+  max-width: 200px;
+}
+
+/* Phones: the title row wraps (storage usage on its own line), and the
+   Cancel / Display / Upload actions stick to the bottom of the screen above the
+   page footer so they stay reachable while scrolling a tall preview. The card
+   must not clip overflow or sticky would stick to the card, not the page. */
+@media (max-width: 600px) {
+  .upload-card {
+    overflow: visible;
+  }
+  .storage-info {
+    flex: 1 1 100%;
+    margin-top: 4px;
+  }
+  .upload-actions {
+    position: sticky;
+    bottom: var(--v-layout-bottom, 0px);
+    z-index: 5;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    background: rgb(var(--v-theme-surface));
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 0 0 4px 4px;
+    padding-top: 12px;
+  }
+  .upload-actions .album-select {
+    order: -1;
+    flex: 1 1 100%;
+    max-width: none;
+    margin-right: 0 !important;
+  }
+  .upload-actions .v-btn {
+    min-height: 44px;
+  }
+}
+
 .upload-zone {
   cursor: pointer;
   min-height: 200px;

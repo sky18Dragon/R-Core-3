@@ -186,9 +186,12 @@ async function submitForm() {
             <template #append>
               <v-btn
                 variant="text"
-                size="small"
+                icon
+                width="44"
+                height="44"
                 :loading="scanning"
                 :disabled="loading"
+                :aria-label="t('Rescan networks')"
                 @click.stop="scanNetworks"
               >
                 <svg viewBox="0 0 24 24" class="btn-icon">
@@ -298,7 +301,7 @@ async function submitForm() {
             </div>
           </div>
 
-          <v-btn type="submit" color="primary" size="large" block :loading="loading">
+          <v-btn type="submit" color="primary" size="x-large" block :loading="loading">
             {{ t("Connect to WiFi") }}
           </v-btn>
         </v-form>
@@ -314,6 +317,7 @@ async function submitForm() {
 <style scoped>
 .provision-main {
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 16px;
   display: flex;
   align-items: flex-start;
@@ -342,6 +346,11 @@ async function submitForm() {
   user-select: none;
   display: flex;
   align-items: center;
+  justify-content: center;
+  /* 44px touch target around the 22px icon */
+  min-width: 44px;
+  min-height: 44px;
+  margin: -10px;
   opacity: 0.6;
 }
 

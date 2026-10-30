@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import {
   getPreset,
   getPresetOptions,
@@ -7,12 +7,14 @@ import {
   getDefaultParams,
 } from "@aitjcize/epaper-image-convert";
 import { validateTimezone } from "../utils/timezone";
+import { diffConfig } from "../utils/configScopes";
 
 export const useSettingsStore = defineStore("settings", () => {
   const API_BASE = "";
 
-  // UI state
-  const activeSettingsTab = ref("general");
+  // UI state: the system-settings drawer (top right) and which section it shows
+  const systemSettingsOpen = ref(false);
+  const systemSection = ref("device");
 
   // Processing parameters
   const params = ref(getDefaultParams());
@@ -70,8 +72,10 @@ export const useSettingsStore = defineStore("settings", () => {
 
   // ... (existing code)
 
-  // Original config from server (for change detection)
-  let originalConfig = {};
+  // Config as last loaded or saved, normalised through the UI model so the dirty
+  // check compares like with like (change detection for both panels)
+  const originalConfig = ref({});
+  const configLoaded = ref(false);
 
   // The time zone rule as the device last reported or accepted it, so the UI
   // can tell a rule the user edited from one it merely loaded.
@@ -81,7 +85,7 @@ export const useSettingsStore = defineStore("settings", () => {
   // this (not the live dropdown) so it only re-lays-out when the user saves.
   const appliedOrientation = ref("landscape");
 
-  let originalParams = {};
+  const originalParams = ref({});
 
   // Palette - use defaults from epaper-image-convert library
   const palette = ref({ ...SPECTRA6.perceived });
@@ -153,7 +157,11 @@ export const useSettingsStore = defineStore("settings", () => {
   function applyGrayscaleDefaultIfUntouched() {
     const def = getDefaultParams();
     const untouched = presetKeys.every((k) => !(k in def) || params.value[k] === def[k]);
-    if (untouched) applyPreset("grayscale");
+    if (untouched) {
+      applyPreset("grayscale");
+      // A default the app chose, not an edit: don't present it as unsaved changes
+      snapshotParams();
+    }
   }
 
   watch(
@@ -173,7 +181,7 @@ export const useSettingsStore = defineStore("settings", () => {
       const data = await response.json();
       Object.assign(params.value, data);
       // Store original params for change detection
-      originalParams = JSON.parse(JSON.stringify(data));
+      snapshotParams();
     } catch (_error) {
       console.log("Settings API not available (standalone mode)");
     }
@@ -186,9 +194,6 @@ export const useSettingsStore = defineStore("settings", () => {
         return;
       }
       const data = await response.json();
-
-      // Store original config for change detection
-      originalConfig = JSON.parse(JSON.stringify(data));
 
       // Parse config into UI-friendly format
       deviceSettings.value.autoRotate = data.auto_rotate || false;
@@ -236,6 +241,9 @@ export const useSettingsStore = defineStore("settings", () => {
 
       deviceSettings.value.timezone = data.timezone || "UTC0";
       savedTimezone.value = deviceSettings.value.timezone;
+
+      originalConfig.value = buildCurrentConfig();
+      configLoaded.value = true;
     } catch (_error) {
       console.log("Device settings API not available (standalone mode)");
     }
@@ -266,7 +274,8 @@ export const useSettingsStore = defineStore("settings", () => {
     return { value: httpPassword };
   }
 
-  async function saveDeviceSettings() {
+  // The device config as the UI currently holds it (what a save would send)
+  function buildCurrentConfig() {
     const currentConfig = {
       auto_rotate: deviceSettings.value.autoRotate,
       rotate_cron: deviceSettings.value.rotateCron,
@@ -299,21 +308,31 @@ export const useSettingsStore = defineStore("settings", () => {
     if (deviceSettings.value.wifiPassword && deviceSettings.value.wifiPassword.length > 0) {
       currentConfig.wifi_password = deviceSettings.value.wifiPassword;
     }
+    return currentConfig;
+  }
 
-    // Compare with original config and only send changed fields.
-    // Arrays (rotate_cron) need a value comparison, not reference equality.
-    const changedFields = {};
-    for (const key in currentConfig) {
-      const cur = currentConfig[key];
-      const orig = originalConfig[key];
-      const differs =
-        Array.isArray(cur) || Array.isArray(orig)
-          ? JSON.stringify(cur) !== JSON.stringify(orig)
-          : cur !== orig;
-      if (differs) {
-        changedFields[key] = cur;
-      }
+  // Fields a save for this panel would send: "system" (the drawer), "image" (the
+  // slideshow next to the album) or "all". The two panels share deviceSettings,
+  // so each save is limited to its own fields and can't flush the other's edits.
+  function changedConfig(scope) {
+    const changedFields = diffConfig(buildCurrentConfig(), originalConfig.value, scope);
+    if (scope !== "image") {
+      const passwordChange = httpPasswordChange();
+      if (passwordChange.value !== undefined) changedFields.http_password = passwordChange.value;
     }
+    return changedFields;
+  }
+
+  // Unsaved edits per panel; false until the config has been loaded once.
+  const systemDirty = computed(() => {
+    if (!configLoaded.value) return false;
+    const { error } = httpPasswordChange();
+    return !!error || Object.keys(changedConfig("system")).length > 0;
+  });
+
+  async function saveDeviceSettings(scope = "all") {
+    // Compare with original config and only send changed fields.
+    const changedFields = changedConfig(scope);
 
     // Only a rule that is about to be sent is checked, so an odd value that
     // an older firmware let through can't block unrelated saves.
@@ -324,12 +343,11 @@ export const useSettingsStore = defineStore("settings", () => {
       }
     }
 
-    const passwordChange = httpPasswordChange();
-    if (passwordChange.error) {
-      return { success: false, message: passwordChange.error };
-    }
-    if (passwordChange.value !== undefined) {
-      changedFields.http_password = passwordChange.value;
+    if (scope !== "image") {
+      const passwordChange = httpPasswordChange();
+      if (passwordChange.error) {
+        return { success: false, message: passwordChange.error };
+      }
     }
 
     // If nothing changed, return success
@@ -432,7 +450,7 @@ export const useSettingsStore = defineStore("settings", () => {
         // Update original config with new values. The write-only password
         // is not part of it; record only whether one is now set.
         const { http_password: savedPassword, ...savedFields } = changedFields;
-        Object.assign(originalConfig, savedFields);
+        originalConfig.value = { ...originalConfig.value, ...savedFields };
         if (savedFields.timezone !== undefined) {
           savedTimezone.value = savedFields.timezone;
         }
@@ -468,15 +486,27 @@ export const useSettingsStore = defineStore("settings", () => {
   // fields, which are deliberately not part of preset identity
   const persistedKeys = [...presetKeys, "scaleMode", "backgroundColor"];
 
+  // Record the current params as the saved baseline
+  function snapshotParams() {
+    originalParams.value = JSON.parse(JSON.stringify(params.value));
+  }
+
   function hasProcessingSettingsChanged() {
     const current = params.value;
     for (const key of persistedKeys) {
-      if (current[key] !== originalParams[key]) {
+      if (current[key] !== originalParams.value[key]) {
         return true;
       }
     }
     return false;
   }
+
+  const processingDirty = computed(() => configLoaded.value && hasProcessingSettingsChanged());
+  const imageDirty = computed(
+    () =>
+      configLoaded.value &&
+      (Object.keys(changedConfig("image")).length > 0 || hasProcessingSettingsChanged())
+  );
 
   async function saveSettings() {
     // Skip save if nothing changed
@@ -492,7 +522,7 @@ export const useSettingsStore = defineStore("settings", () => {
       });
       if (response.ok) {
         // Update original params after successful save
-        originalParams = JSON.parse(JSON.stringify(params.value));
+        snapshotParams();
       }
       return response.ok;
     } catch (_error) {
@@ -536,8 +566,41 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  // Drop the drawer's unsaved edits by reloading the device config, but keep the
+  // image panel's own pending slideshow edits: they are a separate panel's work.
+  async function discardSystemEdits() {
+    const { autoRotate, rotateCron, sdRotationMode } = deviceSettings.value;
+    await loadDeviceSettings();
+    Object.assign(deviceSettings.value, {
+      autoRotate,
+      rotateCron: [...rotateCron],
+      sdRotationMode,
+    });
+  }
+
+  // Save the image panel: processing defaults first, then the slideshow fields.
+  // Not in parallel, as in the system save (the device may refuse requests that
+  // are still in flight when its settings change).
+  async function saveImageSettings() {
+    const processingSuccess = await saveSettings();
+    const deviceResult = await saveDeviceSettings("image");
+    if (deviceResult.success && processingSuccess) {
+      return { success: true, message: deviceResult.message };
+    }
+    return {
+      success: false,
+      message: deviceResult.success ? "Failed to save processing settings" : deviceResult.message,
+    };
+  }
+
   return {
-    activeSettingsTab,
+    systemSettingsOpen,
+    systemSection,
+    systemDirty,
+    imageDirty,
+    processingDirty,
+    saveImageSettings,
+    discardSystemEdits,
     params,
     deviceSettings,
     savedTimezone,

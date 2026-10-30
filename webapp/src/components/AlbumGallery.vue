@@ -1,9 +1,12 @@
 <script setup>
 import { t } from "../i18n";
 import { ref } from "vue";
-import { useAppStore } from "../stores";
+import { useAppStore, useSettingsStore } from "../stores";
+import ImageSettings from "./ImageSettings.vue";
+import { imageSettingsOpen } from "../utils/uiPrefs";
 
 const appStore = useAppStore();
+const settingsStore = useSettingsStore();
 
 const newAlbumDialog = ref(false);
 const newAlbumName = ref("");
@@ -78,16 +81,40 @@ function getThumbnailUrl(image) {
 
     <v-card-text>
       <!-- Album List -->
-      <div class="d-flex align-center mb-2">
-        <span class="text-body-2 text-grey">
+      <div class="d-flex align-center flex-wrap ga-2 mb-2">
+        <span class="album-hint text-body-2 text-grey">
           {{ t("✓ = Enabled for auto-rotation • Click album name to view images") }}
         </span>
         <v-spacer />
+        <v-btn
+          variant="tonal"
+          size="small"
+          class="mr-2"
+          :color="imageSettingsOpen ? 'primary' : undefined"
+          :aria-expanded="imageSettingsOpen"
+          @click="imageSettingsOpen = !imageSettingsOpen"
+        >
+          <v-badge
+            dot
+            color="warning"
+            :model-value="settingsStore.imageDirty && !imageSettingsOpen"
+          >
+            <v-icon icon="mdi-tune-variant" start />
+          </v-badge>
+          {{ t("Image settings") }}
+          <v-icon :icon="imageSettingsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'" end />
+        </v-btn>
         <v-btn color="primary" size="small" @click="newAlbumDialog = true">
           <v-icon icon="mdi-plus" start />
           {{ t("New Album") }}
         </v-btn>
       </div>
+
+      <v-expand-transition>
+        <div v-if="imageSettingsOpen" class="mb-4">
+          <ImageSettings />
+        </div>
+      </v-expand-transition>
 
       <div class="d-flex align-center flex-wrap gap-2 mb-4">
         <div
@@ -280,6 +307,10 @@ function getThumbnailUrl(image) {
 </template>
 
 <style scoped>
+/* On narrow screens the hint takes its own row above the buttons. */
+.album-hint {
+  flex: 1 1 220px;
+}
 .album-chip {
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 20px;
@@ -336,8 +367,14 @@ function getThumbnailUrl(image) {
 @media (hover: none) {
   .image-card .delete-overlay {
     opacity: 0.92;
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
+  }
+}
+/* Album chips: taller rows and a bigger remove button for fingers */
+@media (pointer: coarse) {
+  .album-chip {
+    min-height: 44px;
   }
 }
 .confirm-thumb {

@@ -5,8 +5,7 @@ import { useAppStore, useSettingsStore } from "../stores";
 import AppHeader from "../components/AppHeader.vue";
 import AlbumGallery from "../components/AlbumGallery.vue";
 import ImageUpload from "../components/ImageUpload.vue";
-import SettingsPanel from "../components/SettingsPanel.vue";
-import BatterySleep from "../components/BatterySleep.vue";
+import SystemSettings from "../components/SystemSettings.vue";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
@@ -109,9 +108,10 @@ onUnmounted(() => {
 <template>
   <v-app>
     <AppHeader />
+    <SystemSettings />
 
     <v-main class="bg-grey-lighten-4">
-      <v-container class="py-6" style="max-width: 1200px">
+      <v-container class="py-3 py-sm-6" style="max-width: 1200px">
         <v-alert
           v-if="
             appStore.systemInfo.has_sdcard &&
@@ -134,10 +134,6 @@ onUnmounted(() => {
         />
 
         <ImageUpload class="mt-6" />
-
-        <SettingsPanel class="mt-6" />
-
-        <BatterySleep class="mt-6" />
       </v-container>
     </v-main>
 
@@ -173,3 +169,14 @@ onUnmounted(() => {
     </v-footer>
   </v-app>
 </template>
+
+<!-- Touch screens: small icon buttons get a 44px hit area (the thumbnail delete
+     overlay keeps its own, thumbnail-sized target). -->
+<style>
+@media (pointer: coarse) {
+  .v-btn--icon.v-btn--size-x-small:not(.delete-overlay) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+</style>

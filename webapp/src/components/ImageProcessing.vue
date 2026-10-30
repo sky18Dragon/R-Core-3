@@ -1,8 +1,16 @@
 <script setup>
 import { t } from "../i18n";
-import { ref, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import ToneCurve from "./ToneCurve.vue";
 import { useAppStore, useSettingsStore } from "../stores";
+import { rotateDir } from "../utils/uiPrefs";
+import {
+  fitWithin,
+  sourceEdgeCap,
+  normalizeDeg,
+  rotateCanvas,
+  rotationSuggestion,
+} from "../utils/imageGeometry";
 
 const props = defineProps({
   imageFile: {
@@ -73,9 +81,18 @@ let panStartY = 0;
 let panStartImgX = 0;
 let panStartImgY = 0;
 
-// Source canvas for reprocessing
+// Source canvas for reprocessing. baseCanvas is the decoded (and, if huge,
+// downscaled) image as loaded; sourceCanvas is baseCanvas turned by `rotation`
+// and is what preview and upload both process, so they always agree.
+let baseCanvas = null;
 let sourceCanvas = null;
 let imageProcessor = null;
+
+// Per-image rotation in degrees clockwise (0/90/180/270). Not persisted.
+const rotation = ref(0);
+// Size of the rotated source, reactive so the rotate hint can follow it.
+const sourceSize = ref({ width: 0, height: 0 });
+const hintDismissed = ref(false);
 let isReady = ref(false);
 
 // GC16 grayscale palette built from the device's measured luminance endpoints
@@ -303,11 +320,23 @@ async function loadAndProcessImage(file) {
   try {
     const img = await loadImage(file);
 
-    sourceCanvas = document.createElement("canvas");
-    sourceCanvas.width = img.width;
-    sourceCanvas.height = img.height;
-    const sourceCtx = sourceCanvas.getContext("2d");
-    sourceCtx.drawImage(img, 0, 0);
+    // Cap the long edge: multi-megapixel phone photos are far more than the
+    // panel needs and can exhaust canvas memory on mobile browsers.
+    const cap = sourceEdgeCap(appStore.systemInfo.width, appStore.systemInfo.height);
+    const size = fitWithin(img.width, img.height, cap);
+    baseCanvas = document.createElement("canvas");
+    baseCanvas.width = size.width;
+    baseCanvas.height = size.height;
+    const baseCtx = baseCanvas.getContext("2d");
+    if (size.scaled) {
+      baseCtx.imageSmoothingEnabled = true;
+      baseCtx.imageSmoothingQuality = "high";
+    }
+    baseCtx.drawImage(img, 0, 0, size.width, size.height);
+
+    rotation.value = 0;
+    hintDismissed.value = false;
+    applyRotation();
 
     // Default to the configured scale mode and background from the shared
     // processing params (the device settings, or the page-local params on
@@ -421,21 +450,97 @@ async function updatePreview() {
 
 function loadImage(file) {
   return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = (error) => {
+      URL.revokeObjectURL(url);
+      reject(error);
+    };
+    img.src = url;
   });
 }
 
-// Mouse event handlers
-function onMouseDown(event) {
+// Rebuild the rotated source from the base image and refresh derived state.
+function applyRotation() {
+  if (!baseCanvas) return;
+  sourceCanvas = rotateCanvas(baseCanvas, rotation.value);
+  sourceSize.value = { width: sourceCanvas.width, height: sourceCanvas.height };
+}
+
+async function rotateBy(delta) {
+  if (!baseCanvas) return;
+  rotation.value = normalizeDeg(rotation.value + delta);
+  rotateDir.value = delta > 0 ? "cw" : "ccw";
+  applyRotation();
+  // The rotated image has new proportions: restart pan/zoom at the fit position.
+  if (scaleMode.value === "custom") initCustomMode();
+  await updatePreview();
+}
+
+// "Rotate to fill" hint: shown only while the image is unrotated, clearly the
+// opposite orientation of the frame, and not dismissed. Never applied silently.
+const rotateHint = computed(() => {
+  if (hintDismissed.value || rotation.value !== 0) return null;
+  const { width, height } = sourceSize.value;
+  // getFrameDimensions reads the saved orientation, so the hint follows it
+  const frame = getFrameDimensions();
+  return rotationSuggestion(width, height, frame.frameWidth, frame.frameHeight);
+});
+
+// Pointer events cover mouse, touch and pen. Custom mode: one pointer pans, two
+// pinch-zoom. Otherwise a pointer drags the before/after slider.
+const pointers = new Map();
+let lastPinchDist = 0;
+let lastPinchCenter = null;
+
+function pinchState() {
+  const [a, b] = [...pointers.values()];
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y),
+    center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+  };
+}
+
+function startPan(point) {
+  isPanning.value = true;
+  panStartX = point.x;
+  panStartY = point.y;
+  panStartImgX = customPanX.value;
+  panStartImgY = customPanY.value;
+}
+
+function finishPan() {
+  isPanning.value = false;
+  if (processDebounceTimer) {
+    clearTimeout(processDebounceTimer);
+    processDebounceTimer = null;
+  }
+  updatePreview();
+}
+
+function onPointerDown(event) {
+  // Only the primary mouse button; touch/pen report button 0 as well.
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  } catch {
+    // Capture can fail for synthetic events; dragging still works within the element.
+  }
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
   if (scaleMode.value === "custom") {
-    isPanning.value = true;
-    panStartX = event.clientX;
-    panStartY = event.clientY;
-    panStartImgX = customPanX.value;
-    panStartImgY = customPanY.value;
+    if (pointers.size === 1) {
+      startPan({ x: event.clientX, y: event.clientY });
+    } else if (pointers.size === 2) {
+      isPanning.value = false;
+      const s = pinchState();
+      lastPinchDist = s.dist;
+      lastPinchCenter = s.center;
+    }
     event.preventDefault();
   } else {
     isDragging.value = true;
@@ -443,59 +548,81 @@ function onMouseDown(event) {
   }
 }
 
-function onMouseMove(event) {
-  if (isPanning.value && scaleMode.value === "custom") {
-    const scale = getPreviewScale();
-    const dx = (event.clientX - panStartX) / scale;
-    const dy = (event.clientY - panStartY) / scale;
-    customPanX.value = panStartImgX + dx;
-    customPanY.value = panStartImgY + dy;
-    quickFrameUpdate();
-    debouncedUpdatePreview();
+function onPointerMove(event) {
+  if (!pointers.has(event.pointerId)) return;
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  if (scaleMode.value === "custom") {
+    if (pointers.size >= 2) {
+      const s = pinchState();
+      if (lastPinchDist > 0) {
+        const scale = getPreviewScale();
+        // Pan with the midpoint, then zoom around it.
+        customPanX.value += (s.center.x - lastPinchCenter.x) / scale;
+        customPanY.value += (s.center.y - lastPinchCenter.y) / scale;
+        zoomAround(s.center.x, s.center.y, s.dist / lastPinchDist, event.currentTarget);
+      }
+      lastPinchDist = s.dist;
+      lastPinchCenter = s.center;
+    } else if (isPanning.value) {
+      const scale = getPreviewScale();
+      customPanX.value = panStartImgX + (event.clientX - panStartX) / scale;
+      customPanY.value = panStartImgY + (event.clientY - panStartY) / scale;
+      quickFrameUpdate();
+      debouncedUpdatePreview();
+    }
   } else if (isDragging.value) {
     updateSlider(event);
   }
 }
 
-function onMouseUp() {
-  if (isPanning.value) {
-    isPanning.value = false;
-    if (processDebounceTimer) {
-      clearTimeout(processDebounceTimer);
-      processDebounceTimer = null;
+function onPointerUp(event) {
+  if (!pointers.delete(event.pointerId)) return;
+
+  if (scaleMode.value === "custom") {
+    if (pointers.size === 1) {
+      // Pinch ended with one finger still down: carry on panning from it.
+      const [rest] = [...pointers.values()];
+      startPan(rest);
+    } else if (pointers.size === 0) {
+      lastPinchDist = 0;
+      lastPinchCenter = null;
+      finishPan();
     }
-    updatePreview();
   }
-  isDragging.value = false;
+  if (pointers.size === 0) isDragging.value = false;
 }
 
-function onWheel(event) {
-  if (scaleMode.value !== "custom" || !sourceCanvas) return;
-  event.preventDefault();
-
+// Multiply the custom zoom by `factor` about the client point, clamped to the
+// same range as the wheel. Shared by the wheel and pinch gestures.
+function zoomAround(clientX, clientY, factor, container) {
+  if (!sourceCanvas) return;
   const { frameWidth, frameHeight } = getFrameDimensions();
   const srcW = sourceCanvas.width;
   const srcH = sourceCanvas.height;
   const fitScale = Math.min(frameWidth / srcW, frameHeight / srcH);
   const maxZoomVal = Math.max(frameWidth / srcW, frameHeight / srcH) * 5;
 
-  const zoomFactor = event.deltaY > 0 ? 0.95 : 1.05;
-  let newZoom = customZoom.value * zoomFactor;
-  newZoom = Math.max(fitScale * 0.25, Math.min(maxZoomVal, newZoom));
+  const newZoom = Math.max(fitScale * 0.25, Math.min(maxZoomVal, customZoom.value * factor));
 
-  // Zoom around mouse position
   const scale = getPreviewScale();
-  const rect = event.currentTarget.getBoundingClientRect();
-  const mouseFrameX = (event.clientX - rect.left) / scale;
-  const mouseFrameY = (event.clientY - rect.top) / scale;
+  const rect = container.getBoundingClientRect();
+  const frameX = (clientX - rect.left) / scale;
+  const frameY = (clientY - rect.top) / scale;
 
   const zoomRatio = newZoom / customZoom.value;
-  customPanX.value = mouseFrameX - (mouseFrameX - customPanX.value) * zoomRatio;
-  customPanY.value = mouseFrameY - (mouseFrameY - customPanY.value) * zoomRatio;
+  customPanX.value = frameX - (frameX - customPanX.value) * zoomRatio;
+  customPanY.value = frameY - (frameY - customPanY.value) * zoomRatio;
   customZoom.value = newZoom;
 
   quickFrameUpdate();
   debouncedUpdatePreview();
+}
+
+function onWheel(event) {
+  if (scaleMode.value !== "custom" || !sourceCanvas) return;
+  event.preventDefault();
+  zoomAround(event.clientX, event.clientY, event.deltaY > 0 ? 0.95 : 1.05, event.currentTarget);
 }
 
 function updateSlider(event) {
@@ -508,6 +635,10 @@ function updateSlider(event) {
 // Expose method for upload component to get framed canvas and background mask
 defineExpose({
   scaleMode,
+  rotation,
+  // The (downscaled, rotated) canvas that the preview is built from; the upload
+  // must process exactly this one so the device image matches the preview.
+  getSourceCanvas: () => sourceCanvas,
   getPalette: currentPalette,
   getUploadParams() {
     return {
@@ -528,28 +659,90 @@ onUnmounted(() => {
   <v-card>
     <v-card-text>
       <div class="d-flex flex-column align-center">
-        <!-- Scale Mode Selector -->
-        <v-btn-toggle
-          v-model="scaleMode"
-          mandatory
-          color="primary"
-          variant="outlined"
+        <!-- Composition toolbar: scale mode + per-image rotation -->
+        <div class="d-flex flex-wrap align-center justify-center ga-3 mb-3">
+          <v-btn-toggle
+            v-model="scaleMode"
+            mandatory
+            color="primary"
+            variant="outlined"
+            density="compact"
+          >
+            <v-btn value="cover" size="small">
+              <v-icon start size="small">mdi-crop-free</v-icon>
+              {{ t("Cover") }}
+            </v-btn>
+            <v-btn value="fit" size="small">
+              <v-icon start size="small">mdi-fit-to-screen</v-icon>
+              {{ t("Fit") }}
+            </v-btn>
+            <v-btn value="custom" size="small">
+              <v-icon start size="small">mdi-cursor-move</v-icon>
+              {{ t("Custom") }}
+            </v-btn>
+          </v-btn-toggle>
+
+          <v-btn-group variant="outlined" density="compact" divided>
+            <v-btn
+              size="small"
+              :disabled="!isReady"
+              :title="t('Rotate left 90°')"
+              :aria-label="t('Rotate left 90°')"
+              @click="rotateBy(-90)"
+            >
+              <v-icon size="small">mdi-rotate-left</v-icon>
+            </v-btn>
+            <v-btn
+              size="small"
+              :disabled="!isReady"
+              :title="t('Rotate right 90°')"
+              :aria-label="t('Rotate right 90°')"
+              @click="rotateBy(90)"
+            >
+              <v-icon size="small">mdi-rotate-right</v-icon>
+            </v-btn>
+          </v-btn-group>
+        </div>
+
+        <!-- Rotate hint: the photo is the opposite orientation of the frame -->
+        <v-alert
+          v-if="rotateHint"
+          type="info"
+          variant="tonal"
           density="compact"
-          class="mb-3"
+          class="mb-3 rotate-hint"
+          icon="mdi-phone-rotate-landscape"
         >
-          <v-btn value="cover" size="small">
-            <v-icon start size="small">mdi-crop-free</v-icon>
-            {{ t("Cover") }}
-          </v-btn>
-          <v-btn value="fit" size="small">
-            <v-icon start size="small">mdi-fit-to-screen</v-icon>
-            {{ t("Fit") }}
-          </v-btn>
-          <v-btn value="custom" size="small">
-            <v-icon start size="small">mdi-cursor-move</v-icon>
-            {{ t("Custom") }}
-          </v-btn>
-        </v-btn-toggle>
+          <div class="mb-2">
+            {{
+              rotateHint === "portrait"
+                ? t(
+                    "This is a portrait photo but the frame is landscape. Rotate it to fill the screen?"
+                  )
+                : t(
+                    "This is a landscape photo but the frame is portrait. Rotate it to fill the screen?"
+                  )
+            }}
+          </div>
+          <div class="d-flex flex-wrap ga-2">
+            <v-btn
+              v-for="dir in rotateDir === 'ccw' ? ['ccw', 'cw'] : ['cw', 'ccw']"
+              :key="dir"
+              size="small"
+              :variant="dir === rotateDir ? 'flat' : 'outlined'"
+              color="primary"
+              @click="rotateBy(dir === 'cw' ? 90 : -90)"
+            >
+              <v-icon start size="small">
+                {{ dir === "cw" ? "mdi-rotate-right" : "mdi-rotate-left" }}
+              </v-icon>
+              {{ dir === "cw" ? t("Rotate right") : t("Rotate left") }}
+            </v-btn>
+            <v-btn size="small" variant="text" @click="hintDismissed = true">
+              {{ t("Keep as is") }}
+            </v-btn>
+          </div>
+        </v-alert>
 
         <!-- Background color selector (only for fit/custom modes) -->
         <div v-if="scaleMode !== 'cover'" class="d-flex align-center mb-3">
@@ -571,10 +764,10 @@ onUnmounted(() => {
           <div
             class="comparison-container"
             :class="{ 'custom-mode': scaleMode === 'custom' }"
-            @mousedown="onMouseDown"
-            @mousemove="onMouseMove"
-            @mouseup="onMouseUp"
-            @mouseleave="onMouseUp"
+            @pointerdown="onPointerDown"
+            @pointermove="onPointerMove"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerUp"
             @wheel="onWheel"
           >
             <div class="canvas-wrapper">
@@ -637,10 +830,15 @@ onUnmounted(() => {
   position: relative;
   cursor: ew-resize;
   user-select: none;
+  -webkit-user-select: none;
+  /* Slider drags horizontally; leave vertical swipes to scroll the page. */
+  touch-action: pan-y;
 }
 
 .comparison-container.custom-mode {
   cursor: grab;
+  /* Pan and pinch are handled in JS. */
+  touch-action: none;
 }
 
 .comparison-container.custom-mode:active {
@@ -703,5 +901,15 @@ onUnmounted(() => {
   flex-shrink: 0;
   align-self: flex-end;
   margin-left: 20px;
+}
+
+/* When the curve wraps under the preview (narrow screens) centre it instead */
+@media (max-width: 600px) {
+  .tone-curve-card {
+    align-self: center;
+    margin-left: 0;
+    margin-top: 16px;
+    max-width: 100%;
+  }
 }
 </style>

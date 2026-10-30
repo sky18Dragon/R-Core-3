@@ -8,6 +8,7 @@ export default {
   "Access Token (Optional)": "访问令牌（可选）",
   "Add another schedule": "再加一个计划",
   "Add time": "添加时间",
+  Advanced: "高级",
   "Advanced (cron)": "高级（Cron）",
   "Advanced network settings": "高级网络设置",
   "Advanced: POSIX TZ rule": "高级：POSIX 时区规则",
@@ -109,8 +110,6 @@ export default {
   "Every day": "每天",
   "Exit wide edit": "退出宽屏编辑",
   "Export Config": "导出配置",
-  "Exports never include the device password: set it again under General → Advanced network settings to require one.":
-    "导出文件不包含设备密码：如需密码，请在“通用 → 高级网络设置”中重新设置。",
   Exposure: "曝光",
   "Factory Reset": "恢复出厂设置",
   "Factory Reset Device": "恢复出厂设置",
@@ -136,7 +135,6 @@ export default {
   "Format storage": "格式化存储",
   From: "开始",
   Gateway: "网关",
-  General: "通用",
   Generate: "生成",
   "Generate Image": "生成图片",
   "Generate with AI": "用 AI 生成",
@@ -204,16 +202,12 @@ export default {
   Password: "密码",
   "Password (set — leave blank to keep)": "密码（已设置，留空保持不变）",
   "PhotoFrame Setup": "相框设置",
-  "Please configure an API Key in Settings > AI Generation first.":
-    "请先在“设置 > AI 生成”中配置 API Key。",
   "Portrait ({w}×{h})": "竖屏（{w}×{h}）",
   Power: "电源",
   "Power Consumption Notice": "功耗提示",
   "Processed →": "处理后 →",
   Processing: "图像处理",
   "Processing Preset": "处理预设",
-  "Processing controls are shown next to the preview in wide-edit mode. Turn wide edit off (the split icon on the Upload card) to edit them here.":
-    "宽屏编辑模式下，处理参数显示在预览旁边。关闭宽屏编辑（上传卡片上的分栏图标）后可在这里调整。",
   "Processing settings": "处理设置",
   Prompt: "提示词",
   Provider: "服务商",
@@ -224,7 +218,15 @@ export default {
   "Require a password for this device's web interface": "访问本设备网页需要密码",
   "Reset Device": "重置设备",
   "Rolls off bright tones; higher keeps more highlight detail.": "压缩亮部，越高保留越多高光细节。",
-  "Rotate to next image": "切换到下一张",
+  "Keep as is": "保持原样",
+  "Rotate left": "向左转",
+  "Rotate left 90°": "向左旋转 90°",
+  "Rotate right": "向右转",
+  "Rotate right 90°": "向右旋转 90°",
+  "This is a landscape photo but the frame is portrait. Rotate it to fill the screen?":
+    "这是横图，但相框是竖屏。要旋转后铺满屏幕吗？",
+  "This is a portrait photo but the frame is landscape. Rotate it to fill the screen?":
+    "这是竖图，但相框是横屏。要旋转后铺满屏幕吗？",
   "Rotation Mode": "轮播来源",
   "S-Curve": "S 曲线",
   "S-Curve Parameters": "S 曲线参数",
@@ -265,8 +267,6 @@ export default {
   "Testing WiFi connection...": "正在测试 Wi-Fi 连接…",
   "The TLS certificate for this HTTPS URL is pinned. It will re-pin automatically when you change the URL.":
     "此 HTTPS 地址的 TLS 证书已固定，修改地址后会自动重新固定。",
-  "The device password was left in place: turn it off under General → Advanced network settings if you want the frame open.":
-    "设备密码保持不变：如需取消，请在“通用 → 高级网络设置”中关闭。",
   'The device will create a WiFi access point named "PhotoFrame". Connect to it from your device to restart the provisioning process.':
     "设备会创建名为“PhotoFrame”的 Wi-Fi 热点，连接它即可重新配网。",
   "The device will enter deep sleep mode and stop responding until woken up.":
@@ -342,4 +342,37 @@ export default {
   "Power source": "供电",
   "Last decision": "最近判断",
   "Failed to save: ": "保存失败：",
+  "Image settings": "图片设置",
+  "Show next image": "显示下一张",
+  "System settings": "系统设置",
+  Slideshow: "自动轮播",
+  "The frame is set to a remote image source (System settings → Experimental). The order below applies to local storage only.":
+    "相框当前使用远程图源（系统设置 → 实验功能）。下面的顺序只对本地存储生效。",
+  "Upload defaults": "上传默认处理",
+  "Applied to every new photo; adjust a single photo while uploading":
+    "对每张新图片生效；单张图片在上传时再调整",
+  "Unsaved changes": "有未保存的修改",
+  "Saved as the default for new uploads": "已设为新上传图片的默认处理",
+  "Please configure an API Key in System settings > Experimental first.":
+    "请先在系统设置 → 实验功能中配置 API Key。",
+  "Set as default": "设为默认",
+  "Exports never include the device password: set it again under Device & network → Advanced network settings to require one.":
+    "导出不含设备密码：如需密码，请在设备与网络 → 高级网络设置中重新设置。",
+  "The device password was left in place: turn it off under Device & network → Advanced network settings if you want the frame open.":
+    "设备密码保持不变：如想取消密码，请在设备与网络 → 高级网络设置中关闭。",
+  "Device & network": "设备与网络",
+  Time: "时间",
+  Screen: "屏幕",
+  "How the frame is mounted. To turn a single photo, use the rotate buttons when uploading.":
+    "相框的摆放方式。要旋转单张图片，请在上传时使用旋转按钮。",
+  Calibration: "校准",
+  Experimental: "实验功能",
+  "Experimental features. The current local-frame firmware does not use them, and the device may reject or ignore these settings.":
+    "实验功能。当前本地相框固件不会使用它们，设备可能拒绝或忽略这些设置。",
+  "Remote image source": "远程图源",
+  "Discard unsaved changes?": "放弃未保存的修改？",
+  "Your edits in System settings have not been saved.": "你在系统设置中的修改还没有保存。",
+  "Keep editing": "继续编辑",
+  Discard: "放弃",
+  "Rescan networks": "重新扫描网络",
 };
