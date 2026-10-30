@@ -135,7 +135,9 @@ static esp_err_t reply(httpd_req_t *req, const char *status, const char *message
     }
     char *text = json ? cJSON_PrintUnformatted(json) : NULL;
     cJSON_Delete(json);
-    if (strcmp(status, "success")) httpd_resp_set_status(req, "400 Bad Request");
+    if (!strcmp(status, "busy")) httpd_resp_set_status(req, "503 Service Unavailable");
+    else if (!strcmp(status, "failed")) httpd_resp_set_status(req, "500 Internal Server Error");
+    else if (strcmp(status, "success")) httpd_resp_set_status(req, "400 Bad Request");
     httpd_resp_set_type(req, "application/json");
     esp_err_t err = httpd_resp_sendstr(req, text ? text : "{}");
     free(text);
@@ -157,6 +159,26 @@ static int receive(httpd_req_t *req, uint8_t *buffer, size_t n)
     return (int) got;
 }
 
+static esp_err_t flash_locked_begin(const esp_partition_t *target, esp_ota_handle_t *handle)
+{
+    if (read_pico_board_lock(OTA_BOARD_LOCK_WAIT_MS) != ESP_OK)
+        return ESP_ERR_TIMEOUT;
+    // Erase sector by sector inside each write instead of the whole ~2 MB
+    // range up front, so no single lock hold lasts more than a few sectors.
+    esp_err_t err = esp_ota_begin(target, OTA_WITH_SEQUENTIAL_WRITES, handle);
+    read_pico_board_unlock();
+    return err;
+}
+
+static esp_err_t flash_locked_write(esp_ota_handle_t handle, const uint8_t *data, size_t size)
+{
+    if (read_pico_board_lock(OTA_BOARD_LOCK_WAIT_MS) != ESP_OK)
+        return ESP_ERR_TIMEOUT;
+    esp_err_t err = esp_ota_write(handle, data, size);
+    read_pico_board_unlock();
+    return err;
+}
+
 static esp_err_t receive_locked(httpd_req_t *req)
 {
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -164,7 +186,7 @@ static esp_err_t receive_locked(httpd_req_t *req)
         return reply(req, "error", "OTA partition table not installed on this device", NULL);
     size_t total = req->content_len;
     uint8_t *buffer = malloc(OTA_RECV_CHUNK);
-    if (!buffer) return reply(req, "error", "Out of memory", NULL);
+    if (!buffer) return reply(req, "failed", "Out of memory", NULL);
     char version[32] = "";
     int first = total >= OTA_LOCAL_HEADER_BYTES ? receive(req, buffer, MIN(total, OTA_RECV_CHUNK)) : -1;
     ota_image_verdict_t verdict = first < 0 ? OTA_IMAGE_TOO_SHORT
@@ -174,34 +196,32 @@ static esp_err_t receive_locked(httpd_req_t *req)
         ESP_LOGW(TAG, "Upload refused: %s", ota_local_verdict_text(verdict));
         return reply(req, "error", ota_local_verdict_text(verdict), NULL);
     }
-    // Flash erase/write stalls the cache; never overlap a panel refresh. While
-    // held, refreshes fail as busy and SD/touch users wait or time out.
-    if (read_pico_board_lock(OTA_BOARD_LOCK_WAIT_MS) != ESP_OK) {
-        free(buffer);
-        return reply(req, "error", "Display busy; try again", NULL);
-    }
+    // Flash erase/write stalls the cache; never overlap a panel refresh. The
+    // board lock is held only around each flash operation, not while the next
+    // chunk is still arriving over Wi-Fi, so SD, touch and refreshes keep working.
     esp_ota_handle_t handle = 0;
-    esp_err_t err = esp_ota_begin(target, total, &handle);
+    esp_err_t err = flash_locked_begin(target, &handle);
     size_t written = 0;
     if (err == ESP_OK) {
-        err = esp_ota_write(handle, buffer, (size_t) first);
+        err = flash_locked_write(handle, buffer, (size_t) first);
         written = (size_t) first;
     }
     while (err == ESP_OK && written < total) {
         int r = receive(req, buffer, MIN(total - written, OTA_RECV_CHUNK));
         if (r < 0) { err = ESP_ERR_INVALID_SIZE; break; }
-        err = esp_ota_write(handle, buffer, (size_t) r);
+        err = flash_locked_write(handle, buffer, (size_t) r);
         written += (size_t) r;
     }
     free(buffer);
-    if (err == ESP_OK) err = esp_ota_end(handle);  // verifies image checksum/hash
+    if (err == ESP_OK) err = esp_ota_end(handle);  // verifies image checksum/hash (reads only)
     else if (handle) esp_ota_abort(handle);
-    read_pico_board_unlock();
+    if (err == ESP_ERR_TIMEOUT)
+        return reply(req, "busy", "Display busy; try again", NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Writing %s failed: %s", target->label, esp_err_to_name(err));
-        return reply(req, "error", err == ESP_ERR_OTA_VALIDATE_FAILED ? "Image verification failed"
-                                                                      : "Firmware write failed",
-                     NULL);
+        return err == ESP_ERR_OTA_VALIDATE_FAILED
+                   ? reply(req, "error", "Image verification failed", NULL)
+                   : reply(req, "failed", "Firmware write failed", NULL);
     }
     nvs_handle_t nvs;
     err = nvs_open(OTA_NVS_NAMESPACE, NVS_READWRITE, &nvs);
@@ -217,7 +237,7 @@ static esp_err_t receive_locked(httpd_req_t *req)
     if (err == ESP_OK) err = esp_ota_set_boot_partition(target);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Could not select %s: %s", target->label, esp_err_to_name(err));
-        return reply(req, "error", "Could not select the new image; still running the current one", NULL);
+        return reply(req, "failed", "Could not select the new image; still running the current one", NULL);
     }
     ESP_LOGI(TAG, "Wrote %u bytes to %s (%s); restarting", (unsigned) written, target->label, version);
     reply(req, "success", "Firmware installed; restarting", version);
@@ -231,7 +251,7 @@ static esp_err_t receive_locked(httpd_req_t *req)
 esp_err_t read_pico_ota_receive(httpd_req_t *req)
 {
     if (atomic_exchange(&s_busy, true))
-        return reply(req, "error", "Another firmware upload is in progress", NULL);
+        return reply(req, "busy", "Another firmware upload is in progress", NULL);
     esp_err_t err = receive_locked(req);
     atomic_store(&s_busy, false);
     return err;
