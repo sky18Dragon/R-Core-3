@@ -75,7 +75,7 @@ const features = [
   },
   {
     label: "REST + Web UI",
-    body: "Programmatic control, drag-and-drop uploads, live status, OTA. Everything the stock firmware should have shipped with.",
+    body: "Programmatic control, drag-and-drop uploads, live status. Everything the stock firmware should have shipped with.",
     figure: "04",
   },
 ];
@@ -86,7 +86,6 @@ const appFeatures = [
   { icon: "mdi-auto-fix", text: "AI generation" },
   { icon: "mdi-wifi", text: "WiFi setup" },
   { icon: "mdi-cog", text: "Device settings" },
-  { icon: "mdi-update", text: "OTA updates" },
   { icon: "mdi-camera", text: "Camera upload" },
   { icon: "mdi-palette", text: "Image processing" },
 ];

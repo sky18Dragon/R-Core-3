@@ -185,7 +185,4 @@ typedef enum { IP_MODE_DHCP = 0, IP_MODE_STATIC = 1 } ip_mode_t;
 #define NVS_OPENAI_API_KEY_KEY "openai_key"
 #define NVS_GOOGLE_API_KEY_KEY "google_key"
 
-// OTA Configuration
-#define GITHUB_API_URL "https://api.github.com/repos/aitjcize/esp32-photoframe/releases/latest"
-
 #endif

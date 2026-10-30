@@ -107,6 +107,24 @@ static int64_t next_sleep_time = 0;  // Use absolute time for sleep timer
 static uint32_t auto_sleep_timeout_sec = AUTO_SLEEP_TIMEOUT_SEC;
 static wakeup_source_t wakeup_source = WAKEUP_SOURCE_NONE;
 static int64_t next_rotation_time = 0;  // Use absolute time for rotation
+// Written by the rotation task and by manual changes (touch/web tasks); a
+// 64-bit value is not read/written atomically on this CPU, so go through these.
+static portMUX_TYPE rotation_time_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static int64_t rotation_time_get(void)
+{
+    taskENTER_CRITICAL(&rotation_time_lock);
+    int64_t value = next_rotation_time;
+    taskEXIT_CRITICAL(&rotation_time_lock);
+    return value;
+}
+
+static void rotation_time_set(int64_t value)
+{
+    taskENTER_CRITICAL(&rotation_time_lock);
+    next_rotation_time = value;
+    taskEXIT_CRITICAL(&rotation_time_lock);
+}
 static uint64_t ext1_wakeup_pin_mask = 0;
 
 static void rotation_timer_task(void *arg)
@@ -151,16 +169,17 @@ static void rotation_timer_task(void *arg)
         if (config_manager_get_auto_rotate()) {
             int64_t now = esp_timer_get_time();  // Get absolute time in microseconds
 
-            if (next_rotation_time == 0) {
+            int64_t scheduled = rotation_time_get();
+            if (scheduled == 0) {
                 // Initialize next rotation time
                 int seconds_until_next = get_seconds_until_next_wakeup();
 
-                next_rotation_time = now + (seconds_until_next * 1000000LL);
+                rotation_time_set(now + (seconds_until_next * 1000000LL));
                 const char *reason =
                     board_hal_is_usb_connected() ? "USB powered" : "deep sleep disabled";
                 ESP_LOGI(TAG, "Active rotation scheduled in %d seconds (%s, %s)",
                          seconds_until_next, "cron", reason);
-            } else if (now >= next_rotation_time) {
+            } else if (now >= scheduled) {
                 // Time to rotate
                 const char *reason =
                     board_hal_is_usb_connected() ? "USB powered" : "deep sleep disabled";
@@ -172,12 +191,12 @@ static void rotation_timer_task(void *arg)
                 // Schedule next rotation
                 int seconds_until_next = get_seconds_until_next_wakeup();
 
-                next_rotation_time = esp_timer_get_time() + (seconds_until_next * 1000000LL);
+                rotation_time_set(esp_timer_get_time() + (seconds_until_next * 1000000LL));
                 ESP_LOGI(TAG, "Next rotation scheduled in %d seconds (%s)", seconds_until_next,
                          "cron");
             }
         } else {
-            next_rotation_time = 0;  // Reset if auto-rotate disabled
+            rotation_time_set(0);  // Reset if auto-rotate disabled
         }
     }
 }
@@ -623,9 +642,10 @@ void power_manager_set_auto_sleep_timeout(uint32_t seconds)
 
 int64_t power_manager_seconds_to_next_rotation(void)
 {
-    if (!config_manager_get_auto_rotate() || next_rotation_time == 0)
+    int64_t scheduled = rotation_time_get();
+    if (!config_manager_get_auto_rotate() || scheduled == 0)
         return -1;
-    int64_t remaining = (next_rotation_time - esp_timer_get_time()) / 1000000LL;
+    int64_t remaining = (scheduled - esp_timer_get_time()) / 1000000LL;
     return remaining > 0 ? remaining : 0;
 }
 
@@ -633,7 +653,7 @@ void power_manager_reset_rotate_timer(void)
 {
     int seconds_until_next = get_seconds_until_next_wakeup();
 
-    next_rotation_time = esp_timer_get_time() + (seconds_until_next * 1000000LL);
+    rotation_time_set(esp_timer_get_time() + (seconds_until_next * 1000000LL));
     ESP_LOGI(TAG, "Rotation timer reset, next rotation in %d seconds (%s)", seconds_until_next,
              "cron");
 }
