@@ -57,7 +57,7 @@ dependencies:
       require: private
       version: '>=5.1'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.3.2~1
   idf:
@@ -80,8 +80,8 @@ direct_dependencies:
 - espressif/libpng
 - espressif/mdns
 - espressif/qrcode
-- idf
+- espressif/zlib
 - joltwallet/littlefs
-manifest_hash: a7f21d3a23c5a5a46ef17ab9dddc05c9b26ea7aa9cc372aa97986e479c4584fd
+manifest_hash: 54f08f5407bf6d0663960b96937e445545cc6ac58e9552ee80e6b1202675f472
 target: esp32s3
 version: 3.0.0
