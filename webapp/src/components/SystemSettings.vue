@@ -137,7 +137,21 @@ async function syncTime() {
   }
 }
 
+// Only the opt-in sleep build serves /api/power. The default local frame never sleeps,
+// so the Power group (sleep switch and notice) would be a control that does nothing.
+const sleepSupported = ref(false);
+async function probeSleepSupport() {
+  try {
+    const response = await fetch("/api/power");
+    sleepSupported.value =
+      response.ok && !response.headers.get("content-type")?.includes("text/html");
+  } catch (_error) {
+    sleepSupported.value = false;
+  }
+}
+
 onMounted(() => {
+  probeSleepSupport();
   fetchDeviceTime();
   // Tick every second to update display
   tickInterval = setInterval(updateDisplayTime, 1000);
@@ -808,7 +822,7 @@ function onDrawerToggle(open) {
             </v-expansion-panel-text>
           </v-expansion-panel>
 
-          <v-expansion-panel value="power">
+          <v-expansion-panel v-if="sleepSupported" value="power">
             <v-expansion-panel-title>
               <v-icon icon="mdi-power" class="mr-3" />
               {{ t("Power") }}

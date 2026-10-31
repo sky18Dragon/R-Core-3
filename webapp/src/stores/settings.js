@@ -172,6 +172,9 @@ export const useSettingsStore = defineStore("settings", () => {
     { deep: true }
   );
 
+  // False until the device's processing settings have been read (params hold defaults).
+  const processingLoaded = ref(false);
+
   async function loadSettings() {
     try {
       const response = await fetch(`${API_BASE}/api/settings/processing`);
@@ -182,6 +185,7 @@ export const useSettingsStore = defineStore("settings", () => {
       Object.assign(params.value, data);
       // Store original params for change detection
       snapshotParams();
+      processingLoaded.value = true;
     } catch (_error) {
       console.log("Settings API not available (standalone mode)");
     }
@@ -592,6 +596,7 @@ export const useSettingsStore = defineStore("settings", () => {
     saveImageSettings,
     discardSystemEdits,
     params,
+    processingLoaded,
     deviceSettings,
     savedTimezone,
     appliedOrientation,

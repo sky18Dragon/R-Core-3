@@ -200,6 +200,10 @@
 .v-theme--paper .v-btn:focus-visible {
   outline-offset: 1px;
 }
+/* A field draws its own focus border; a second ring around the bare input doubles it up. */
+.v-theme--paper .v-field :is(input, textarea, select):focus-visible {
+  outline: none;
+}
 
 /* ── E-ink feel: nothing slides or fades for long ── */
 @media (prefers-reduced-motion: reduce) {

@@ -49,6 +49,7 @@ async function create() {
         <v-text-field
           v-model="name"
           :label="t('Album Name')"
+          variant="outlined"
           autofocus
           :error-messages="
             failed ? [t('Could not create the album. The name may already exist.')] : []

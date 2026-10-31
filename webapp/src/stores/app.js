@@ -12,6 +12,9 @@ export const useAppStore = defineStore("app", () => {
     voltage: 0,
     charging: false,
   });
+  // False until the first /api/system-info answer; defaults below are placeholders, so UI
+  // that warns about missing storage must wait for it.
+  const systemInfoLoaded = ref(false);
   const systemInfo = ref({
     width: 800,
     height: 480,
@@ -253,6 +256,7 @@ export const useAppStore = defineStore("app", () => {
       const response = await fetch(`${API_BASE}/api/system-info`);
       if (response.ok) {
         systemInfo.value = await response.json();
+        systemInfoLoaded.value = true;
       }
     } catch (error) {
       console.error("Failed to load system info:", error);
@@ -268,6 +272,7 @@ export const useAppStore = defineStore("app", () => {
     images,
     battery,
     systemInfo,
+    systemInfoLoaded,
     loading,
     displayVersion,
     // Getters

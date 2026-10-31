@@ -180,6 +180,8 @@ const allDone = computed(
 // --- processing defaults ---------------------------------------------------
 
 const presetTitle = computed(() => {
+  // Before the device answers, the store holds placeholder defaults, not the real preset.
+  if (!settingsStore.processingLoaded) return "";
   const option = getPresetOptions().find((p) => p.value === settingsStore.preset);
   return option ? t(option.title) : t("Custom");
 });
@@ -278,7 +280,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
       </v-alert>
 
       <v-alert
-        v-if="!uploads.canSaveToAlbum"
+        v-if="appStore.systemInfoLoaded && !uploads.canSaveToAlbum"
         type="info"
         variant="tonal"
         density="compact"
