@@ -12,6 +12,9 @@ export const useAppStore = defineStore("app", () => {
     voltage: 0,
     charging: false,
   });
+  // False until the first /api/system-info answer; defaults below are placeholders, so UI
+  // that warns about missing storage must wait for it.
+  const systemInfoLoaded = ref(false);
   const systemInfo = ref({
     width: 800,
     height: 480,
@@ -35,6 +38,10 @@ export const useAppStore = defineStore("app", () => {
     battery: false,
     systemInfo: false,
   });
+
+  // Bumped whenever the picture on the panel changes, so views that show it
+  // ("now showing") know to fetch it again.
+  const displayVersion = ref(0);
 
   // API base URL (empty for same-origin)
   const API_BASE = "";
@@ -204,6 +211,7 @@ export const useAppStore = defineStore("app", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filepath: fullPath }),
       });
+      if (response.ok) displayVersion.value++;
       return response.ok;
     } catch (error) {
       console.error("Failed to display image:", error);
@@ -224,6 +232,7 @@ export const useAppStore = defineStore("app", () => {
   async function rotateNow() {
     try {
       const response = await fetch(`${API_BASE}/api/rotate`, { method: "POST" });
+      if (response.ok) displayVersion.value++;
       return response.ok;
     } catch (error) {
       console.error("Failed to rotate:", error);
@@ -247,6 +256,7 @@ export const useAppStore = defineStore("app", () => {
       const response = await fetch(`${API_BASE}/api/system-info`);
       if (response.ok) {
         systemInfo.value = await response.json();
+        systemInfoLoaded.value = true;
       }
     } catch (error) {
       console.error("Failed to load system info:", error);
@@ -262,7 +272,9 @@ export const useAppStore = defineStore("app", () => {
     images,
     battery,
     systemInfo,
+    systemInfoLoaded,
     loading,
+    displayVersion,
     // Getters
     sortedAlbums,
     currentAlbumImages,

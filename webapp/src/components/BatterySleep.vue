@@ -1,6 +1,9 @@
 <script setup>
 import { t } from "../i18n";
 import { ref, computed, onMounted } from "vue";
+import { useAppStore } from "../stores";
+
+const appStore = useAppStore();
 
 // Shown only on the opt-in Read Pico sleep build (/api/power exists there).
 const power = ref(null);
@@ -46,11 +49,19 @@ async function setEnabled(enabled) {
   }
 }
 
+// Put the frame to sleep right now (only offered here, where the sleep build's
+// /api/power exists). The page becomes unreachable until the wake key is pressed.
+const sleepDialog = ref(false);
+async function handleSleep() {
+  await appStore.enterSleep();
+  sleepDialog.value = false;
+}
+
 onMounted(load);
 </script>
 
 <template>
-  <v-card v-if="power">
+  <v-card v-if="power" variant="outlined">
     <v-card-title class="d-flex align-center">
       <v-icon icon="mdi-battery-clock" class="mr-2" />
       {{ t("Battery sleep") }}
@@ -77,7 +88,27 @@ onMounted(load);
         <span v-if="power.battery_mv > 0"> · {{ power.battery_mv }} mV</span>
       </div>
       <div class="text-caption text-grey">{{ t("Last decision") }}: {{ power.last_decision }}</div>
-      <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-2">{{ error }}</v-alert>
+      <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-2">{{
+        error
+      }}</v-alert>
+      <v-btn color="warning" variant="outlined" class="mt-4" @click="sleepDialog = true">
+        <v-icon icon="mdi-sleep" start />
+        {{ t("Enter Deep Sleep") }}
+      </v-btn>
     </v-card-text>
+
+    <v-dialog v-model="sleepDialog" max-width="400">
+      <v-card>
+        <v-card-title>{{ t("Enter Deep Sleep?") }}</v-card-title>
+        <v-card-text>
+          {{ t("The device will enter deep sleep mode and stop responding until woken up.") }}
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="sleepDialog = false">{{ t("Cancel") }}</v-btn>
+          <v-btn color="primary" @click="handleSleep">{{ t("Sleep") }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>

@@ -1,10 +1,16 @@
 <script setup>
 import { t } from "../i18n";
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { useDisplay } from "vuetify";
 import { getDitherOptions, getPresetOptions } from "@aitjcize/epaper-image-convert";
 import { useAppStore } from "../stores";
 
 const appStore = useAppStore();
+const { xs } = useDisplay();
+
+// Basic controls are always visible; the rest (dithering, tone mapping, S-curve)
+// sit in a collapsed section so a quick tweak is one screen on a phone.
+const advancedOpen = ref([]);
 
 const props = defineProps({
   params: {
@@ -66,7 +72,20 @@ function updateParam(key, value) {
         <v-card variant="outlined" class="mb-6">
           <v-card-subtitle class="pt-3"> {{ t("Processing Preset") }} </v-card-subtitle>
           <v-card-text>
+            <v-select
+              v-if="xs"
+              :model-value="preset"
+              :items="presetOptions"
+              item-title="title"
+              item-value="value"
+              variant="outlined"
+              density="compact"
+              hide-details
+              :aria-label="t('Processing Preset')"
+              @update:model-value="onPresetChange"
+            />
             <v-btn-toggle
+              v-else
               :model-value="preset"
               mandatory
               color="primary"
@@ -112,43 +131,6 @@ function updateParam(key, value) {
     </v-row>
 
     <v-row>
-      <!-- Dither Algorithm -->
-      <v-col cols="12" md="4">
-        <v-select
-          :model-value="params.ditherAlgorithm"
-          :items="ditherOptions"
-          item-title="title"
-          item-value="value"
-          :label="t('Dithering Algorithm')"
-          :hint="
-            t(
-              'How the leftover error between the image and the 16 grays is spread to neighbouring pixels.'
-            )
-          "
-          persistent-hint
-          variant="outlined"
-          density="compact"
-          @update:model-value="updateParam('ditherAlgorithm', $event)"
-        />
-      </v-col>
-
-      <v-col cols="12" md="4">
-        <v-select
-          :model-value="params.colorMethod"
-          :items="colorMethodOptions"
-          item-title="title"
-          item-value="value"
-          :label="t('Color Matching')"
-          :hint="t('Nearest-gray choice: RGB distance or perceptual LAB distance.')"
-          persistent-hint
-          variant="outlined"
-          density="compact"
-          @update:model-value="updateParam('colorMethod', $event)"
-        />
-      </v-col>
-    </v-row>
-
-    <v-row>
       <!-- Exposure -->
       <v-col cols="12" md="4">
         <v-slider
@@ -187,42 +169,6 @@ function updateParam(key, value) {
         </v-slider>
       </v-col>
 
-      <!-- Compress Dynamic Range -->
-      <v-col cols="12" md="4">
-        <v-checkbox
-          :model-value="params.compressDynamicRange"
-          :label="t('Compress Dynamic Range')"
-          :hint="
-            t(
-              'Squeeze the full image range into the panel\'s real black-to-white range: accurate but flatter. Off: deeper blacks.'
-            )
-          "
-          persistent-hint
-          color="primary"
-          @update:model-value="updateParam('compressDynamicRange', $event)"
-        />
-      </v-col>
-    </v-row>
-
-    <!-- Tone Mode -->
-    <v-row>
-      <v-col cols="12" md="4">
-        <v-select
-          :model-value="params.toneMode"
-          :items="toneModeOptions"
-          item-title="title"
-          item-value="value"
-          :label="t('Tone Mapping')"
-          :hint="
-            t('Contrast: one slider around mid-gray. S-Curve: separate shadow/highlight control.')
-          "
-          persistent-hint
-          variant="outlined"
-          density="compact"
-          @update:model-value="updateParam('toneMode', $event)"
-        />
-      </v-col>
-
       <!-- Contrast (for contrast mode) -->
       <v-col v-if="!isScurveMode" cols="12" md="4">
         <v-slider
@@ -246,90 +192,178 @@ function updateParam(key, value) {
       </v-col>
     </v-row>
 
-    <!-- S-Curve Controls -->
-    <v-expand-transition>
-      <v-card v-if="isScurveMode" variant="tonal" class="mt-4">
-        <v-card-subtitle class="pt-3"> {{ t("S-Curve Parameters") }} </v-card-subtitle>
-        <v-card-text>
+    <!-- Advanced: dithering, colour matching, tone mapping, S-curve -->
+    <v-expansion-panels v-model="advancedOpen" multiple variant="accordion" elevation="0">
+      <v-expansion-panel value="advanced">
+        <v-expansion-panel-title>
+          <v-icon icon="mdi-tune-vertical" class="mr-3" />
+          {{ t("Advanced") }}
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
           <v-row>
-            <v-col cols="12" md="6">
-              <v-slider
-                :model-value="params.strength"
-                :min="0"
-                :max="1"
-                :step="0.01"
-                :label="t('Strength')"
-                :hint="t('How strongly the S-curve is applied (0 = off).')"
+            <!-- Dither Algorithm -->
+            <v-col cols="12" md="4">
+              <v-select
+                :model-value="params.ditherAlgorithm"
+                :items="ditherOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('Dithering Algorithm')"
+                :hint="
+                  t(
+                    'How the leftover error between the image and the 16 grays is spread to neighbouring pixels.'
+                  )
+                "
                 persistent-hint
-                thumb-label
-                color="primary"
-                @update:model-value="updateParam('strength', $event)"
-              >
-                <template #append>
-                  <span class="text-body-2">{{ params.strength.toFixed(2) }}</span>
-                </template>
-              </v-slider>
+                variant="outlined"
+                density="compact"
+                @update:model-value="updateParam('ditherAlgorithm', $event)"
+              />
             </v-col>
 
-            <v-col cols="12" md="6">
-              <v-slider
-                :model-value="params.shadowBoost"
-                :min="0"
-                :max="1"
-                :step="0.01"
-                :label="t('Shadow Boost')"
-                :hint="t('Lifts the dark half of the curve; higher shows more shadow detail.')"
+            <v-col cols="12" md="4">
+              <v-select
+                :model-value="params.colorMethod"
+                :items="colorMethodOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('Color Matching')"
+                :hint="t('Nearest-gray choice: RGB distance or perceptual LAB distance.')"
                 persistent-hint
-                thumb-label
-                color="primary"
-                @update:model-value="updateParam('shadowBoost', $event)"
-              >
-                <template #append>
-                  <span class="text-body-2">{{ params.shadowBoost.toFixed(2) }}</span>
-                </template>
-              </v-slider>
+                variant="outlined"
+                density="compact"
+                @update:model-value="updateParam('colorMethod', $event)"
+              />
             </v-col>
 
-            <v-col cols="12" md="6">
-              <v-slider
-                :model-value="params.highlightCompress"
-                :min="0.5"
-                :max="5"
-                :step="0.01"
-                :label="t('Highlight Compress')"
-                :hint="t('Rolls off bright tones; higher keeps more highlight detail.')"
+            <!-- Compress Dynamic Range -->
+            <v-col cols="12" md="4">
+              <v-checkbox
+                :model-value="params.compressDynamicRange"
+                :label="t('Compress Dynamic Range')"
+                :hint="
+                  t(
+                    'Squeeze the full image range into the panel\'s real black-to-white range: accurate but flatter. Off: deeper blacks.'
+                  )
+                "
                 persistent-hint
-                thumb-label
                 color="primary"
-                @update:model-value="updateParam('highlightCompress', $event)"
-              >
-                <template #append>
-                  <span class="text-body-2">{{ params.highlightCompress.toFixed(2) }}</span>
-                </template>
-              </v-slider>
-            </v-col>
-
-            <v-col cols="12" md="6">
-              <v-slider
-                :model-value="params.midpoint"
-                :min="0.3"
-                :max="0.7"
-                :step="0.01"
-                :label="t('Midpoint')"
-                :hint="t('Where the curve pivots between shadows and highlights.')"
-                persistent-hint
-                thumb-label
-                color="primary"
-                @update:model-value="updateParam('midpoint', $event)"
-              >
-                <template #append>
-                  <span class="text-body-2">{{ params.midpoint.toFixed(2) }}</span>
-                </template>
-              </v-slider>
+                @update:model-value="updateParam('compressDynamicRange', $event)"
+              />
             </v-col>
           </v-row>
-        </v-card-text>
-      </v-card>
-    </v-expand-transition>
+
+          <!-- Tone Mode -->
+          <v-row>
+            <v-col cols="12" md="4">
+              <v-select
+                :model-value="params.toneMode"
+                :items="toneModeOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('Tone Mapping')"
+                :hint="
+                  t(
+                    'Contrast: one slider around mid-gray. S-Curve: separate shadow/highlight control.'
+                  )
+                "
+                persistent-hint
+                variant="outlined"
+                density="compact"
+                @update:model-value="updateParam('toneMode', $event)"
+              />
+            </v-col>
+          </v-row>
+
+          <!-- S-Curve Controls -->
+          <v-expand-transition>
+            <v-card v-if="isScurveMode" variant="tonal" class="mt-4">
+              <v-card-subtitle class="pt-3"> {{ t("S-Curve Parameters") }} </v-card-subtitle>
+              <v-card-text>
+                <v-row>
+                  <v-col cols="12" md="6">
+                    <v-slider
+                      :model-value="params.strength"
+                      :min="0"
+                      :max="1"
+                      :step="0.01"
+                      :label="t('Strength')"
+                      :hint="t('How strongly the S-curve is applied (0 = off).')"
+                      persistent-hint
+                      thumb-label
+                      color="primary"
+                      @update:model-value="updateParam('strength', $event)"
+                    >
+                      <template #append>
+                        <span class="text-body-2">{{ params.strength.toFixed(2) }}</span>
+                      </template>
+                    </v-slider>
+                  </v-col>
+
+                  <v-col cols="12" md="6">
+                    <v-slider
+                      :model-value="params.shadowBoost"
+                      :min="0"
+                      :max="1"
+                      :step="0.01"
+                      :label="t('Shadow Boost')"
+                      :hint="
+                        t('Lifts the dark half of the curve; higher shows more shadow detail.')
+                      "
+                      persistent-hint
+                      thumb-label
+                      color="primary"
+                      @update:model-value="updateParam('shadowBoost', $event)"
+                    >
+                      <template #append>
+                        <span class="text-body-2">{{ params.shadowBoost.toFixed(2) }}</span>
+                      </template>
+                    </v-slider>
+                  </v-col>
+
+                  <v-col cols="12" md="6">
+                    <v-slider
+                      :model-value="params.highlightCompress"
+                      :min="0.5"
+                      :max="5"
+                      :step="0.01"
+                      :label="t('Highlight Compress')"
+                      :hint="t('Rolls off bright tones; higher keeps more highlight detail.')"
+                      persistent-hint
+                      thumb-label
+                      color="primary"
+                      @update:model-value="updateParam('highlightCompress', $event)"
+                    >
+                      <template #append>
+                        <span class="text-body-2">{{ params.highlightCompress.toFixed(2) }}</span>
+                      </template>
+                    </v-slider>
+                  </v-col>
+
+                  <v-col cols="12" md="6">
+                    <v-slider
+                      :model-value="params.midpoint"
+                      :min="0.3"
+                      :max="0.7"
+                      :step="0.01"
+                      :label="t('Midpoint')"
+                      :hint="t('Where the curve pivots between shadows and highlights.')"
+                      persistent-hint
+                      thumb-label
+                      color="primary"
+                      @update:model-value="updateParam('midpoint', $event)"
+                    >
+                      <template #append>
+                        <span class="text-body-2">{{ params.midpoint.toFixed(2) }}</span>
+                      </template>
+                    </v-slider>
+                  </v-col>
+                </v-row>
+              </v-card-text>
+            </v-card>
+          </v-expand-transition>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
   </div>
 </template>

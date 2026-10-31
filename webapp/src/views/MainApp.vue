@@ -1,15 +1,25 @@
 <script setup>
 import { t } from "../i18n";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useDisplay } from "vuetify";
 import { useAppStore, useSettingsStore } from "../stores";
 import AppHeader from "../components/AppHeader.vue";
-import AlbumGallery from "../components/AlbumGallery.vue";
-import ImageUpload from "../components/ImageUpload.vue";
-import SettingsPanel from "../components/SettingsPanel.vue";
-import BatterySleep from "../components/BatterySleep.vue";
+import SystemSettings from "../components/SystemSettings.vue";
+import UploadView from "./UploadView.vue";
+import AlbumsView from "./AlbumsView.vue";
+import { currentView, goTo } from "../utils/viewState";
+import "../styles/paper.css";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
+const { xs } = useDisplay();
+
+const hasStorage = computed(
+  () => appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage
+);
+
+// Each view starts at the top when you switch to it
+watch(currentView, () => window.scrollTo(0, 0));
 
 onMounted(async () => {
   // Load system info first to check for SD card
@@ -107,11 +117,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <v-app>
+  <v-app theme="paper">
     <AppHeader />
+    <SystemSettings />
 
-    <v-main class="bg-grey-lighten-4">
-      <v-container class="py-6" style="max-width: 1200px">
+    <v-main class="bg-background">
+      <v-container class="py-3 py-sm-6" style="max-width: 1200px">
         <v-alert
           v-if="
             appStore.systemInfo.has_sdcard &&
@@ -129,15 +140,9 @@ onUnmounted(() => {
           "
         ></v-alert>
 
-        <AlbumGallery
-          v-if="appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage"
-        />
-
-        <ImageUpload class="mt-6" />
-
-        <SettingsPanel class="mt-6" />
-
-        <BatterySleep class="mt-6" />
+        <!-- Both views stay mounted so a half-finished upload survives a trip to the albums -->
+        <UploadView v-show="currentView === 'upload'" />
+        <AlbumsView v-if="hasStorage" v-show="currentView === 'albums'" />
       </v-container>
     </v-main>
 
@@ -166,10 +171,33 @@ onUnmounted(() => {
       </v-card>
     </v-dialog>
 
-    <v-footer app class="text-center d-flex justify-center">
-      <span class="text-body-2 text-grey">
-        {{ appStore.systemInfo.project_name }} {{ appStore.systemInfo.version }}
-      </span>
-    </v-footer>
+    <!-- Phones: the two views live in a thumb-reachable bottom bar -->
+    <v-bottom-navigation
+      v-if="xs"
+      :model-value="currentView"
+      grow
+      color="primary"
+      @update:model-value="goTo"
+    >
+      <v-btn value="upload">
+        <v-icon>mdi-image-plus</v-icon>
+        <span>{{ t("Add photos") }}</span>
+      </v-btn>
+      <v-btn value="albums">
+        <v-icon>mdi-image-multiple</v-icon>
+        <span>{{ t("Albums") }}</span>
+      </v-btn>
+    </v-bottom-navigation>
   </v-app>
 </template>
+
+<!-- Touch screens: small icon buttons get a 44px hit area (the thumbnail delete
+     overlay keeps its own, thumbnail-sized target). -->
+<style>
+@media (pointer: coarse) {
+  .v-btn--icon.v-btn--size-x-small:not(.delete-overlay) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+</style>

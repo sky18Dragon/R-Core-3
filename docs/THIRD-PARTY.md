@@ -24,4 +24,6 @@ EPDiy、波形、PMU、触摸、图像解码及其传递依赖分别记录版本
 
 网页图像转换库 `@aitjcize/epaper-image-convert` 0.1.20（MIT）已原样引入 `third_party/epaper-image-convert/` 并做本地修改（GC16 实测查表、灰阶模式不跳过灰码 4），来源、原样 SHA256 与修改清单见该目录 `UPSTREAM.md`；webapp 经 Vite alias 使用，process-cli 仍用 npm 原版。未向上游提交。
 
+网页图标字体 Material Design Icons 7.4.47（Pictogrammers，Apache-2.0，`@mdi/font`）按实际用到的图标子集化后内联进 `webapp/src/styles/mdi-subset.css`，不再从 CDN 加载；重新生成见 `webapp/scripts/build-mdi-subset.py`。网页不再加载 Google Fonts 的 Roboto，设备页用系统字体栈。
+
 研究报告的完整参考文献及伪代码保留在 [原始参考副本](reference/esp32-photoframe-read-pico-port-research.md)。

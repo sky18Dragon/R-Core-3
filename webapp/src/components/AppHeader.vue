@@ -1,12 +1,14 @@
 <script setup>
 import { ref, computed, watch } from "vue";
+import { useDisplay } from "vuetify";
 import { useAppStore, useSettingsStore } from "../stores";
-import { locale, setLocale, t } from "../i18n";
+import { t } from "../i18n";
+import { currentView, goTo } from "../utils/viewState";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
-const sleepDialog = ref(false);
 const rotating = ref(false);
+const { xs } = useDisplay();
 
 const deviceTitle = computed(
   () => settingsStore.deviceSettings.deviceName?.trim() || "ESP32 PhotoFrame"
@@ -20,89 +22,125 @@ watch(
   { immediate: true }
 );
 
-async function handleSleep() {
-  await appStore.enterSleep();
-  sleepDialog.value = false;
-}
-
 async function handleRotate() {
   rotating.value = true;
   await appStore.rotateNow();
   rotating.value = false;
 }
 
-function getBatteryColor(level) {
-  if (level < 20) return "error";
-  if (level < 50) return "warning";
-  return "success";
+// Low charge is flagged with a different icon and a word, not a colour.
+const batteryLow = computed(() => appStore.battery.level < 20 && !appStore.battery.charging);
+const batteryIcon = computed(() => {
+  if (appStore.battery.charging) return "mdi-battery-charging";
+  return batteryLow.value ? "mdi-battery-alert-variant-outline" : "mdi-battery";
+});
+
+function openSystemSettings() {
+  settingsStore.systemSettingsOpen = true;
 }
 </script>
 
 <template>
-  <v-app-bar color="primary" density="comfortable">
+  <v-app-bar color="surface" flat density="comfortable">
     <template #prepend>
-      <v-img src="/icon.svg" alt="PhotoFrame" width="40" height="40" class="ml-2" />
+      <!-- Same monochrome frame glyph as the setup page -->
+      <svg class="header-glyph ml-3" viewBox="0 0 72 52" aria-hidden="true">
+        <rect x="2" y="2" width="68" height="48" rx="6" class="g-frame" />
+        <rect x="9" y="9" width="54" height="34" rx="1.5" class="g-paper" />
+        <circle cx="24" cy="20" r="4" class="g-mid" />
+        <path d="M9 43 L29 26 L41 36 L49 29 L63 43 Z" class="g-ink" />
+      </svg>
     </template>
 
-    <v-app-bar-title class="ml-4">{{ deviceTitle }}</v-app-bar-title>
+    <v-app-bar-title class="ml-3 font-weight-bold">{{ deviceTitle }}</v-app-bar-title>
 
     <template #append>
-      <!-- Rotate Now Button -->
+      <!-- Show the next image -->
       <v-btn
         icon
-        class="mr-2"
+        variant="text"
         :loading="rotating"
-        :title="t('Rotate to next image')"
+        :title="t('Show next image')"
+        :aria-label="t('Show next image')"
         @click="handleRotate"
       >
-        <v-icon>mdi-rotate-right</v-icon>
+        <v-icon>mdi-skip-next</v-icon>
       </v-btn>
 
-      <!-- Sleep Button -->
-      <!-- Language switch -->
-      <v-btn
-        variant="text"
-        class="mr-2"
-        :title="t('Switch language')"
-        @click="setLocale(locale === 'zh' ? 'en' : 'zh')"
-      >
-        {{ locale === "zh" ? "EN" : "中文" }}
-      </v-btn>
-
-      <v-btn icon class="mr-2" :title="t('Enter Deep Sleep')" @click="sleepDialog = true">
-        <v-icon>mdi-sleep</v-icon>
-      </v-btn>
-
-      <!-- Battery Status -->
+      <!-- Battery: only on frames that have one -->
       <v-chip
         v-if="appStore.battery.connected"
-        variant="flat"
-        :color="getBatteryColor(appStore.battery.level)"
-        class="text-white"
+        variant="outlined"
+        class="mx-2"
+        :class="{ 'battery-low': batteryLow }"
+        :title="batteryLow ? t('Low') : undefined"
       >
-        <v-icon :icon="appStore.battery.charging ? 'mdi-battery-charging' : 'mdi-battery'" start />
+        <v-icon :icon="batteryIcon" start />
         {{ appStore.battery.level }}%
-        <span v-if="appStore.battery.charging" class="ml-1">{{ t("Charging") }}</span>
+        <span v-if="appStore.battery.charging" class="ml-1 d-none d-sm-inline">
+          {{ t("Charging") }}
+        </span>
+        <span v-else-if="batteryLow" class="ml-1 d-none d-sm-inline">{{ t("Low") }}</span>
       </v-chip>
-      <v-chip v-else variant="flat" color="grey-darken-1" class="mr-2 text-white">
-        <v-icon icon="mdi-power-plug-off" start />
-        {{ t("No Battery") }}
-      </v-chip>
+
+      <!-- System settings -->
+      <v-btn
+        icon
+        variant="text"
+        class="mr-1"
+        :title="t('System settings')"
+        :aria-label="t('System settings')"
+        @click="openSystemSettings"
+      >
+        <v-badge dot color="primary" :model-value="settingsStore.systemDirty">
+          <v-icon>mdi-cog</v-icon>
+        </v-badge>
+      </v-btn>
+    </template>
+
+    <!-- Desktop: the two views as tabs under the title (phones use a bottom bar) -->
+    <template v-if="!xs" #extension>
+      <v-tabs
+        :model-value="currentView"
+        color="primary"
+        align-tabs="start"
+        class="px-2"
+        @update:model-value="goTo"
+      >
+        <v-tab value="upload">
+          <v-icon start>mdi-image-plus</v-icon>
+          {{ t("Add photos") }}
+        </v-tab>
+        <v-tab value="albums">
+          <v-icon start>mdi-image-multiple</v-icon>
+          {{ t("Albums") }}
+        </v-tab>
+      </v-tabs>
     </template>
   </v-app-bar>
-
-  <!-- Sleep Confirmation Dialog -->
-  <v-dialog v-model="sleepDialog" max-width="400">
-    <v-card>
-      <v-card-title>{{ t("Enter Deep Sleep?") }}</v-card-title>
-      <v-card-text>
-        {{ t("The device will enter deep sleep mode and stop responding until woken up.") }}
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="sleepDialog = false"> {{ t("Cancel") }} </v-btn>
-        <v-btn color="primary" @click="handleSleep"> {{ t("Sleep") }} </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
 </template>
+
+<style scoped>
+.header-glyph {
+  width: 36px;
+  height: 26px;
+}
+.g-frame {
+  fill: #fff;
+  stroke: #111;
+  stroke-width: 4;
+}
+.g-paper {
+  fill: #f0f0f0;
+}
+.g-mid {
+  fill: #c9c9c9;
+}
+.g-ink {
+  fill: #666;
+}
+.battery-low {
+  border-width: 2px;
+  font-weight: 700;
+}
+</style>
