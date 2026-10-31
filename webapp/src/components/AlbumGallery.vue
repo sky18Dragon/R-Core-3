@@ -149,7 +149,7 @@ function getThumbnailUrl(image) {
 
       <!-- Slideshow: a summary that opens the settings -->
       <div class="slideshow-row d-flex align-center flex-wrap ga-2 mt-4">
-        <v-icon icon="mdi-slideshow" size="small" class="text-medium-emphasis" />
+        <v-icon icon="mdi-image-multiple-outline" size="small" class="text-medium-emphasis" />
         <span class="text-body-2 slideshow-line">{{ slideshowLine }}</span>
         <v-spacer />
         <v-btn
