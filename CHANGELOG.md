@@ -2,6 +2,12 @@
 
 只记录对使用者/开发者可见的阶段性变更；逐轮细节在 [验证记录](docs/VALIDATION.md) 与 [CHANGELOG全文](docs/history/2026-10-11/CHANGELOG-full.md)（2026-10-19前，来源SHA256 `459aa8af1b3fa16d0b70584e47fc847cdaee49743e46230001d74f15f0efc7e6`）。当前进度见 [TODO](TODO.md)。
 
+## 2026-10-31 · 网页黑白灰皮肤与配网页重构
+
+- 热点配网页 `/provision` 重写为黑白灰、Apple HIG 比例的极简界面：网络列表（信号条、锁、已选勾）、其他网络手动输入、密码显示/隐藏、静态 IP 折叠区、客户端按固件规则校验；状态不只靠颜色。
+- 主页、相册、系统设置、对话框和头部统一为 `paper` 主题（`webapp/src/styles/paper.css`），状态同样不只靠颜色；`/demo` 不变。
+- 已烧写 `4d14ab3e…`（仅 app 分区）。真机热点配网页与新皮肤的目视检查尚未做，见 [验证记录](docs/VALIDATION.md)。
+
 ## 2026-10-30 · 移除 OTA
 
 - 按项目决定删除全部 OTA：上游 GitHub 发布检查/下载（`ota_manager`、`/api/ota/status|check|update`、网页固件更新卡片）、本地固件上传（`/api/ota/upload|local`、启动守卫、版本标记 `+rplf`）与 OTA 分区表。上游生成的分区表改为单一 factory 应用（存储偏移不变）。固件只经 USB 烧写更新。
