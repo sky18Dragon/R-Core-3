@@ -324,10 +324,10 @@ function getThumbnailUrl(image) {
   min-width: 0;
 }
 .album-chip {
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 20px;
   padding: 4px 4px 4px 4px;
-  background: white;
+  background: rgb(var(--v-theme-surface));
   cursor: pointer;
   margin-right: 8px;
   margin-bottom: 8px;
@@ -341,14 +341,8 @@ function getThumbnailUrl(image) {
   user-select: none;
   padding: 0 4px;
 }
-.image-card {
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s;
-}
 .image-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: rgb(var(--v-theme-primary));
 }
 .cursor-pointer {
   cursor: pointer;

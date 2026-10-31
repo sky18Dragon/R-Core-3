@@ -96,7 +96,7 @@ function drawToneCurve() {
   ctx.lineTo(size, 0);
   ctx.stroke();
 
-  ctx.strokeStyle = "#1976D2";
+  ctx.strokeStyle = "#111111";
   ctx.lineWidth = 2;
   ctx.beginPath();
 

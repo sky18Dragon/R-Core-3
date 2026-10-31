@@ -1,0 +1,212 @@
+/* "Paper" skin for the device pages: Apple-HIG proportions, e-ink palette.
+   Everything is scoped to .v-theme--paper (set by <v-app theme="paper">), so /demo and
+   any other theme are untouched. Colours come from the theme tokens in plugins/vuetify.js. */
+
+.v-theme--paper {
+  --paper-line: #e0e0e0;
+  --paper-fill: #f0f0f0;
+  --paper-ink: #111111;
+  --paper-ink-2: #666666;
+  --paper-radius: 12px;
+  --paper-radius-sm: 10px;
+}
+
+.v-application.v-theme--paper {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue",
+    "Noto Sans SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Vuetify re-declares Roboto on its typography helpers, buttons and fields. */
+.v-theme--paper
+  :is(
+    .text-h1,
+    .text-h2,
+    .text-h3,
+    .text-h4,
+    .text-h5,
+    .text-h6,
+    .text-subtitle-1,
+    .text-subtitle-2,
+    .text-body-1,
+    .text-body-2,
+    .text-caption,
+    .text-overline,
+    .v-btn,
+    .v-field,
+    .v-list-item-title,
+    .v-tab,
+    .v-chip,
+    .v-card-title,
+    .v-card-subtitle,
+    .v-label,
+    .v-alert-title,
+    .v-toolbar-title,
+    .v-snackbar,
+    .v-table
+  ) {
+  font-family: inherit !important;
+  letter-spacing: normal;
+}
+
+.v-theme--paper .text-h6,
+.v-theme--paper .v-card-title {
+  font-weight: 600;
+}
+
+/* ── Surfaces: flat, hairline borders instead of shadows ── */
+.v-theme--paper .v-card,
+.v-theme--paper .v-sheet,
+.v-theme--paper .v-expansion-panel,
+.v-theme--paper .v-menu > .v-overlay__content > .v-list {
+  box-shadow: none !important;
+}
+
+.v-theme--paper .v-card:not(.v-card--variant-text):not(.v-card--variant-plain) {
+  border: 1px solid var(--paper-line);
+  border-radius: var(--paper-radius);
+}
+
+/* Dialogs and drawers float over a dimmed page, so they keep a clear edge. */
+.v-theme--paper .v-overlay__content > .v-card {
+  border: 1px solid var(--paper-ink);
+}
+
+.v-theme--paper .v-navigation-drawer {
+  border-left: 1px solid var(--paper-line);
+  box-shadow: none !important;
+}
+
+.v-theme--paper .v-app-bar,
+.v-theme--paper .v-toolbar {
+  box-shadow: none !important;
+}
+
+.v-theme--paper .v-app-bar {
+  border-bottom: 1px solid var(--paper-line);
+}
+
+/* ── Buttons: sentence case, 12px radius, black fills ── */
+.v-theme--paper .v-btn {
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: 0;
+  box-shadow: none !important;
+}
+
+.v-theme--paper .v-btn:not(.v-btn--icon):not(.v-btn--size-x-small):not(.v-btn--size-small) {
+  border-radius: var(--paper-radius-sm);
+}
+
+.v-theme--paper .v-btn--variant-outlined {
+  border-color: var(--paper-ink);
+}
+
+.v-theme--paper .v-btn--variant-text.text-error,
+.v-theme--paper .v-btn--variant-text.text-primary {
+  text-decoration: none;
+}
+
+/* ── Fields ── */
+.v-theme--paper .v-field--variant-outlined .v-field__outline {
+  --v-field-border-opacity: 0.25;
+}
+
+.v-theme--paper .v-field--variant-outlined {
+  border-radius: var(--paper-radius-sm);
+}
+
+.v-theme--paper .v-field--variant-outlined.v-field--focused .v-field__outline {
+  --v-field-border-opacity: 1;
+}
+
+.v-theme--paper .v-field__outline__start,
+.v-theme--paper .v-field__outline__end {
+  border-radius: var(--paper-radius-sm) 0 0 var(--paper-radius-sm);
+}
+
+.v-theme--paper .v-field__outline__end {
+  border-radius: 0 var(--paper-radius-sm) var(--paper-radius-sm) 0;
+}
+
+.v-theme--paper .v-messages {
+  opacity: 1;
+  color: var(--paper-ink-2);
+}
+
+/* ── Chips, tabs, alerts, lists ── */
+.v-theme--paper .v-chip {
+  font-weight: 500;
+}
+
+.v-theme--paper .v-tab {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+.v-theme--paper .v-alert {
+  border-radius: var(--paper-radius);
+}
+
+.v-theme--paper .v-alert--variant-tonal {
+  border: 1px solid var(--paper-line);
+}
+
+.v-theme--paper .v-alert--variant-tonal::before {
+  background: var(--paper-fill);
+  opacity: 1;
+}
+
+/* Errors get a heavier edge so they read without colour. */
+.v-theme--paper .v-alert.text-error {
+  border: 2px solid var(--paper-ink);
+}
+
+.v-theme--paper .v-list-item--active,
+.v-theme--paper .v-list-item:hover {
+  background: var(--paper-fill);
+}
+
+.v-theme--paper .v-divider {
+  opacity: 1;
+  border-color: var(--paper-line);
+}
+
+.v-theme--paper .v-snackbar__wrapper {
+  border-radius: var(--paper-radius);
+  box-shadow: none;
+}
+
+.v-theme--paper .v-overlay__scrim {
+  background: #111;
+  opacity: 0.35;
+}
+
+/* Greys from Vuetify helper classes map onto the paper greys. */
+.v-theme--paper .bg-grey-lighten-3 {
+  background-color: var(--paper-fill) !important;
+}
+.v-theme--paper .text-grey {
+  color: var(--paper-ink-2) !important;
+}
+
+/* ── Focus: a plain black ring on every surface ── */
+.v-theme--paper :is(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--paper-ink);
+  outline-offset: 2px;
+}
+.v-theme--paper .v-btn:focus-visible {
+  outline-offset: 1px;
+}
+
+/* ── E-ink feel: nothing slides or fades for long ── */
+@media (prefers-reduced-motion: reduce) {
+  .v-theme--paper *,
+  .v-theme--paper *::before,
+  .v-theme--paper *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

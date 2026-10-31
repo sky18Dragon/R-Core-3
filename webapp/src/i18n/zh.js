@@ -435,6 +435,7 @@ export default {
   "Hidden or not listed": "隐藏或未列出的网络",
   "Network name": "网络名称",
   Required: "必填",
+  Low: "电量低",
   Optional: "可选",
   Show: "显示",
   Hide: "隐藏",

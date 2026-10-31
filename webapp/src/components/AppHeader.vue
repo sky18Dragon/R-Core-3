@@ -28,11 +28,12 @@ async function handleRotate() {
   rotating.value = false;
 }
 
-function getBatteryColor(level) {
-  if (level < 20) return "error";
-  if (level < 50) return "warning";
-  return "success";
-}
+// Low charge is flagged with a different icon and a word, not a colour.
+const batteryLow = computed(() => appStore.battery.level < 20 && !appStore.battery.charging);
+const batteryIcon = computed(() => {
+  if (appStore.battery.charging) return "mdi-battery-charging";
+  return batteryLow.value ? "mdi-battery-alert-variant-outline" : "mdi-battery";
+});
 
 function openSystemSettings() {
   settingsStore.systemSettingsOpen = true;
@@ -40,17 +41,24 @@ function openSystemSettings() {
 </script>
 
 <template>
-  <v-app-bar color="primary" density="comfortable">
+  <v-app-bar color="surface" flat density="comfortable">
     <template #prepend>
-      <v-img src="/icon.svg" alt="PhotoFrame" width="40" height="40" class="ml-2" />
+      <!-- Same monochrome frame glyph as the setup page -->
+      <svg class="header-glyph ml-3" viewBox="0 0 72 52" aria-hidden="true">
+        <rect x="2" y="2" width="68" height="48" rx="6" class="g-frame" />
+        <rect x="9" y="9" width="54" height="34" rx="1.5" class="g-paper" />
+        <circle cx="24" cy="20" r="4" class="g-mid" />
+        <path d="M9 43 L29 26 L41 36 L49 29 L63 43 Z" class="g-ink" />
+      </svg>
     </template>
 
-    <v-app-bar-title class="ml-4">{{ deviceTitle }}</v-app-bar-title>
+    <v-app-bar-title class="ml-3 font-weight-bold">{{ deviceTitle }}</v-app-bar-title>
 
     <template #append>
       <!-- Show the next image -->
       <v-btn
         icon
+        variant="text"
         :loading="rotating"
         :title="t('Show next image')"
         :aria-label="t('Show next image')"
@@ -62,26 +70,29 @@ function openSystemSettings() {
       <!-- Battery: only on frames that have one -->
       <v-chip
         v-if="appStore.battery.connected"
-        variant="flat"
-        :color="getBatteryColor(appStore.battery.level)"
-        class="text-white mx-2"
+        variant="outlined"
+        class="mx-2"
+        :class="{ 'battery-low': batteryLow }"
+        :title="batteryLow ? t('Low') : undefined"
       >
-        <v-icon :icon="appStore.battery.charging ? 'mdi-battery-charging' : 'mdi-battery'" start />
+        <v-icon :icon="batteryIcon" start />
         {{ appStore.battery.level }}%
         <span v-if="appStore.battery.charging" class="ml-1 d-none d-sm-inline">
           {{ t("Charging") }}
         </span>
+        <span v-else-if="batteryLow" class="ml-1 d-none d-sm-inline">{{ t("Low") }}</span>
       </v-chip>
 
       <!-- System settings -->
       <v-btn
         icon
+        variant="text"
         class="mr-1"
         :title="t('System settings')"
         :aria-label="t('System settings')"
         @click="openSystemSettings"
       >
-        <v-badge dot color="warning" :model-value="settingsStore.systemDirty">
+        <v-badge dot color="primary" :model-value="settingsStore.systemDirty">
           <v-icon>mdi-cog</v-icon>
         </v-badge>
       </v-btn>
@@ -91,7 +102,7 @@ function openSystemSettings() {
     <template v-if="!xs" #extension>
       <v-tabs
         :model-value="currentView"
-        color="white"
+        color="primary"
         align-tabs="start"
         class="px-2"
         @update:model-value="goTo"
@@ -108,3 +119,28 @@ function openSystemSettings() {
     </template>
   </v-app-bar>
 </template>
+
+<style scoped>
+.header-glyph {
+  width: 36px;
+  height: 26px;
+}
+.g-frame {
+  fill: #fff;
+  stroke: #111;
+  stroke-width: 4;
+}
+.g-paper {
+  fill: #f0f0f0;
+}
+.g-mid {
+  fill: #c9c9c9;
+}
+.g-ink {
+  fill: #666;
+}
+.battery-low {
+  border-width: 2px;
+  font-weight: 700;
+}
+</style>

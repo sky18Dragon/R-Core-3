@@ -8,6 +8,7 @@ import SystemSettings from "../components/SystemSettings.vue";
 import UploadView from "./UploadView.vue";
 import AlbumsView from "./AlbumsView.vue";
 import { currentView, goTo } from "../utils/viewState";
+import "../styles/paper.css";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
@@ -116,11 +117,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <v-app>
+  <v-app theme="paper">
     <AppHeader />
     <SystemSettings />
 
-    <v-main class="bg-grey-lighten-4">
+    <v-main class="bg-background">
       <v-container class="py-3 py-sm-6" style="max-width: 1200px">
         <v-alert
           v-if="
