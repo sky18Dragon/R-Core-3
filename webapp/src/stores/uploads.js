@@ -359,9 +359,11 @@ export const useUploadsStore = defineStore("uploads", () => {
             break;
           }
         }
-      } catch {
+      } catch (err) {
         item.status = "error";
-        item.error = t("Could not process this image.");
+        // The error type is the only clue when this happens on a phone without a console.
+        item.error = `${t("Could not process this image.")} (${err?.name || "Error"})`;
+        console.error("Upload processing failed", err);
         failed++;
       }
     }

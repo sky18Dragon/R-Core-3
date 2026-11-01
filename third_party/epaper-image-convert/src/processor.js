@@ -946,7 +946,8 @@ function rgbToPaletteIndex(r, g, b, grayscale = false) {
  * Pixel packing: 2 pixels per byte, high nibble = first pixel, low nibble = second pixel.
  * For grayscale (GC16 / IT8951) the nibble is the 4-bit gray level (0..15) rather
  * than a Spectra palette index; pass { grayscale: true }.
- * Works in both Node.js (zlib) and browser (CompressionStream) environments.
+ * Works in both Node.js (zlib) and browser (CompressionStream, or a stored-block
+ * gzip fallback where CompressionStream is missing) environments.
  */
 export async function createEPDGZ(canvas, options = {}) {
   const { grayscale = false } = options;
@@ -987,6 +988,9 @@ export async function createEPDGZ(canvas, options = {}) {
   if (typeof Buffer !== "undefined" && typeof window === "undefined") {
     const { gzipSync } = await import("zlib");
     return gzipSync(rawBuffer);
+  } else if (typeof CompressionStream === "undefined") {
+    // Safari before 16.4 (iOS 16.0-16.3) has no CompressionStream.
+    return gzipStored(rawBuffer);
   } else {
     const cs = new CompressionStream("gzip");
     const writer = cs.writable.getWriter();
@@ -995,6 +999,51 @@ export async function createEPDGZ(canvas, options = {}) {
     const compressed = await new Response(cs.readable).arrayBuffer();
     return new Uint8Array(compressed);
   }
+}
+
+let crcTable = null;
+
+function crc32(bytes) {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      crcTable[n] = c >>> 0;
+    }
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * Valid gzip (RFC 1952) of `bytes` using stored (uncompressed) deflate blocks.
+ * A dependency-free fallback for browsers without CompressionStream: any
+ * zlib/gzip reader accepts it; the output is only ~0.08% larger than the input.
+ */
+export function gzipStored(bytes) {
+  const MAX_BLOCK = 65535;
+  const blocks = Math.max(1, Math.ceil(bytes.length / MAX_BLOCK));
+  const out = new Uint8Array(10 + bytes.length + blocks * 5 + 8);
+  out.set([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]); // header: deflate, no flags/mtime, OS unknown
+  let o = 10;
+  for (let b = 0; b < blocks; b++) {
+    const start = b * MAX_BLOCK;
+    const len = Math.min(MAX_BLOCK, bytes.length - start);
+    out[o++] = b === blocks - 1 ? 1 : 0; // BFINAL on the last block, BTYPE=00 (stored)
+    out[o++] = len & 0xff;
+    out[o++] = len >>> 8;
+    out[o++] = ~len & 0xff;
+    out[o++] = (~len >>> 8) & 0xff;
+    out.set(bytes.subarray(start, start + len), o);
+    o += len;
+  }
+  const crc = crc32(bytes);
+  const size = bytes.length >>> 0;
+  for (let i = 0; i < 4; i++) out[o++] = (crc >>> (8 * i)) & 0xff;
+  for (let i = 0; i < 4; i++) out[o++] = (size >>> (8 * i)) & 0xff;
+  return out;
 }
 
 // ===== Main Processing Function =====

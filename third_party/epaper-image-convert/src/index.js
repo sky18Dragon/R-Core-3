@@ -16,6 +16,7 @@ export {
   createPNG,
   createBMP,
   createEPDGZ,
+  gzipStored,
   getCanvasContext,
   paletteToArray,
   rgbToLab,

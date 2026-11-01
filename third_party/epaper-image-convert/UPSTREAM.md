@@ -6,6 +6,7 @@
 - 本项目修改（单独列出，未向上游提交）：
   1. `makeGrayscale16()` 新增可选 `levelsY`（16 个实测相对亮度），按码直接生成 perceived 灰阶。
   2. `findClosestColorRGB/LAB` 仅对非灰阶调色板跳过下标 4（六色屏保留位）；灰阶模式 16 码全部可用。
+  3. `createEPDGZ()` 在浏览器缺少 `CompressionStream`（Safari 16.4 之前，即 iOS 16.0–16.3）时改用新增的 `gzipStored()`：无依赖、存储块（不压缩）的标准 gzip，设备端 zlib 可直接解开，文件约为压缩版的 4 倍（1216×684 约 416KB）。2026-11-02 因 iOS 16 手机热点上传“处理失败”加入。
 
 原样文件 SHA256：
 
