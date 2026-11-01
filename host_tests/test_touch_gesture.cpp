@@ -53,6 +53,14 @@ TEST(TouchGesture, KeysUseOriginStripAndPitch)
         EXPECT_EQ(f.g.kind, TOUCH_GESTURE_KEY);
         EXPECT_EQ(f.g.key, k);
     }
+    Feed held;  // a long press stays a key press and reports how long it was held
+    held.down(TOUCH_KEY_PITCH + 80, TOUCH_KEY_AREA_TOP + 20, 0);
+    for (int64_t ms = 50; ms < TOUCH_LONG_PRESS_MS + 500; ms += 50)
+        EXPECT_FALSE(held.down(TOUCH_KEY_PITCH + 82, TOUCH_KEY_AREA_TOP + 21, ms));
+    ASSERT_TRUE(held.up(TOUCH_LONG_PRESS_MS + 500));
+    EXPECT_EQ(held.g.kind, TOUCH_GESTURE_KEY);
+    EXPECT_EQ(held.g.key, 1);
+    EXPECT_EQ(held.g.hold_ms, TOUCH_LONG_PRESS_MS + 500);
     Feed beyond;  // past the third key segment
     beyond.down(TOUCH_KEY_COUNT * TOUCH_KEY_PITCH + 5, TOUCH_KEY_AREA_TOP + 20, 0);
     ASSERT_TRUE(beyond.up(100));
@@ -109,11 +117,17 @@ TEST(TouchGesture, ActionMappingFollowsLayoutAndRotation)
     g.kind = TOUCH_GESTURE_KEY;
     // Measured at 180 deg: key 0 is the viewer's leftmost (previous).
     g.key = 0; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_PREVIOUS);
-    g.key = 1; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NONE);
+    g.key = 1; g.hold_ms = 200; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_MENU);
+    g.hold_ms = TOUCH_LONG_PRESS_MS - 1; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_MENU);
+    g.hold_ms = TOUCH_LONG_PRESS_MS; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_HOTSPOT);
+    EXPECT_EQ(touch_action_for(&g, false, true), TOUCH_ACTION_HOTSPOT);
+    g.hold_ms = 0;
     g.key = 2; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NEXT);
     g.key = 0; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NEXT);
     g.key = 2; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_PREVIOUS);
     EXPECT_EQ(touch_action_for(nullptr, true, false), TOUCH_ACTION_NONE);
     EXPECT_STREQ(touch_action_name(TOUCH_ACTION_NEXT), "next");
+    EXPECT_STREQ(touch_action_name(TOUCH_ACTION_MENU), "menu");
+    EXPECT_STREQ(touch_action_name(TOUCH_ACTION_HOTSPOT), "hotspot");
     EXPECT_STREQ(touch_gesture_name((touch_gesture_kind_t) 99), "unknown");
 }

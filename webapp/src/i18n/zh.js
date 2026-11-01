@@ -457,4 +457,47 @@ export default {
   "Close this page.": "关闭此页面。",
   "Reconnect your phone to your usual WiFi network.": "让手机重新连回你平时用的 Wi-Fi。",
   "Then open": "然后打开",
+  "Photo hotspot": "热点传图",
+  "Photo hotspot on": "热点传图中",
+  "{n} min": "{n} 分钟",
+  Never: "不自动关闭",
+  "1 to 32 bytes, no control characters": "1–32 字节，不能含控制字符",
+  "8 to 63 letters, digits or symbols (no Chinese characters)":
+    "8–63 位字母、数字或符号（不能用中文）",
+  "Without a router or Internet, a phone can join the frame's own Wi-Fi and use this page to upload photos.":
+    "没有路由器、没有网络时，手机可以直接连接相框自己的 Wi-Fi，用本页面上传照片。",
+  "Hotspot on": "热点已开启",
+  "Hotspot off": "热点已关闭",
+  "{n} phone(s) connected": "已连接 {n} 台手机",
+  "Turn on hotspot": "开启热点",
+  "Turn off after upload": "上传完成后关闭",
+  "Turn off hotspot": "关闭热点",
+  "The last turn-off was not confirmed by the radio. Turn it off again before turning it on.":
+    "上次关闭热点未得到无线模块确认，请先再关闭一次，再重新开启。",
+  "Wi-Fi name": "Wi-Fi 名称",
+  "Web page": "网页地址",
+  "New name or password applies the next time the hotspot is turned on.":
+    "新名称或新密码在下次开启热点时生效。",
+  "Turn off automatically when no phone is connected for": "无手机连接多久后自动关闭",
+  "Custom Wi-Fi name": "自定义 Wi-Fi 名称",
+  "Leave empty to use {name}": "留空则使用 {name}",
+  Save: "保存",
+  "Set your own password": "自定义密码",
+  "Generate a new password": "随机生成新密码",
+  "Turn on hotspot?": "开启热点？",
+  "The frame leaves your home Wi-Fi and this page will disconnect. Then join the Wi-Fi shown on the frame's screen and open {url}.":
+    "相框会断开家里的 Wi-Fi，本页面随即断开。之后请连接相框屏幕上显示的 Wi-Fi，再打开 {url}。",
+  "turns off in {time} without a phone": "无手机连接 {time} 后关闭",
+  "The frame's clock is off by more than 2 minutes.": "相框时间与本机相差超过 2 分钟。",
+  "Use this phone's time": "用本机时间校准",
+  "Hotspot is turning on": "正在开启热点",
+  "This page disconnects now. On your phone, join the frame's Wi-Fi:":
+    "本页面即将断开。请在手机上连接相框的 Wi-Fi：",
+  "Then open {url}. The frame's screen shows both as QR codes.":
+    "然后打开 {url}。相框屏幕上也有这两项的二维码。",
+  "If Android says the network has no Internet, choose to stay connected; if the page still does not open, turn off mobile data for a moment.":
+    "安卓提示“此网络无法访问互联网”时请选择保持连接；如果仍打不开页面，请暂时关闭移动数据。",
+  "Hotspot is turning off": "正在关闭热点",
+  "The frame is rejoining your home Wi-Fi and this page disconnects now. Switch your phone back to your home Wi-Fi to reach the frame again.":
+    "相框正在重新连接家里的 Wi-Fi，本页面即将断开。请把手机切回家里的 Wi-Fi 后再访问相框。",
 };

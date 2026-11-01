@@ -120,6 +120,14 @@ Trigger NTP time sync.
 }
 ```
 
+### `POST /api/time` (Read Pico local frame with hotspot)
+
+Set the device clock from the browser, for frames that cannot reach NTP (photo-transfer hotspot). Wall clock only; the board has no RTC to write, so it is lost on reboot.
+
+**Request:** `{"timestamp": 1793577600}` (unix seconds, 2024-01-01 … 2099-12-31)
+
+**Response:** same as `GET /api/time`, plus `"status": "success"`. `400` when the value is out of range.
+
 ### `POST /api/keep_alive`
 
 Reset the auto-sleep timer.
@@ -130,6 +138,65 @@ Reset the auto-sleep timer.
   "status": "success"
 }
 ```
+
+---
+
+## Photo-Transfer Hotspot (Read Pico local frame)
+
+Lets a phone upload photos with no router: the frame leaves the home Wi-Fi and opens a WPA2 access point serving this same web page at `http://192.168.4.1`. The two are exclusive. Off after every boot. Also toggled by holding the middle touch key 3 s; a short press shows the connection screen again while on. Design: [PRD-HOTSPOT-SETTINGS](PRD-HOTSPOT-SETTINGS.md).
+
+### `GET /api/hotspot`
+
+```json
+{
+  "supported": true,
+  "state": "on",
+  "on": true,
+  "wants_on": true,
+  "ssid": "PhotoFrame - 3F2A1",
+  "password": "K7MP4TQX",
+  "default_ssid": "PhotoFrame - 3F2A1",
+  "custom_ssid": false,
+  "pending_change": false,
+  "url": "http://192.168.4.1",
+  "idle_minutes": 10,
+  "never_close_allowed": true,
+  "clients": 1,
+  "transfers": 0,
+  "remaining_s": 545,
+  "last_stop_reason": "none",
+  "stop_unconfirmed": false,
+  "last_error": "ESP_OK"
+}
+```
+
+- `state`: `off`, `starting`, `on`, `stopping` or `failed`. While on, `ssid`/`password` are what phones are joining; `pending_change` says a saved edit applies at the next start.
+- `remaining_s`: seconds until the automatic close (counts only while no phone is connected and no upload runs), `-1` when none.
+- `never_close_allowed`: `false` on the battery-sleep build, where `idle_minutes` cannot be `0`.
+- `stop_unconfirmed`: the last radio exit failed; turning on is refused until an explicit off succeeds.
+
+### `POST /api/hotspot`
+
+All fields optional; settings are saved first, then `on` is applied about 1.5 s later so this response reaches the phone before the radio switches.
+
+```json
+{"on": true}
+{"ssid": "Living Room Frame"}
+{"ssid": ""}
+{"password": "my-own-pass"}
+{"regenerate_password": true}
+{"idle_minutes": 30}
+```
+
+- `ssid`: 1–32 bytes without control characters; `""` returns to the device default.
+- `password`: 8–63 printable ASCII characters. The first random password (8 characters without look-alikes) is created on first boot and kept.
+- `idle_minutes`: `10`, `30`, `60`, or `0` (never; not on the battery-sleep build).
+
+Returns the status above. `400` for an invalid value, `409` when turning on is refused (`stop_unconfirmed`) or the settings could not be saved.
+
+### Connectivity probes
+
+While the hotspot is on, `GET /generate_204`, `/gen_204` (204), `/hotspot-detect.html`, `/library/test/success.html` ("Success"), `/connecttest.txt` and `/ncsi.txt` answer as an online network so phones do not open a captive-portal sheet. They need no web password and return `404` when the hotspot is off.
 
 ---
 

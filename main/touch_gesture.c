@@ -73,6 +73,8 @@ touch_action_t touch_action_for(const touch_gesture_t *g, bool landscape, bool r
 {
     if (!g) return TOUCH_ACTION_NONE;
     if (g->kind == TOUCH_GESTURE_KEY) {
+        if (g->key == TOUCH_KEY_COUNT / 2)
+            return g->hold_ms >= TOUCH_LONG_PRESS_MS ? TOUCH_ACTION_HOTSPOT : TOUCH_ACTION_MENU;
         if (g->key != 0 && g->key != TOUCH_KEY_COUNT - 1) return TOUCH_ACTION_NONE;
         // Measured 2026-10-29 at 180 deg: key 0 is the viewer's leftmost key.
         bool first = g->key == 0;
@@ -101,5 +103,11 @@ const char *touch_gesture_name(touch_gesture_kind_t kind)
 
 const char *touch_action_name(touch_action_t action)
 {
-    return action == TOUCH_ACTION_NEXT ? "next" : action == TOUCH_ACTION_PREVIOUS ? "previous" : "none";
+    switch (action) {
+    case TOUCH_ACTION_NEXT: return "next";
+    case TOUCH_ACTION_PREVIOUS: return "previous";
+    case TOUCH_ACTION_MENU: return "menu";
+    case TOUCH_ACTION_HOTSPOT: return "hotspot";
+    default: return "none";
+    }
 }

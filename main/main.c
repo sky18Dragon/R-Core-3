@@ -63,6 +63,9 @@
 #include "utils.h"
 #include "wifi_manager.h"
 #include "wifi_provisioning.h"
+#if CONFIG_READ_PICO_HOTSPOT
+#include "read_pico_hotspot.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -349,6 +352,13 @@ static void late_wifi_task(void *arg)
             xEventGroupWaitBits(wifi_manager_get_event_group(), WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                 pdFALSE, pdFALSE, portMAX_DELAY);
 #endif
+#if CONFIG_READ_PICO_HOTSPOT
+        // The hotspot owns the radio (its lease sets the fail bit): not a station failure.
+        if (read_pico_hotspot_owns_radio()) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+#endif
         if ((bits & WIFI_FAIL_BIT) && !wifi_manager_is_connected()) {
             // The background retries only give up when the AP keeps refusing
             // the password -- the same verdict app_main acts on at boot.
@@ -468,6 +478,9 @@ static void button_task(void *arg)
 
 #if CONFIG_READ_PICO_TOUCH
         read_pico_touch_nav_poll(esp_timer_get_time() / 1000);
+#endif
+#if CONFIG_READ_PICO_HOTSPOT
+        read_pico_hotspot_poll(esp_timer_get_time() / 1000);
 #endif
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -1231,6 +1244,12 @@ void app_main(void)
 #endif
     }
 
+#if CONFIG_READ_PICO_HOTSPOT
+    // Off after every boot; a settings error only disables the hotspot.
+    esp_err_t hotspot_init = read_pico_hotspot_init();
+    if (hotspot_init != ESP_OK)
+        ESP_LOGW(TAG, "Hotspot unavailable (%s); frame continues", esp_err_to_name(hotspot_init));
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
     esp_err_t background_start = read_pico_background_add(READ_PICO_BACKGROUND_BUTTON,
                                                           button_task, NULL, 8192, 5);

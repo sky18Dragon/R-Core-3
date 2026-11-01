@@ -128,6 +128,11 @@ typedef enum { IP_MODE_DHCP = 0, IP_MODE_STATIC = 1 } ip_mode_t;
 #define NVS_WIFI_SSID_KEY "wifi_ssid"
 #define NVS_WIFI_PASS_KEY "wifi_pass"
 
+// Photo-transfer hotspot (Read Pico local frame)
+#define NVS_HOTSPOT_SSID_KEY "hs_ssid"
+#define NVS_HOTSPOT_PASS_KEY "hs_pass"
+#define NVS_HOTSPOT_IDLE_KEY "hs_idle"
+
 // General
 #define NVS_NAMESPACE "photoframe"
 #define NVS_SETUP_COMPLETE_KEY "setup_complete"

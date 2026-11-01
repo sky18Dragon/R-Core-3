@@ -591,7 +591,7 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertNotIn('close(', stop)
         self.assertNotIn('vTaskDelete', stop)
         ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
-        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('static esp_err_t start_ap')]
         self.assertIn('error = dns_server_stop_checked();', stop)
         self.assertIn('if (error != ESP_OK) goto failed;', stop)
         self.assertIn('error != ESP_ERR_WIFI_NOT_STARTED', stop)
@@ -604,10 +604,15 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertIn('wifi_manager_provisioning_begin(&s_manager_owner, &netif)', ap)
         self.assertIn('ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED', ap)
         self.assertIn('provisioning_session_cancel()', ap)
-        start = ap[ap.index('esp_err_t wifi_provisioning_ap_start'):]
+        start = ap[ap.index('static esp_err_t start_ap'):ap.index('esp_err_t wifi_provisioning_ap_start(')]
         self.assertLess(start.index('AP_REQUIRE(dns_server_start())'),
                         start.index('provisioning_session_begin()'))
         self.assertLess(start.index('provisioning_session_begin()'), start.index('s_state = AP_ACTIVE'))
+        # The photo-transfer hotspot shares this lifecycle: WPA2 only, no save session.
+        self.assertIn('if (register_routes && !provisioning_session_begin())', start)
+        self.assertIn('config.ap.authmode = WIFI_AUTH_WPA2_PSK;', start)
+        hotspot = ap[ap.index('esp_err_t wifi_provisioning_ap_start_hotspot'):]
+        self.assertIn('if (!password) return ESP_ERR_INVALID_ARG;', hotspot)
         self.assertNotIn('ESP_ERROR_CHECK', ap)
         for forbidden in ('nvs_', 'esp_restart', 'esp_netif_destroy', 'vTaskDelete'):
             self.assertNotIn(forbidden, ap)
@@ -645,7 +650,7 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertLess(quiesce.index('cancel_link_locked()'),
                         quiesce.index('xSemaphoreTake(s_connection_lock, 0)'))
         ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
-        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('static esp_err_t start_ap')]
         self.assertLess(stop.index('wifi_manager_provisioning_quiesce'), stop.index('dns_server_stop_checked'))
         self.assertIn('WIFI_PROVISION_READY', ap)
         self.assertIn('WIFI_PROVISION_FAILED', ap)
@@ -684,6 +689,9 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/touch", "HTTP_GET"),  # CONFIG_READ_PICO_TOUCH only
             ("/api/power", "HTTP_GET"),  # CONFIG_READ_PICO_PMU_SLEEP only
             ("/api/power", "HTTP_POST"),
+            ("/api/hotspot", "HTTP_GET"),  # CONFIG_READ_PICO_HOTSPOT only
+            ("/api/hotspot", "HTTP_POST"),
+            ("/api/time", "HTTP_POST"),
             ("/api/time/sync", "HTTP_POST"),
             ("/api/keep_alive", "HTTP_POST"),
             ("/api/format-storage", "HTTP_POST"),
@@ -712,12 +720,19 @@ class ReadPicoBuildTests(unittest.TestCase):
         auth = source[source.index('static esp_err_t auth_gate'):source.index('// Register a route')]
         self.assertLess(auth.index('http_requests_ready(req)'), auth.index('http_auth_check(req'))
         self.assertIn('READ_PICO_HTTP_FRAME, req->handle', source)
+        # Phone connectivity probes bypass auth (no credentials) and answer only while the hotspot is on.
+        probe = source[source.index('static esp_err_t connectivity_probe_handler'):
+                       source.index('static esp_err_t register_probe')]
+        self.assertTrue(probe.strip().splitlines()[2].strip().startswith('if (!read_pico_hotspot_on()) return httpd_resp_send_404'))
+        self.assertIn('register_probe(handle, probes[i])', routes)
 
     def test_shared_http_ownership_is_used_before_ap_radio_and_checked_main_startup(self):
         ap = (ROOT / 'main/wifi_provisioning_ap.c').read_text()
-        start = ap[ap.index('esp_err_t wifi_provisioning_ap_start'):]
+        start = ap[ap.index('static esp_err_t start_ap'):ap.index('esp_err_t wifi_provisioning_ap_start(')]
         self.assertLess(start.index('read_pico_http_claim'), start.index('wifi_manager_provisioning_begin'))
-        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('esp_err_t wifi_provisioning_ap_start')]
+        # Only the provisioning AP takes the HTTP role; the hotspot keeps the frame server.
+        self.assertIn('if (register_routes) {\n        error = read_pico_http_claim', start)
+        stop = ap[ap.index('static esp_err_t stop_owned'):ap.index('static esp_err_t start_ap')]
         self.assertLess(stop.index('read_pico_http_stop'), stop.index('esp_wifi_stop'))
         self.assertLess(stop.index('esp_wifi_stop'), stop.index('read_pico_http_release'))
         source = (ROOT / 'main/http_server.c').read_text()
@@ -937,7 +952,8 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertLess(helper.index('req->content_len >= CONFIG_DOCUMENT_CAPACITY'), helper.index('malloc('))
         self.assertLess(helper.index('config_document_receive('), helper.index('config_document_parse('))
         self.assertIn('if (error == ESP_OK) error = config_document_parse', helper)
-        self.assertEqual(http.count('receive_config_document(req,'), 3)
+        # General config, two settings handlers, plus /api/hotspot and POST /api/time.
+        self.assertEqual(http.count('receive_config_document(req,'), 5)
         self.assertIn('req->method != HTTP_GET && req->method != HTTP_POST', http)
         for prefix in ('processing_settings', 'color_palette'):
             start = http.index(f'static esp_err_t {prefix}_handler_values')

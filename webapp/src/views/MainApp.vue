@@ -2,8 +2,9 @@
 import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
-import { useAppStore, useSettingsStore } from "../stores";
+import { useAppStore, useHotspotStore, useSettingsStore } from "../stores";
 import AppHeader from "../components/AppHeader.vue";
+import HotspotBanner from "../components/HotspotBanner.vue";
 import SystemSettings from "../components/SystemSettings.vue";
 import UploadView from "./UploadView.vue";
 import AlbumsView from "./AlbumsView.vue";
@@ -12,6 +13,7 @@ import "../styles/paper.css";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
+const hotspotStore = useHotspotStore();
 const { xs } = useDisplay();
 
 const hasStorage = computed(
@@ -31,6 +33,8 @@ onMounted(async () => {
     settingsStore.loadSettings(),
     settingsStore.loadDeviceSettings(),
     settingsStore.loadPalette(),
+    hotspotStore.load(),
+    hotspotStore.checkClock(),
   ]);
   // Grayscale frames default to the grayscale preset (if not yet customized).
   if (appStore.isGrayscale) {
@@ -40,6 +44,10 @@ onMounted(async () => {
 
   // Refresh battery every 30s
   setInterval(() => appStore.loadBatteryStatus(), 30000);
+  // While the hotspot is on, keep its countdown and phone count current.
+  setInterval(() => {
+    if (hotspotStore.on && document.visibilityState === "visible") hotspotStore.load();
+  }, 10000);
 });
 
 // Keep the device awake while the webapp is open and focused.
@@ -56,7 +64,10 @@ const wakeupKeyName = computed(() => appStore.systemInfo.wakeup_key_name || t("w
 
 async function pingKeepAlive() {
   const alive = await appStore.keepAlive();
-  deviceAsleep.value = !alive;
+  // After a hotspot switch the page is expected to lose the frame; the
+  // switch dialog already says where to find it, so this is not "asleep".
+  deviceAsleep.value = !alive && !hotspotStore.handoff;
+  if (alive && hotspotStore.supported) hotspotStore.load();
   if (alive) {
     stopWakeRetry();
   } else {
@@ -139,6 +150,8 @@ onUnmounted(() => {
             )
           "
         ></v-alert>
+
+        <HotspotBanner />
 
         <!-- Both views stay mounted so a half-finished upload survives a trip to the albums -->
         <UploadView v-show="currentView === 'upload'" />

@@ -30,6 +30,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
+#include "qrcode.h"
 #include "storage.h"
 #include "utils.h"
 #include "zlib.h"
@@ -662,6 +663,125 @@ esp_err_t display_manager_show_calibration(void)
 }
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
+#define HOTSPOT_BLACK 0x0
+#define HOTSPOT_MARGIN 40
+#define HOTSPOT_QR_QUIET_MODULES 4
+
+static struct {
+    UWORD x, y, size;
+} s_hotspot_qr;
+
+static void hotspot_qr_draw(esp_qrcode_handle_t qrcode)
+{
+    int modules = esp_qrcode_get_size(qrcode);
+    int module = s_hotspot_qr.size / (modules + 2 * HOTSPOT_QR_QUIET_MODULES);
+    if (module < 1) module = 1;
+    int offset = (s_hotspot_qr.size - module * modules) / 2;
+    for (int qy = 0; qy < modules; ++qy)
+        for (int qx = 0; qx < modules; ++qx) {
+            if (!esp_qrcode_get_module(qrcode, qx, qy)) continue;
+            UWORD x0 = s_hotspot_qr.x + offset + qx * module;
+            UWORD y0 = s_hotspot_qr.y + offset + qy * module;
+            for (int dy = 0; dy < module; ++dy)
+                for (int dx = 0; dx < module; ++dx) Paint_SetPixel(x0 + dx, y0 + dy, HOTSPOT_BLACK);
+        }
+}
+
+static esp_err_t hotspot_draw_qr(const char *text, UWORD x, UWORD y, UWORD size)
+{
+    s_hotspot_qr.x = x;
+    s_hotspot_qr.y = y;
+    s_hotspot_qr.size = size;
+    esp_qrcode_config_t config = {
+        .display_func = hotspot_qr_draw,
+        .max_qrcode_version = 10,  // the longest escaped Wi-Fi text still fits at ECC M
+        .qrcode_ecc_level = ESP_QRCODE_ECC_MED,
+    };
+    return esp_qrcode_generate(&config, text);
+}
+
+// Font24 covers printable ASCII only; other bytes (e.g. UTF-8 names) draw as '?'.
+// Wraps inside width and returns the top of the next line.
+static UWORD hotspot_draw_text(UWORD x, UWORD y, UWORD width, const char *text, UBYTE scale)
+{
+    UWORD step = Font24.Width * scale, line = Font24.Height * scale, cx = x;
+    for (; *text; ++text) {
+        if (cx + step > x + width) {
+            cx = x;
+            y += line;
+        }
+        if (y + line > Paint.Height) break;
+        char c = *text >= ' ' && *text <= '~' ? *text : '?';
+        Paint_DrawChar_Scaled(cx, y, c, &Font24, HOTSPOT_BLACK, display_white_color(), scale, true);
+        cx += step;
+    }
+    return y + line;
+}
+
+// Large when the whole value fits on one line, otherwise normal size and wrapped.
+static UWORD hotspot_draw_value(UWORD x, UWORD y, UWORD width, const char *text)
+{
+    UBYTE scale = strlen(text) * Font24.Width * 2 <= width ? 2 : 1;
+    return hotspot_draw_text(x, y, width, text, scale);
+}
+
+esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
+{
+    if (!screen || !screen->ssid || !screen->password || !screen->wifi_qr || !screen->url)
+        return ESP_ERR_INVALID_ARG;
+    if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire display mutex for hotspot screen");
+        return ESP_FAIL;
+    }
+    display_manager_initialize_paint();  // follows the configured orientation
+    Paint_Clear(display_white_color());
+    UWORD width = Paint.Width, height = Paint.Height;
+    bool landscape = width >= height;
+    UWORD qr = landscape ? 320 : (width - 3 * HOTSPOT_MARGIN) / 2;
+    UWORD qr_top = 110, line = Font24.Height;
+    hotspot_draw_text(HOTSPOT_MARGIN, 36, width - 2 * HOTSPOT_MARGIN, "PHOTO HOTSPOT", 2);
+    UWORD second_x = 2 * HOTSPOT_MARGIN + qr;
+    esp_err_t err = hotspot_draw_qr(screen->wifi_qr, HOTSPOT_MARGIN, qr_top, qr);
+    if (err == ESP_OK) err = hotspot_draw_qr(screen->url, second_x, qr_top, qr);
+    if (err != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        ESP_LOGE(TAG, "Hotspot QR generation failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    UWORD label_y = qr_top + qr + 8;
+    hotspot_draw_text(HOTSPOT_MARGIN, label_y, qr, "1. Scan: join Wi-Fi", 1);
+    hotspot_draw_text(second_x, label_y, qr, "2. Scan: open page", 1);
+    UWORD text_x = landscape ? 3 * HOTSPOT_MARGIN + 2 * qr : HOTSPOT_MARGIN;
+    UWORD text_y = landscape ? qr_top : label_y + line + HOTSPOT_MARGIN;
+    UWORD text_w = width - text_x - HOTSPOT_MARGIN;
+    text_y = hotspot_draw_text(text_x, text_y, text_w, "Wi-Fi name", 1);
+    text_y = hotspot_draw_value(text_x, text_y + 4, text_w, screen->ssid) + 16;
+    text_y = hotspot_draw_text(text_x, text_y, text_w, "Password", 1);
+    text_y = hotspot_draw_value(text_x, text_y + 4, text_w, screen->password) + 16;
+    text_y = hotspot_draw_text(text_x, text_y, text_w, "Web page", 1);
+    const char *host = strncmp(screen->url, "http://", 7) == 0 ? screen->url + 7 : screen->url;
+    hotspot_draw_value(text_x, text_y + 4, text_w, host);
+    char footer[96];
+    if (screen->idle_minutes)
+        snprintf(footer, sizeof(footer), "Turns off after %u min with no phone connected.",
+                 (unsigned) screen->idle_minutes);
+    else
+        snprintf(footer, sizeof(footer), "Stays on until turned off.");
+    UWORD footer_y = height - HOTSPOT_MARGIN - 2 * line - 8;
+    hotspot_draw_text(HOTSPOT_MARGIN, footer_y, width - 2 * HOTSPOT_MARGIN, footer, 1);
+    hotspot_draw_text(HOTSPOT_MARGIN, footer_y + line + 8, width - 2 * HOTSPOT_MARGIN,
+                      "Hold the middle key 3 s to turn off.", 1);
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
+    bool linked = clear_image_record();
+    xSemaphoreGive(display_mutex);
+    ESP_LOGI(TAG, "Hotspot screen displayed");
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
+}
+
 bool display_manager_take_previous(char *out, size_t capacity)
 {
     if (!display_mutex || xSemaphoreTake(display_mutex, 0) != pdTRUE)
