@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -669,6 +670,7 @@ esp_err_t display_manager_show_calibration(void)
 
 static struct {
     UWORD x, y, size;
+    UWORD top, bottom;  // drawn modules, inside the quiet zone
 } s_hotspot_qr;
 
 static void hotspot_qr_draw(esp_qrcode_handle_t qrcode)
@@ -677,6 +679,8 @@ static void hotspot_qr_draw(esp_qrcode_handle_t qrcode)
     int module = s_hotspot_qr.size / (modules + 2 * HOTSPOT_QR_QUIET_MODULES);
     if (module < 1) module = 1;
     int offset = (s_hotspot_qr.size - module * modules) / 2;
+    s_hotspot_qr.top = s_hotspot_qr.y + offset;
+    s_hotspot_qr.bottom = s_hotspot_qr.top + module * modules;
     for (int qy = 0; qy < modules; ++qy)
         for (int qx = 0; qx < modules; ++qx) {
             if (!esp_qrcode_get_module(qrcode, qx, qy)) continue;
@@ -783,6 +787,180 @@ esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
     bool linked = clear_image_record();
     xSemaphoreGive(display_mutex);
     ESP_LOGI(TAG, "Hotspot screen displayed");
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
+}
+
+#define SETUP_MARGIN 48
+#define SETUP_GRAY 0x9
+#define SETUP_BADGE 72
+
+static bool setup_text_is_ascii(const char *text)
+{
+    for (; *text; ++text)
+        if (*text < ' ' || *text > '~') return false;
+    return true;
+}
+
+// Largest scale (up to max) at which text fits on one line of width.
+static UBYTE setup_fit_scale(const char *text, UWORD width, UBYTE max)
+{
+    UBYTE scale = max;
+    while (scale > 1 && strlen(text) * Font24.Width * scale > width) --scale;
+    return scale;
+}
+
+// Scale-1 text wrapped at spaces (a word longer than a line still breaks
+// inside it). Draws only when draw is set; returns the number of lines.
+static UWORD setup_words(UWORD x, UWORD y, UWORD width, const char *text, bool draw)
+{
+    UWORD per_line = width / Font24.Width, column = 0, lines = 1;
+    if (!per_line) per_line = 1;
+    while (*text) {
+        size_t word = strcspn(text, " ");
+        if (column && column + word > per_line) {  // start the word on a new line
+            ++lines;
+            column = 0;
+        }
+        for (size_t i = 0; i < word; ++i, ++column) {
+            if (column == per_line) {
+                ++lines;
+                column = 0;
+            }
+            UWORD cy = y + (lines - 1) * Font24.Height;
+            char c = text[i] >= ' ' && text[i] <= '~' ? text[i] : '?';
+            if (draw && cy + Font24.Height <= Paint.Height)
+                Paint_DrawChar_Scaled(x + column * Font24.Width, cy, c, &Font24, HOTSPOT_BLACK,
+                                      display_white_color(), 1, true);
+        }
+        text += word;
+        if (*text == ' ') {
+            ++text;
+            if (column && column < per_line) ++column;  // spaces never start a line
+        }
+    }
+    return lines;
+}
+
+static UWORD setup_draw_words(UWORD x, UWORD y, UWORD width, const char *text)
+{
+    return y + setup_words(x, y, width, text, true) * Font24.Height;
+}
+
+// Thick stroke by stamping squares, so it looks the same in every orientation.
+static void setup_stroke(int x0, int y0, int x1, int y1, int thickness, UWORD color)
+{
+    int steps = abs(x1 - x0) > abs(y1 - y0) ? abs(x1 - x0) : abs(y1 - y0);
+    for (int i = 0; i <= steps; ++i) {
+        int px = x0 + (x1 - x0) * i / (steps ? steps : 1) - thickness / 2;
+        int py = y0 + (y1 - y0) * i / (steps ? steps : 1) - thickness / 2;
+        for (int dy = 0; dy < thickness; ++dy)
+            for (int dx = 0; dx < thickness; ++dx) Paint_SetPixel(px + dx, py + dy, color);
+    }
+}
+
+// Filled circle with a white tick: the "done" mark beside the title.
+static void setup_draw_badge(UWORD x, UWORD y)
+{
+    int r = SETUP_BADGE / 2, cx = x + r, cy = y + r;
+    for (int dy = -r; dy <= r; ++dy)
+        for (int dx = -r; dx <= r; ++dx)
+            if (dx * dx + dy * dy <= r * r) Paint_SetPixel(cx + dx, cy + dy, HOTSPOT_BLACK);
+    setup_stroke(cx - 17, cy + 1, cx - 5, cy + 13, 8, display_white_color());
+    setup_stroke(cx - 5, cy + 13, cx + 18, cy - 12, 8, display_white_color());
+}
+
+esp_err_t display_manager_show_setup_complete(const display_setup_screen_t *screen)
+{
+    if (!screen || !screen->address || !screen->address[0]) return ESP_ERR_INVALID_ARG;
+    if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire display mutex for setup screen");
+        return ESP_FAIL;
+    }
+    display_manager_initialize_paint();  // follows the configured orientation
+    Paint_Clear(display_white_color());
+    UWORD width = Paint.Width, height = Paint.Height, line = Font24.Height;
+    UWORD inner = width - 2 * SETUP_MARGIN;
+    bool landscape = width >= height;
+
+    // Header: badge, title, which network it joined, then a rule.
+    UWORD top = 40, title_x = SETUP_MARGIN + SETUP_BADGE + 24;
+    setup_draw_badge(SETUP_MARGIN, top);
+    const char *title = "You're all set";
+    UBYTE title_scale = setup_fit_scale(title, width - title_x - SETUP_MARGIN, 3);
+    UWORD y = hotspot_draw_text(title_x, top + (SETUP_BADGE - line * title_scale) / 2,
+                                width - title_x - SETUP_MARGIN, title, title_scale);
+    char joined[96];
+    if (screen->network && screen->network[0] && setup_text_is_ascii(screen->network))
+        snprintf(joined, sizeof(joined), "Connected to %s", screen->network);
+    else
+        snprintf(joined, sizeof(joined), "Connected to your home Wi-Fi");
+    y = setup_draw_words(title_x, (y > top + SETUP_BADGE ? y : top + SETUP_BADGE) + 8,
+                         width - title_x - SETUP_MARGIN, joined);
+    UWORD rule_y = y + 24;
+    Paint_DrawLine(SETUP_MARGIN, rule_y, width - SETUP_MARGIN, rule_y, SETUP_GRAY, DOT_PIXEL_2X2,
+                   LINE_STYLE_SOLID);
+
+    // Footer first, so the body knows how much room it has.
+    const char *footer = "Away from home? Hold the middle key 3 s for the photo hotspot.";
+    UWORD footer_lines = setup_words(0, 0, inner, footer, false);
+    UWORD footer_y = height - SETUP_MARGIN + 8 - footer_lines * line;
+    UWORD footer_rule = footer_y - 20;
+    Paint_DrawLine(SETUP_MARGIN, footer_rule, width - SETUP_MARGIN, footer_rule, SETUP_GRAY,
+                   DOT_PIXEL_2X2, LINE_STYLE_SOLID);
+    setup_draw_words(SETUP_MARGIN, footer_y, inner, footer);
+
+    // Body: the code beside (landscape) or above (portrait) the address.
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s", screen->address);
+    UWORD body_top = rule_y + 32, body_bottom = footer_rule - 24;
+    UWORD caption_h = line + 8;
+    UWORD qr = body_bottom - body_top - caption_h;
+    if (qr > 340) qr = 340;
+    UWORD qr_x = landscape ? SETUP_MARGIN : (width - qr) / 2;
+    esp_err_t err = hotspot_draw_qr(url, qr_x, body_top, qr);
+    if (err != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        ESP_LOGE(TAG, "Setup QR generation failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    // The code keeps its quiet zone; captions and text line up with the modules.
+    const char *caption = "Scan to open";
+    UWORD caption_w = strlen(caption) * Font24.Width;
+    UWORD caption_y = s_hotspot_qr.bottom + 16;
+    hotspot_draw_text(qr_x + (qr > caption_w ? (qr - caption_w) / 2 : 0), caption_y, qr, caption, 1);
+
+    UWORD text_x = landscape ? SETUP_MARGIN + qr + 40 : SETUP_MARGIN;
+    UWORD text_w = width - text_x - SETUP_MARGIN;
+    y = landscape ? s_hotspot_qr.top - 4 : caption_y + line + 32;
+    y = setup_draw_words(text_x, y, text_w, "Open on a phone on the same Wi-Fi:") + 10;
+    y = hotspot_draw_text(text_x, y, text_w, screen->address,
+                          setup_fit_scale(screen->address, text_w, 3)) + 6;
+    if (screen->hostname && screen->hostname[0] && setup_text_is_ascii(screen->hostname)) {
+        char local[80];
+        snprintf(local, sizeof(local), "or %s.local", screen->hostname);
+        y = setup_draw_words(text_x, y, text_w, local);
+    }
+    static const char *const steps[] = {
+        "- Upload photos from your phone",
+        "- Pick albums and how often photos change",
+        "- Rotate the picture and change settings",
+    };
+    y += 28;
+    if (y + line < body_bottom)
+        y = setup_draw_words(text_x, y, text_w, "On that page you can:") + 6;
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); ++i) {
+        if (y + setup_words(0, 0, text_w, steps[i], false) * line > body_bottom) break;
+        y = setup_draw_words(text_x, y, text_w, steps[i]) + 6;
+    }
+
+    esp_err_t refresh = refresh_panel();
+    if (refresh != ESP_OK) {
+        xSemaphoreGive(display_mutex);
+        return refresh;
+    }
+    bool linked = clear_image_record();
+    xSemaphoreGive(display_mutex);
+    ESP_LOGI(TAG, "Setup complete screen displayed");
     return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
 }
 

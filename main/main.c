@@ -323,7 +323,23 @@ static void startup_online_work(void)
             nvs_erase_key(nvs_handle, NVS_SETUP_COMPLETE_KEY);
             nvs_commit(nvs_handle);
             ESP_LOGI(TAG, "First boot after provisioning — showing setup complete screen");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            char home_ssid[WIFI_SSID_MAX_LEN] = {0}, home_password[WIFI_PASS_MAX_LEN] = {0};
+            bool named = wifi_manager_load_credentials(home_ssid, home_password) == ESP_OK;
+            memset(home_password, 0, sizeof(home_password));
+            display_setup_screen_t setup = {
+                .address = ip_str,
+                .hostname = hostname,
+                .network = named ? home_ssid : NULL,
+            };
+            esp_err_t shown = display_manager_show_setup_complete(&setup);
+            if (shown == ESP_OK || shown == ESP_ERR_NOT_FINISHED)
+                power_manager_skip_next_rotation();  // leave it up for a full interval
+            else
+                ESP_LOGE(TAG, "Setup complete screen failed: %s", esp_err_to_name(shown));
+#else
             splash_screen_display_setup_complete(hostname);
+#endif
         }
         nvs_close(nvs_handle);
     }

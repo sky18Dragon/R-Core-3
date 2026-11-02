@@ -195,9 +195,10 @@ uint32_t esp_random(void)
 {
     return 0;
 }
+int display_rotation_deg;
 int config_manager_get_display_rotation_deg(void)
 {
-    return 0;
+    return display_rotation_deg;
 }
 int32_t config_manager_get_last_index(void)
 {
@@ -604,6 +605,46 @@ TEST_F(DisplayCommit, HotspotScreenFailureKeepsPhotoAndReleasesLock)
     screen.password = nullptr;
     EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_ERR_INVALID_ARG);
     EXPECT_EQ(display_manager_show_hotspot(nullptr), ESP_ERR_INVALID_ARG);
+}
+
+TEST_F(DisplayCommit, SetupScreenEncodesTheAddressAndUnlinksThePhoto)
+{
+    publish();
+    qr_texts.clear();
+    qr_error = ESP_OK;
+    display_setup_screen_t screen = {"192.168.1.21", "photoframe", "Home"};
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    EXPECT_EQ(qr_texts, (std::vector<std::string>{"http://192.168.1.21"}));
+    EXPECT_GT(black_pixels(), 1000u);
+    EXPECT_STREQ(display_manager_get_current_image(), "");
+    EXPECT_FALSE(std::filesystem::exists(std::string(root) + "/.current.lnk"));
+}
+
+TEST_F(DisplayCommit, SetupScreenFailureKeepsPhotoAndReleasesLock)
+{
+    publish();
+    display_setup_screen_t screen = {"192.168.1.21", "photoframe", "Home"};
+    qr_error = ESP_FAIL;
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_FAIL);
+    qr_error = ESP_OK;
+    fail();
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_FAIL);
+    EXPECT_EQ(link_contents(), "previous.png");
+    screen.address = "";
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(display_manager_show_setup_complete(nullptr), ESP_ERR_INVALID_ARG);
+}
+
+TEST_F(DisplayCommit, SetupScreenHandlesMissingNamesAndPortrait)
+{
+    qr_error = ESP_OK;
+    display_setup_screen_t screen = {"192.168.100.200", nullptr, "\xe5\xae\xb6 Wi-Fi"};
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    display_rotation_deg = 90;  // portrait: the code goes above the address
+    screen.hostname = "a-very-long-photoframe-name-that-wraps";
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    EXPECT_GT(black_pixels(), 1000u);
+    display_rotation_deg = 0;
 }
 
 TEST_F(DisplayCommit, HotspotScreenShowsLongAndNonAsciiValuesWithoutOverrun)
