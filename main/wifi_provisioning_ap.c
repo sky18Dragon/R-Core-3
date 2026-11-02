@@ -61,25 +61,32 @@ failed:
     return error; // Retain exactly the objects whose exit was not confirmed.
 }
 
-esp_err_t wifi_provisioning_ap_start(const char *ssid,
-                                    esp_err_t (*register_routes)(httpd_handle_t))
+// register_routes == NULL is the device hotspot: the frame HTTP server keeps
+// serving on every interface (including the setup routes), so no HTTP role is taken.
+static esp_err_t start_ap(const char *ssid, const char *password,
+                          esp_err_t (*register_routes)(httpd_handle_t))
 {
-    if (!ssid || !register_routes) return ESP_ERR_INVALID_ARG;
+    if (!ssid) return ESP_ERR_INVALID_ARG;
     // Copy before any SDK/RTOS call; the caller's buffer is not our lifetime.
     size_t length = strnlen(ssid, 33);
     if (!length || length > 32) return ESP_ERR_INVALID_SIZE;
     char name[33]; memcpy(name, ssid, length); name[length] = 0;
+    size_t key_length = password ? strnlen(password, 64) : 0;
+    if (password && (key_length < 8 || key_length > 63)) return ESP_ERR_INVALID_SIZE;
+    char key[64] = {0}; if (key_length) memcpy(key, password, key_length);
     if (atomic_flag_test_and_set(&s_control)) return ESP_ERR_INVALID_STATE;
     esp_err_t error = ESP_ERR_INVALID_STATE;
     bool manager_acquired = false;
     if (s_state != AP_IDLE) goto finished;
-    error = read_pico_http_claim(READ_PICO_HTTP_PROVISION);
-    if (error != ESP_OK) goto finished; // No radio change while the frame owns HTTP.
-    s_http_claimed = true;
+    if (register_routes) {
+        error = read_pico_http_claim(READ_PICO_HTTP_PROVISION);
+        if (error != ESP_OK) goto finished; // No radio change while the frame owns HTTP.
+        s_http_claimed = true;
+    }
     esp_netif_t *netif = NULL;
     error = wifi_manager_provisioning_begin(&s_manager_owner, &netif);
     if (error != ESP_OK) {
-        esp_err_t released = read_pico_http_release(READ_PICO_HTTP_PROVISION);
+        esp_err_t released = s_http_claimed ? read_pico_http_release(READ_PICO_HTTP_PROVISION) : ESP_OK;
         if (released == ESP_OK) s_http_claimed = false;
         else s_state = AP_FAILED;
         goto finished;
@@ -98,6 +105,10 @@ esp_err_t wifi_provisioning_ap_start(const char *ssid,
     wifi_config_t config = {.ap = {.channel = 1, .password = "", .max_connection = 4,
                                   .authmode = WIFI_AUTH_OPEN}};
     memcpy(config.ap.ssid, name, length); config.ap.ssid_len = length;
+    if (key_length) {
+        memcpy(config.ap.password, key, key_length);
+        config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    }
     AP_REQUIRE(esp_wifi_set_config(WIFI_IF_AP, &config));
     AP_REQUIRE(esp_wifi_start());
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -108,17 +119,20 @@ esp_err_t wifi_provisioning_ap_start(const char *ssid,
     IP4_ADDR(&ip.netmask, 255, 255, 255, 0);
     AP_REQUIRE(esp_netif_set_ip_info(netif, &ip));
     AP_REQUIRE(esp_netif_dhcps_start(netif));
-    httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
-    http_config.server_port = 80; http_config.max_uri_handlers = 16;
-    s_http_attempted = true;
-    AP_REQUIRE(read_pico_http_start(READ_PICO_HTTP_PROVISION, &http_config, register_routes));
+    if (register_routes) {
+        httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+        http_config.server_port = 80; http_config.max_uri_handlers = 16;
+        s_http_attempted = true;
+        AP_REQUIRE(read_pico_http_start(READ_PICO_HTTP_PROVISION, &http_config, register_routes));
+    }
     s_dns_attempted = true; // Even failed DNS start can have an unconfirmed close.
     AP_REQUIRE(dns_server_start());
+    // Both modes carry a save session: the merged hotspot also sets up home Wi-Fi.
     if (!provisioning_session_begin()) { error = ESP_ERR_INVALID_STATE; goto failed; }
     AP_REQUIRE(wifi_manager_provisioning_finish(s_manager_owner, WIFI_PROVISION_READY));
     manager_acquired = false;
     s_state = AP_ACTIVE;
-    ESP_LOGI(TAG, "Provisioning AP/HTTP/DNS ready");
+    ESP_LOGI(TAG, "%s AP/DNS ready", register_routes ? "Provisioning" : "Hotspot");
     error = ESP_OK;
     goto finished;
 failed:
@@ -141,6 +155,26 @@ finished:
     atomic_flag_clear(&s_control);
     return error;
 #undef AP_REQUIRE
+}
+
+esp_err_t wifi_provisioning_ap_start(const char *ssid,
+                                    esp_err_t (*register_routes)(httpd_handle_t))
+{
+    if (!register_routes) return ESP_ERR_INVALID_ARG;
+    return start_ap(ssid, NULL, register_routes);
+}
+
+esp_err_t wifi_provisioning_ap_start_hotspot(const char *ssid, const char *password)
+{
+    if (!password) return ESP_ERR_INVALID_ARG; // The transfer hotspot is never open.
+    return start_ap(ssid, password, NULL);
+}
+
+unsigned wifi_provisioning_ap_client_count(void)
+{
+    wifi_sta_list_t list;
+    if (s_state != AP_ACTIVE || esp_wifi_ap_get_sta_list(&list) != ESP_OK) return 0;
+    return list.num > 0 ? (unsigned) list.num : 0;
 }
 
 esp_err_t wifi_provisioning_ap_stop(void)

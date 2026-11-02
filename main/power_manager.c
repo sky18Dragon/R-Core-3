@@ -658,6 +658,14 @@ void power_manager_reset_rotate_timer(void)
              "cron");
 }
 
+void power_manager_skip_next_rotation(void)
+{
+    int seconds = get_seconds_until_wakeup_after_next();
+
+    rotation_time_set(esp_timer_get_time() + (seconds * 1000000LL));
+    ESP_LOGI(TAG, "Next scheduled rotation skipped, next rotation in %d seconds", seconds);
+}
+
 void power_manager_record_network_wake(bool succeeded)
 {
     // Only scheduled wakes feed the backoff. A ROTATE-button wake is the

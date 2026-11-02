@@ -63,6 +63,9 @@
 #include "utils.h"
 #include "wifi_manager.h"
 #include "wifi_provisioning.h"
+#if CONFIG_READ_PICO_HOTSPOT
+#include "read_pico_hotspot.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -190,8 +193,10 @@ static esp_err_t connect_to_wifi(bool *credentials_failed)
     return err;
 }
 
+#if !CONFIG_READ_PICO_HOTSPOT
 // Legacy boards erase/restart; Read Pico retains credentials and uses a new
 // AP save session. Failed startup/exit or cancellation returns on the new board.
+// Builds with the merged device hotspot use read_pico_hotspot_start_fallback().
 static void recover_wifi_connection(void)
 {
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -266,6 +271,7 @@ static void recover_wifi_connection(void)
     esp_restart();
 #endif
 }
+#endif
 
 // Network-dependent part of an interactive boot, run once WiFi has an IP:
 // inline from app_main when the connect succeeded on time, or from
@@ -317,7 +323,23 @@ static void startup_online_work(void)
             nvs_erase_key(nvs_handle, NVS_SETUP_COMPLETE_KEY);
             nvs_commit(nvs_handle);
             ESP_LOGI(TAG, "First boot after provisioning — showing setup complete screen");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+            char home_ssid[WIFI_SSID_MAX_LEN] = {0}, home_password[WIFI_PASS_MAX_LEN] = {0};
+            bool named = wifi_manager_load_credentials(home_ssid, home_password) == ESP_OK;
+            memset(home_password, 0, sizeof(home_password));
+            display_setup_screen_t setup = {
+                .address = ip_str,
+                .hostname = hostname,
+                .network = named ? home_ssid : NULL,
+            };
+            esp_err_t shown = display_manager_show_setup_complete(&setup);
+            if (shown == ESP_OK || shown == ESP_ERR_NOT_FINISHED)
+                power_manager_skip_next_rotation();  // leave it up for a full interval
+            else
+                ESP_LOGE(TAG, "Setup complete screen failed: %s", esp_err_to_name(shown));
+#else
             splash_screen_display_setup_complete(hostname);
+#endif
         }
         nvs_close(nvs_handle);
     }
@@ -349,10 +371,24 @@ static void late_wifi_task(void *arg)
             xEventGroupWaitBits(wifi_manager_get_event_group(), WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                 pdFALSE, pdFALSE, portMAX_DELAY);
 #endif
+#if CONFIG_READ_PICO_HOTSPOT
+        // The hotspot owns the radio (its lease sets the fail bit): not a station failure.
+        if (read_pico_hotspot_owns_radio()) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+#endif
         if ((bits & WIFI_FAIL_BIT) && !wifi_manager_is_connected()) {
             // The background retries only give up when the AP keeps refusing
             // the password -- the same verdict app_main acts on at boot.
+#if CONFIG_READ_PICO_HOTSPOT
+            esp_err_t fallback = read_pico_hotspot_start_fallback(READ_PICO_HOTSPOT_RECOVERY);
+            if (fallback != ESP_OK)
+                ESP_LOGE(TAG, "Recovery hotspot refused (%s); staying offline", esp_err_to_name(fallback));
+            return;
+#else
             recover_wifi_connection();
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
             return; // Failed recovery does not repeatedly start servers or erase settings.
 #endif
@@ -468,6 +504,9 @@ static void button_task(void *arg)
 
 #if CONFIG_READ_PICO_TOUCH
         read_pico_touch_nav_poll(esp_timer_get_time() / 1000);
+#endif
+#if CONFIG_READ_PICO_HOTSPOT
+        read_pico_hotspot_poll(esp_timer_get_time() / 1000);
 #endif
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -1045,6 +1084,11 @@ void app_main(void)
         return;
     }
     bool provisioned = provision_state == ESP_OK;
+#if CONFIG_READ_PICO_HOTSPOT
+    // Merged device hotspot replaces the open setup portal (PRD H3): the frame
+    // keeps booting without home Wi-Fi and opens the encrypted hotspot at the end.
+    read_pico_hotspot_mode_t hotspot_fallback = READ_PICO_HOTSPOT_MANUAL;
+#endif
 #else
     bool provisioned = wifi_provisioning_is_provisioned();
 #endif
@@ -1101,6 +1145,10 @@ void app_main(void)
 
         // No credentials found, start captive portal provisioning
         if (!creds_loaded) {
+#if CONFIG_READ_PICO_HOTSPOT
+            ESP_LOGI(TAG, "No WiFi credentials: continuing offline with the setup hotspot");
+            hotspot_fallback = READ_PICO_HOTSPOT_SETUP;
+#else
             ESP_LOGI(TAG, "===========================================");
             ESP_LOGI(TAG, "No WiFi credentials found - Starting AP mode");
             ESP_LOGI(TAG, "===========================================");
@@ -1166,11 +1214,17 @@ void app_main(void)
             }
 #endif
             esp_restart();
+#endif
         }
     }
 
     bool credentials_failed = false;
+#if CONFIG_READ_PICO_HOTSPOT
+    esp_err_t wifi_err = ESP_ERR_NOT_FOUND;
+    if (hotspot_fallback != READ_PICO_HOTSPOT_SETUP) wifi_err = connect_to_wifi(&credentials_failed);
+#else
     esp_err_t wifi_err = connect_to_wifi(&credentials_failed);
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
     if (credentials_failed) return; // Read errors are not AP rejections or absent configuration.
 #endif
@@ -1225,19 +1279,39 @@ void app_main(void)
             ESP_LOGW(TAG, "mDNS not started; the frame is reachable by IP only");
         }
     } else {
+#if CONFIG_READ_PICO_HOTSPOT
+        // Saved network refused or absent: keep the frame running (local photos,
+        // slideshow) and open the encrypted hotspot once HTTP is up.
+        if (hotspot_fallback != READ_PICO_HOTSPOT_SETUP) {
+            hotspot_fallback = READ_PICO_HOTSPOT_RECOVERY;
+            ESP_LOGW(TAG, "WiFi failed; saved credentials retained, recovery hotspot follows");
+        }
+#else
         recover_wifi_connection();
 #if CONFIG_BOARD_DRIVER_READ_PICO
         return; // Recovery owns its AP and restart; do not start a second HTTP server.
 #endif
+#endif
     }
 
+#if CONFIG_READ_PICO_HOTSPOT
+    // Off after every boot; a settings error only disables the hotspot.
+    esp_err_t hotspot_init = read_pico_hotspot_init();
+    if (hotspot_init != ESP_OK)
+        ESP_LOGW(TAG, "Hotspot unavailable (%s); frame continues", esp_err_to_name(hotspot_init));
+#endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
     esp_err_t background_start = read_pico_background_add(READ_PICO_BACKGROUND_BUTTON,
                                                           button_task, NULL, 8192, 5);
     uint32_t required = READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_PERIODIC) |
                         READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_ROTATION) |
                         READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_BUTTON);
-    if (background_start == ESP_OK && wifi_err != ESP_OK) {
+#if CONFIG_READ_PICO_HOTSPOT
+    bool late_wifi = wifi_err == ESP_ERR_TIMEOUT;  // fallback hotspots have no station to wait for
+#else
+    bool late_wifi = wifi_err != ESP_OK;
+#endif
+    if (background_start == ESP_OK && late_wifi) {
         required |= READ_PICO_BACKGROUND_BIT(READ_PICO_BACKGROUND_LATE_WIFI);
         background_start = read_pico_background_add(READ_PICO_BACKGROUND_LATE_WIFI,
                                                      late_wifi_task, NULL, 8192, 5);
@@ -1272,6 +1346,12 @@ void app_main(void)
 
     if (wifi_err == ESP_OK) {
         startup_online_work();
+#if CONFIG_READ_PICO_HOTSPOT
+    } else if (hotspot_fallback != READ_PICO_HOTSPOT_MANUAL) {
+        esp_err_t fallback = read_pico_hotspot_start_fallback(hotspot_fallback);
+        if (fallback != ESP_OK)
+            ESP_LOGE(TAG, "Fallback hotspot refused (%s); frame stays offline", esp_err_to_name(fallback));
+#endif
     } else {
 #if !CONFIG_BOARD_DRIVER_READ_PICO
         // ESP_ERR_TIMEOUT: late_wifi_task takes over once the network is up.

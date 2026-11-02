@@ -10,7 +10,13 @@ extern "C" {
 esp_err_t wifi_provisioning_ap_start(const char *ssid,
                                     esp_err_t (*register_routes)(httpd_handle_t));
 esp_err_t wifi_provisioning_ap_stop(void);
+// Device hotspot (photo transfer and Wi-Fi setup): WPA2-PSK (8..63 characters)
+// and DNS at 192.168.4.1 on the same radio lease, with a new save session; the
+// frame HTTP server keeps serving unchanged.
+esp_err_t wifi_provisioning_ap_start_hotspot(const char *ssid, const char *password);
 bool wifi_provisioning_ap_active(void);
+// Associated stations while the AP is active, 0 otherwise or on a query error.
+unsigned wifi_provisioning_ap_client_count(void);
 #ifdef __cplusplus
 }
 #endif

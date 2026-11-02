@@ -238,6 +238,11 @@ target_include_directories(touch_gesture_test PRIVATE ../main)
 target_link_libraries(touch_gesture_test GTest::gtest_main)
 gtest_discover_tests(touch_gesture_test)
 
+add_executable(hotspot_policy_test test_hotspot_policy.cpp ../main/hotspot_policy.c)
+target_include_directories(hotspot_policy_test PRIVATE ../main)
+target_link_libraries(hotspot_policy_test GTest::gtest_main)
+gtest_discover_tests(hotspot_policy_test)
+
 add_executable(image_history_test test_image_history.cpp ../main/image_history.c)
 target_include_directories(image_history_test PRIVATE ../main)
 target_link_libraries(image_history_test GTest::gtest_main)
@@ -704,6 +709,7 @@ add_executable(read_pico_display_commit_test
   ../main/image_history.c
   ../components/epaper_src/GUI_Paint.c
   ../components/epaper_src/GUI_RawBuffer.c
+  ../components/epaper_src/Fonts/font24.c
 )
 target_compile_definitions(read_pico_display_commit_test PRIVATE
   CONFIG_BOARD_DRIVER_READ_PICO=1 FS_MOUNT_POINT="pf_display_checked")

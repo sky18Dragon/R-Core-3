@@ -45,6 +45,7 @@ typedef struct { struct { uint8_t ssid[32], password[64]; struct { int authmode;
                          struct { bool capable, required; } pmf_cfg; } sta;
                  struct { uint8_t ssid[32], password[64], ssid_len, channel, max_connection;
                           int authmode; } ap; } wifi_config_t;
+typedef struct { int num; } wifi_sta_list_t;
 typedef struct { bool show_hidden; } wifi_scan_config_t;
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +88,7 @@ esp_err_t esp_wifi_start(void);
 esp_err_t esp_wifi_set_mode(wifi_mode_t);
 esp_err_t esp_wifi_get_mode(wifi_mode_t *);
 esp_err_t esp_wifi_set_config(int, const wifi_config_t *);
+esp_err_t esp_wifi_ap_get_sta_list(wifi_sta_list_t *);
 esp_err_t esp_wifi_set_ps(int);
 esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *);
 esp_err_t esp_wifi_scan_start(const wifi_scan_config_t *, bool);

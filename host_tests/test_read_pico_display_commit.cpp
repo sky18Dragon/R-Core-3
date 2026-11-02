@@ -18,6 +18,7 @@ extern "C" {
 #include "epaper.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
+#include "qrcode.h"
 #include "read_pico_epaper.h"
 #include "read_pico_sd.h"
 #include "read_pico_upload.h"
@@ -133,6 +134,18 @@ int read_pico_display_test_fclose(FILE *file)
     return call == close_fail_at ? EOF : result; // Physical host handle was released.
 }
 void read_pico_sd_note_file_close_failure(void) { close_failed = true; }
+const char *esp_err_to_name(esp_err_t) { return "synthetic-error"; }
+std::vector<std::string> qr_texts;
+esp_err_t qr_error;
+esp_err_t esp_qrcode_generate(esp_qrcode_config_t *cfg, const char *text)
+{
+    qr_texts.emplace_back(text);
+    if (qr_error != ESP_OK) return qr_error;
+    cfg->display_func(text);
+    return ESP_OK;
+}
+int esp_qrcode_get_size(esp_qrcode_handle_t) { return 21; }
+bool esp_qrcode_get_module(esp_qrcode_handle_t, int x, int y) { return (x + y) % 2 == 0; }
 esp_err_t read_pico_sd_get_status(read_pico_sd_status_t *out)
 {
     *out = {media_present, true, media_present && !close_failed, close_failed, 0};
@@ -182,9 +195,10 @@ uint32_t esp_random(void)
 {
     return 0;
 }
+int display_rotation_deg;
 int config_manager_get_display_rotation_deg(void)
 {
-    return 0;
+    return display_rotation_deg;
 }
 int32_t config_manager_get_last_index(void)
 {
@@ -544,4 +558,102 @@ TEST_F(DisplayCommit, MaximumStreamNameAndSnapshotFallbackAreNotTruncated)
     EXPECT_EQ(display_manager_end_rgb_stream(true, &pub), ESP_ERR_NOT_FINISHED);
     EXPECT_EQ(display_manager_get_current_image(), fallback);
     EXPECT_EQ(link_contents(), fallback);
+}
+
+namespace
+{
+display_hotspot_screen_t hotspot_screen()
+{
+    return {"PhotoFrame - 3F2A1", "K7MP4TQX", "WIFI:T:WPA;S:PhotoFrame - 3F2A1;P:K7MP4TQX;;",
+            "http://192.168.4.1", 10};
+}
+size_t black_pixels()
+{
+    size_t black = 0;
+    for (uint8_t byte : submitted) black += (byte >> 4) == 0 ? 1 : 0, black += (byte & 0xF) == 0 ? 1 : 0;
+    return black;
+}
+}  // namespace
+
+TEST_F(DisplayCommit, HotspotScreenDrawsBothCodesAndUnlinksThePhoto)
+{
+    publish();
+    qr_texts.clear();
+    qr_error = ESP_OK;
+    auto screen = hotspot_screen();
+    EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_OK);
+    EXPECT_EQ(qr_texts, (std::vector<std::string>{screen.wifi_qr, screen.url}));
+    EXPECT_GT(black_pixels(), 1000u);  // text and modules reached the frame
+    EXPECT_STREQ(display_manager_get_current_image(), "");
+    EXPECT_FALSE(std::filesystem::exists(std::string(root) + "/.current.lnk"));
+    char current[512]; bool known = false;
+    ASSERT_TRUE(display_manager_copy_current_image(current, sizeof(current), &known));
+    EXPECT_TRUE(known); EXPECT_STREQ(current, "");
+}
+
+TEST_F(DisplayCommit, HotspotScreenFailureKeepsPhotoAndReleasesLock)
+{
+    publish();
+    auto screen = hotspot_screen();
+    qr_error = ESP_FAIL;
+    EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_FAIL);
+    qr_error = ESP_OK;
+    fail();
+    EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_FAIL);
+    EXPECT_EQ(link_contents(), "previous.png");
+    EXPECT_STREQ(display_manager_get_current_image(), "previous.png");
+    screen.password = nullptr;
+    EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(display_manager_show_hotspot(nullptr), ESP_ERR_INVALID_ARG);
+}
+
+TEST_F(DisplayCommit, SetupScreenEncodesTheAddressAndUnlinksThePhoto)
+{
+    publish();
+    qr_texts.clear();
+    qr_error = ESP_OK;
+    display_setup_screen_t screen = {"192.168.1.21", "photoframe", "Home"};
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    EXPECT_EQ(qr_texts, (std::vector<std::string>{"http://192.168.1.21"}));
+    EXPECT_GT(black_pixels(), 1000u);
+    EXPECT_STREQ(display_manager_get_current_image(), "");
+    EXPECT_FALSE(std::filesystem::exists(std::string(root) + "/.current.lnk"));
+}
+
+TEST_F(DisplayCommit, SetupScreenFailureKeepsPhotoAndReleasesLock)
+{
+    publish();
+    display_setup_screen_t screen = {"192.168.1.21", "photoframe", "Home"};
+    qr_error = ESP_FAIL;
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_FAIL);
+    qr_error = ESP_OK;
+    fail();
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_FAIL);
+    EXPECT_EQ(link_contents(), "previous.png");
+    screen.address = "";
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(display_manager_show_setup_complete(nullptr), ESP_ERR_INVALID_ARG);
+}
+
+TEST_F(DisplayCommit, SetupScreenHandlesMissingNamesAndPortrait)
+{
+    qr_error = ESP_OK;
+    display_setup_screen_t screen = {"192.168.100.200", nullptr, "\xe5\xae\xb6 Wi-Fi"};
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    display_rotation_deg = 90;  // portrait: the code goes above the address
+    screen.hostname = "a-very-long-photoframe-name-that-wraps";
+    EXPECT_EQ(display_manager_show_setup_complete(&screen), ESP_OK);
+    EXPECT_GT(black_pixels(), 1000u);
+    display_rotation_deg = 0;
+}
+
+TEST_F(DisplayCommit, HotspotScreenShowsLongAndNonAsciiValuesWithoutOverrun)
+{
+    auto screen = hotspot_screen();
+    std::string password(63, 'x');
+    screen.ssid = "\xe7\x9b\xb8\xe6\xa1\x86 frame with a long name";
+    screen.password = password.c_str();
+    screen.idle_minutes = 0;
+    qr_error = ESP_OK;
+    EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_OK);
 }

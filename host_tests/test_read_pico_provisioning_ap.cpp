@@ -26,6 +26,8 @@ uint32_t manager_serial, manager_owner;
 esp_err_t manager_begin_error, manager_quiesce_error, manager_publish_error;
 std::vector<wifi_provisioning_outcome_t> manager_outcomes;
 wifi_config_t captured{};
+const char *expected_password;  // NULL: open provisioning AP
+int station_count; esp_err_t station_list_error;
 httpd_handle_t const server = reinterpret_cast<void *>(0x1234);
 esp_err_t step(const char *name) {
     if (std::strcmp(name, "netif")) EXPECT_TRUE(manager_held) << name;
@@ -52,6 +54,7 @@ class ReadPicoProvisioningAP : public testing::Test {
         initialized = true; bad_http_handle = null_http_handle = nested = mutate_name = false;
         probe_frame_claim = false;
         radio_stops = dns_stops = http_stops = 0; captured = {};
+        expected_password = nullptr; station_count = 0; station_list_error = ESP_OK;
         manager_held = false; manager_serial = manager_owner = 0;
         manager_begin_error = manager_quiesce_error = manager_publish_error = ESP_OK;
         manager_outcomes.clear();
@@ -100,8 +103,16 @@ esp_err_t esp_wifi_set_mode(wifi_mode_t mode) { EXPECT_EQ(mode, WIFI_MODE_AP); r
 esp_err_t esp_wifi_set_config(int interface, const wifi_config_t *config) {
     EXPECT_EQ(interface, WIFI_IF_AP); captured = *config;
     EXPECT_EQ(config->ap.channel, 1); EXPECT_EQ(config->ap.max_connection, 4);
-    EXPECT_EQ(config->ap.authmode, WIFI_AUTH_OPEN); EXPECT_EQ(config->ap.password[0], 0);
+    if (expected_password) {
+        EXPECT_EQ(config->ap.authmode, WIFI_AUTH_WPA2_PSK);
+        EXPECT_STREQ(reinterpret_cast<const char *>(config->ap.password), expected_password);
+    } else {
+        EXPECT_EQ(config->ap.authmode, WIFI_AUTH_OPEN); EXPECT_EQ(config->ap.password[0], 0);
+    }
     return step("config");
+}
+esp_err_t esp_wifi_ap_get_sta_list(wifi_sta_list_t *list) {
+    list->num = station_count; return station_list_error;
 }
 esp_err_t esp_wifi_start(void) { return step("radio-start"); }
 void vTaskDelay(TickType_t ticks) { EXPECT_EQ(ticks, pdMS_TO_TICKS(100)); step("delay"); }
@@ -367,5 +378,39 @@ TEST_F(ReadPicoProvisioningAP, CompletedSessionIsInvalidatedOnStopAndNotReusedOn
     EXPECT_FALSE(provisioning_session_complete()); EXPECT_FALSE(provisioning_session_commit(saved));
     ASSERT_EQ(wifi_provisioning_ap_start("name", routes), ESP_OK);
     EXPECT_NE(provisioning_session_ticket(), saved); EXPECT_FALSE(provisioning_session_complete());
+    EXPECT_EQ(wifi_provisioning_ap_stop(), ESP_OK);
+}
+
+TEST_F(ReadPicoProvisioningAP, HotspotIsWpa2AndLeavesFrameHttpRunning) {
+    ASSERT_EQ(read_pico_http_claim(READ_PICO_HTTP_FRAME), ESP_OK); // the frame keeps its server
+    expected_password = "K7MP4TQX";
+    ASSERT_EQ(wifi_provisioning_ap_start_hotspot("PhotoFrame - 3F2A1", "K7MP4TQX"), ESP_OK);
+    EXPECT_TRUE(wifi_provisioning_ap_active());
+    EXPECT_STREQ(reinterpret_cast<const char *>(captured.ap.ssid), "PhotoFrame - 3F2A1");
+    EXPECT_EQ(calls, (std::vector<std::string>{"netif", "initial-stop", "mode", "config", "radio-start",
+                                              "delay", "dhcp-stop", "ip", "dhcp-start", "dns-start"}));
+    EXPECT_NE(provisioning_session_ticket(), 0u); // merged hotspot: Wi-Fi setup session
+    station_count = 2; EXPECT_EQ(wifi_provisioning_ap_client_count(), 2u);
+    station_list_error = ESP_FAIL; EXPECT_EQ(wifi_provisioning_ap_client_count(), 0u);
+    ASSERT_EQ(wifi_provisioning_ap_stop(), ESP_OK);
+    EXPECT_EQ(http_stops, 0u); EXPECT_EQ(calls.back(), "radio-close");
+    EXPECT_EQ(wifi_provisioning_ap_client_count(), 0u);
+    EXPECT_EQ(read_pico_http_release(READ_PICO_HTTP_FRAME), ESP_OK); // frame role untouched
+}
+TEST_F(ReadPicoProvisioningAP, HotspotRejectsOpenOrShortKeysWithoutTouchingTheRadio) {
+    EXPECT_EQ(wifi_provisioning_ap_start_hotspot("name", nullptr), ESP_ERR_INVALID_ARG);
+    EXPECT_EQ(wifi_provisioning_ap_start_hotspot("name", "short"), ESP_ERR_INVALID_SIZE);
+    EXPECT_EQ(wifi_provisioning_ap_start_hotspot("name", std::string(64, 'a').c_str()), ESP_ERR_INVALID_SIZE);
+    EXPECT_EQ(wifi_provisioning_ap_start("name", nullptr), ESP_ERR_INVALID_ARG);
+    EXPECT_TRUE(calls.empty()); EXPECT_EQ(manager_owner, 0u);
+}
+TEST_F(ReadPicoProvisioningAP, HotspotDnsFailureReleasesRadioAndLease) {
+    expected_password = "K7MP4TQX"; fail_at = "dns-start";
+    EXPECT_EQ(wifi_provisioning_ap_start_hotspot("name", "K7MP4TQX"), ESP_FAIL);
+    EXPECT_FALSE(wifi_provisioning_ap_active());
+    EXPECT_EQ(http_stops, 0u); EXPECT_EQ(dns_stops, 1u); EXPECT_EQ(calls.back(), "radio-close");
+    EXPECT_EQ(manager_outcomes.back(), WIFI_PROVISION_STOPPED); EXPECT_EQ(manager_owner, 0u);
+    fail_at.clear();
+    EXPECT_EQ(wifi_provisioning_ap_start_hotspot("name", "K7MP4TQX"), ESP_OK);
     EXPECT_EQ(wifi_provisioning_ap_stop(), ESP_OK);
 }

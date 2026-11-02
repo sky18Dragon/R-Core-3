@@ -10,6 +10,9 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "power_manager.h"
+#if CONFIG_READ_PICO_HOTSPOT
+#include "read_pico_hotspot.h"
+#endif
 #include "read_pico_touch.h"
 #include "touch_gesture.h"
 #include "utils.h"
@@ -60,8 +63,23 @@ static esp_err_t show_previous(void)
     return ESP_ERR_NOT_FOUND;
 }
 
+// Middle key: handed to the hotspot owner, which acts in its own poll step.
+static esp_err_t run_middle(touch_action_t action)
+{
+#if CONFIG_READ_PICO_HOTSPOT
+    // H1: short press brings the connection screen back; H2 makes it the settings menu.
+    esp_err_t err = action == TOUCH_ACTION_HOTSPOT ? read_pico_hotspot_toggle()
+                                                   : read_pico_hotspot_show_screen();
+#else
+    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+#endif
+    ESP_LOGI(TAG, "Touch %s: %s", touch_action_name(action), esp_err_to_name(err));
+    return err;
+}
+
 static esp_err_t run(touch_action_t action)
 {
+    if (action == TOUCH_ACTION_MENU || action == TOUCH_ACTION_HOTSPOT) return run_middle(action);
     esp_err_t err = action == TOUCH_ACTION_NEXT ? trigger_image_rotation() : show_previous();
     // A manual change starts a fresh rotation interval either way.
     power_manager_reset_rotate_timer();
@@ -111,7 +129,8 @@ void read_pico_touch_nav_poll(int64_t now_ms)
         record(now_ms, &gesture, action, ESP_OK);
         return;
     }
-    if (display_manager_is_busy()) {
+    bool middle = action == TOUCH_ACTION_MENU || action == TOUCH_ACTION_HOTSPOT;
+    if (!middle && display_manager_is_busy()) {
         s_pending = action;  // only the latest request survives a refresh
         record(now_ms, &gesture, action, ESP_ERR_TIMEOUT);
         return;

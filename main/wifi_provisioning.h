@@ -12,4 +12,10 @@ bool wifi_provisioning_is_active(void);
 bool wifi_provisioning_is_provisioned(void);
 bool wifi_provisioning_session_complete(void);
 
+// Read Pico only: setup routes served by the frame HTTP server while the device
+// hotspot is on (Wi-Fi scan and the test-then-save of home Wi-Fi, same checks).
+struct httpd_req;
+esp_err_t wifi_provisioning_scan_request(struct httpd_req *req);
+esp_err_t wifi_provisioning_save_request(struct httpd_req *req);
+
 #endif

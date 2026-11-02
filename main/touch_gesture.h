@@ -15,6 +15,9 @@ extern "C" {
 #define TOUCH_SLOP_PX 24
 #define TOUCH_SWIPE_MIN_PX 120
 #define TOUCH_SWIPE_MAX_MS 1500
+// Holding a key this long is a long press (middle key: hotspot on/off). It is
+// reported while still held, so the user gets the action without guessing.
+#define TOUCH_LONG_PRESS_MS 3000
 
 typedef enum {
     TOUCH_GESTURE_CANCEL,
@@ -34,7 +37,7 @@ typedef struct {
 } touch_gesture_t;
 
 typedef struct {
-    bool active, on_key, moved;
+    bool active, on_key, moved, held;  // held: long key press already reported
     uint16_t x0, y0, x, y;
     int64_t t0_ms, last_ms;
 } touch_tracker_t;
@@ -43,18 +46,22 @@ typedef enum {
     TOUCH_ACTION_NONE,
     TOUCH_ACTION_NEXT,
     TOUCH_ACTION_PREVIOUS,
+    TOUCH_ACTION_MENU,     // middle key short press
+    TOUCH_ACTION_HOTSPOT,  // middle key long press
 } touch_action_t;
 
 void touch_tracker_reset(touch_tracker_t *tracker);
 bool touch_tracker_active(const touch_tracker_t *tracker);
 // Feed one panel sample. Returns true and fills out when a contact ends
-// (release, multi-touch or clock regression cancel). A pressed (0,0) sample is
+// (release, multi-touch or clock regression cancel), or once when a key has been
+// held TOUCH_LONG_PRESS_MS (its release then reports nothing). A pressed (0,0) sample is
 // an empty driver slot, not a contact position, and is ignored.
 bool touch_tracker_feed(touch_tracker_t *tracker, bool touched, uint8_t count, uint16_t x,
                         uint16_t y, int64_t now_ms, touch_gesture_t *out);
 // Map a gesture to a frame action for the configured display layout.
 // Swipe left (as the viewer sees it) = next, swipe right = previous; keys:
-// viewer's leftmost = previous, rightmost = next, middle unused. Landscape at
+// viewer's leftmost = previous, rightmost = next, middle = menu (short) or
+// hotspot (held TOUCH_LONG_PRESS_MS). Landscape at
 // 180 deg was measured on the device; other layouts follow by symmetry.
 touch_action_t touch_action_for(const touch_gesture_t *gesture, bool landscape, bool rotated_180);
 const char *touch_gesture_name(touch_gesture_kind_t kind);

@@ -1,11 +1,12 @@
 <script setup>
 import { t } from "../i18n";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { useSettingsStore, useAppStore } from "../stores";
+import { useSettingsStore, useAppStore, useHotspotStore } from "../stores";
 import PaletteCalibration from "./PaletteCalibration.vue";
 import GrayscaleCalibration from "./GrayscaleCalibration.vue";
 import BatterySleep from "./BatterySleep.vue";
 import LastCrash from "./LastCrash.vue";
+import HotspotSettings from "./HotspotSettings.vue";
 import { TIMEZONES } from "../data/timezones";
 import {
   APPROXIMATE_ZONES,
@@ -23,6 +24,7 @@ import { locale, setLocale } from "../i18n";
 
 const settingsStore = useSettingsStore();
 const appStore = useAppStore();
+const hotspotStore = useHotspotStore();
 
 // Time zone picker. The store holds only the POSIX rule the device applies;
 // the IANA name shown here is derived from it and never leaves the browser.
@@ -692,6 +694,16 @@ function onDrawerToggle(open) {
                   </v-expansion-panel-text>
                 </v-expansion-panel>
               </v-expansion-panels>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+
+          <v-expansion-panel v-if="hotspotStore.supported" value="hotspot">
+            <v-expansion-panel-title>
+              <v-icon icon="mdi-access-point-network" class="mr-3" />
+              {{ t("Photo hotspot") }}
+            </v-expansion-panel-title>
+            <v-expansion-panel-text>
+              <HotspotSettings />
             </v-expansion-panel-text>
           </v-expansion-panel>
 

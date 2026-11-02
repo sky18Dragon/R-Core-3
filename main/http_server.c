@@ -54,6 +54,12 @@
 #if CONFIG_READ_PICO_PMU_SLEEP
 #include "read_pico_frame_sleep.h"
 #endif
+#if CONFIG_READ_PICO_HOTSPOT
+#include <sys/time.h>
+#include "hotspot_policy.h"
+#include "read_pico_hotspot.h"
+#include "wifi_provisioning.h"
+#endif
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -2936,6 +2942,175 @@ static esp_err_t touch_status_handler(httpd_req_t *req)
 }
 #endif
 
+#if CONFIG_READ_PICO_HOTSPOT
+static esp_err_t send_hotspot_status(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    esp_err_t err = response ? read_pico_hotspot_describe(response) : ESP_ERR_NO_MEM;
+    char *json_str = err == ESP_OK ? cJSON_PrintUnformatted(response) : NULL;
+    cJSON_Delete(response);
+    if (!json_str) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    err = httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    return err;
+}
+
+// Photo-transfer hotspot. GET: status (with the password; behind web auth).
+// POST, all fields optional: {"ssid": "" (= default) | name, "password": "...",
+// "regenerate_password": true, "idle_minutes": 0|10|30|60, "on": bool}.
+// Settings are saved first; "on" is applied ~1.5 s later by the owner task so
+// this response still reaches the phone before the radio switches.
+static esp_err_t hotspot_handler(httpd_req_t *req)
+{
+    if (!http_requests_ready(req)) {
+        httpd_resp_set_status(req, HTTPD_503);
+        return httpd_resp_sendstr(req, "System is still initializing");
+    }
+    power_manager_reset_sleep_timer();
+    if (req->method == HTTP_POST) {
+        cJSON *root = NULL;
+        esp_err_t err = receive_config_document(req, &root);
+        if (err != ESP_OK) return ESP_FAIL;  // 400 already sent
+        cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+        cJSON *password = cJSON_GetObjectItem(root, "password");
+        cJSON *regenerate = cJSON_GetObjectItem(root, "regenerate_password");
+        cJSON *idle = cJSON_GetObjectItem(root, "idle_minutes");
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool shape_ok = (!ssid || cJSON_IsString(ssid)) && (!password || cJSON_IsString(password)) &&
+                        (!regenerate || cJSON_IsBool(regenerate)) && (!idle || cJSON_IsNumber(idle)) &&
+                        (!on || cJSON_IsBool(on));
+        read_pico_hotspot_change_t change = {
+            .ssid = ssid ? ssid->valuestring : NULL,
+            .password = password ? password->valuestring : NULL,
+            .regenerate_password = regenerate && cJSON_IsTrue(regenerate),
+            .idle_minutes = idle ? (int) idle->valuedouble : -1,
+        };
+        if (shape_ok && idle && (idle->valuedouble != (double) change.idle_minutes || change.idle_minutes < 0))
+            shape_ok = false;
+        err = shape_ok ? ESP_OK : ESP_ERR_INVALID_ARG;
+        if (err == ESP_OK && (ssid || password || change.regenerate_password || idle))
+            err = read_pico_hotspot_configure(&change);
+        if (err == ESP_OK && on) err = read_pico_hotspot_request(cJSON_IsTrue(on));
+        cJSON_Delete(root);
+        if (err == ESP_ERR_INVALID_ARG) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "Invalid hotspot setting (name 1-32 bytes, password 8-63 "
+                                "printable ASCII, idle_minutes 0/10/30/60)");
+            return ESP_FAIL;
+        }
+        if (err != ESP_OK) {
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE
+                                        ? "{\"error\":\"hotspot stop was not confirmed; turn it off again first\"}"
+                                        : "{\"error\":\"hotspot settings were not saved\"}");
+            return ESP_FAIL;
+        }
+    }
+    return send_hotspot_status(req);
+}
+
+// POST {"timestamp": unix_seconds} from the phone, for offline frames that
+// cannot reach NTP. Wall clock only; there is no RTC to write on this board.
+static esp_err_t time_set_handler(httpd_req_t *req)
+{
+    if (!http_requests_ready(req)) return send_time_unavailable(req);
+    cJSON *root = NULL;
+    if (receive_config_document(req, &root) != ESP_OK) return ESP_FAIL;  // 400 already sent
+    cJSON *stamp = cJSON_GetObjectItem(root, "timestamp");
+    int64_t seconds = stamp && cJSON_IsNumber(stamp) ? (int64_t) stamp->valuedouble : 0;
+    cJSON_Delete(root);
+    if (!hotspot_clock_valid(seconds)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "timestamp must be unix seconds in 2024..2099");
+        return ESP_FAIL;
+    }
+    struct timeval tv = {.tv_sec = (time_t) seconds, .tv_usec = 0};
+    if (settimeofday(&tv, NULL) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Clock not set");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "Clock set from browser: %lld", (long long) seconds);
+    power_manager_reset_rotate_timer();  // as after an NTP correction
+    return send_current_time_checked(req, "success");
+}
+
+// Phone connectivity checks resolve to the frame through the hotspot DNS.
+// Answering them as "online" keeps phones from opening a captive-portal
+// sheet; the user opens the page in the normal browser from the QR code.
+// Not behind web auth: operating systems send no credentials. 404 unless on.
+static esp_err_t connectivity_probe_handler(httpd_req_t *req)
+{
+    if (!read_pico_hotspot_on()) return httpd_resp_send_404(req);
+    const char *uri = req->uri;
+    if (strcmp(uri, "/generate_204") == 0 || strcmp(uri, "/gen_204") == 0) {
+        httpd_resp_set_status(req, "204 No Content");
+        return httpd_resp_send(req, NULL, 0);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    if (strcmp(uri, "/connecttest.txt") == 0) return httpd_resp_sendstr(req, "Microsoft Connect Test");
+    if (strcmp(uri, "/ncsi.txt") == 0) return httpd_resp_sendstr(req, "Microsoft NCSI");
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_sendstr(req, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+}
+
+static esp_err_t register_probe(httpd_handle_t handle, const char *uri)
+{
+    httpd_uri_t u = {.uri = uri, .method = HTTP_GET, .handler = connectivity_probe_handler};
+    return httpd_register_uri_handler(handle, &u);
+}
+
+// Home Wi-Fi setup on the merged device hotspot: same scan and test-then-save
+// handlers as the old setup portal, refused unless the hotspot is serving.
+static esp_err_t setup_refused(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "409 Conflict");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"error\":\"Wi-Fi setup is only available on the frame's hotspot\"}");
+}
+
+static esp_err_t setup_scan_handler(httpd_req_t *req)
+{
+    if (!read_pico_hotspot_on()) return setup_refused(req);
+    return wifi_provisioning_scan_request(req);
+}
+
+static esp_err_t setup_save_handler(httpd_req_t *req)
+{
+    if (!read_pico_hotspot_on()) return setup_refused(req);
+    read_pico_hotspot_transfer(true);  // the connection test takes up to 15 s
+    esp_err_t err = wifi_provisioning_save_request(req);
+    read_pico_hotspot_transfer(false);
+    return err;
+}
+
+// Uploads in flight keep the hotspot from closing under the phone.
+static esp_err_t counted_upload_image_handler(httpd_req_t *req)
+{
+    read_pico_hotspot_transfer(true);
+    esp_err_t err = upload_image_handler(req);
+    read_pico_hotspot_transfer(false);
+    return err;
+}
+
+static esp_err_t counted_display_image_direct_handler(httpd_req_t *req)
+{
+    read_pico_hotspot_transfer(true);
+    esp_err_t err = display_image_direct_handler(req);
+    read_pico_hotspot_transfer(false);
+    return err;
+}
+#define UPLOAD_IMAGE_HANDLER counted_upload_image_handler
+#define DISPLAY_IMAGE_DIRECT_HANDLER counted_display_image_direct_handler
+#else
+#define UPLOAD_IMAGE_HANDLER upload_image_handler
+#define DISPLAY_IMAGE_DIRECT_HANDLER display_image_direct_handler
+#endif
+
 #if CONFIG_READ_PICO_PMU_SLEEP
 // Battery sleep: GET reports supply/PMU state; POST {"frame_sleep_enabled": bool}.
 static esp_err_t power_handler(httpd_req_t *req)
@@ -3304,13 +3479,29 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/power", HTTP_POST, power_handler);
 #endif
 
+#if CONFIG_READ_PICO_HOTSPOT
+        HTTP_REGISTER("/api/hotspot", HTTP_GET, hotspot_handler);
+        HTTP_REGISTER("/api/hotspot", HTTP_POST, hotspot_handler);
+        HTTP_REGISTER("/api/time", HTTP_POST, time_set_handler);
+        HTTP_REGISTER("/provision", HTTP_GET, index_handler);
+        HTTP_REGISTER("/api/wifi/scan", HTTP_GET, setup_scan_handler);
+        HTTP_REGISTER("/save", HTTP_POST, setup_save_handler);
+        static const char *const probes[] = {"/generate_204", "/gen_204", "/hotspot-detect.html",
+                                             "/library/test/success.html", "/connecttest.txt",
+                                             "/ncsi.txt"};
+        for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); ++i) {
+            esp_err_t error = register_probe(handle, probes[i]);
+            if (error != ESP_OK) return error;
+        }
+#endif
+
         HTTP_REGISTER("/api/time/sync", HTTP_POST, time_sync_handler);
 
         HTTP_REGISTER("/api/keep_alive", HTTP_POST, keep_alive_handler);
 
         HTTP_REGISTER("/api/format-storage", HTTP_POST, format_storage_handler);
 
-        HTTP_REGISTER("/api/display-image", HTTP_POST, display_image_direct_handler);
+        HTTP_REGISTER("/api/display-image", HTTP_POST, DISPLAY_IMAGE_DIRECT_HANDLER);
 
         HTTP_REGISTER("/api/albums", HTTP_GET, albums_handler);
 
@@ -3322,7 +3513,7 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
 
         HTTP_REGISTER("/api/images", HTTP_GET, album_images_handler);
 
-        HTTP_REGISTER("/api/upload", HTTP_POST, upload_image_handler);
+        HTTP_REGISTER("/api/upload", HTTP_POST, UPLOAD_IMAGE_HANDLER);
 
         HTTP_REGISTER("/api/display", HTTP_POST, display_image_handler);
 
@@ -3353,7 +3544,7 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
 esp_err_t http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 56;
+    config.max_uri_handlers = 72;
     config.stack_size = 12288;
     config.max_open_sockets = 10;
     config.lru_purge_enable = true;

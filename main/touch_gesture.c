@@ -42,6 +42,7 @@ bool touch_tracker_feed(touch_tracker_t *t, bool touched, uint8_t count, uint16_
     bool invalid = count > 1 || (t->active && now_ms < t->last_ms);
     if (invalid) {
         if (!t->active) return false;
+        if (t->held) { touch_tracker_reset(t); return false; }
         return finish(t, TOUCH_GESTURE_CANCEL, -1, now_ms, out);
     }
     bool empty_slot = touched && x == 0 && y == 0;
@@ -58,6 +59,20 @@ bool touch_tracker_feed(touch_tracker_t *t, bool touched, uint8_t count, uint16_
         int32_t dx = (int32_t) x - t->x0, dy = (int32_t) y - t->y0;
         if ((int64_t) dx * dx + (int64_t) dy * dy > (int64_t) TOUCH_SLOP_PX * TOUCH_SLOP_PX)
             t->moved = true;
+        int key = t->x0 / TOUCH_KEY_PITCH;
+        if (t->on_key && !t->moved && !t->held && key < TOUCH_KEY_COUNT &&
+            now_ms - t->t0_ms >= TOUCH_LONG_PRESS_MS) {
+            t->held = true;  // keep tracking until release, which then reports nothing
+            *out = (touch_gesture_t) {
+                .kind = TOUCH_GESTURE_KEY, .key = key, .x0 = t->x0, .y0 = t->y0, .x1 = t->x,
+                .y1 = t->y, .hold_ms = now_ms - t->t0_ms,
+            };
+            return true;
+        }
+        return false;
+    }
+    if (t->held) {
+        touch_tracker_reset(t);
         return false;
     }
     int64_t hold = now_ms - t->t0_ms;
@@ -73,6 +88,8 @@ touch_action_t touch_action_for(const touch_gesture_t *g, bool landscape, bool r
 {
     if (!g) return TOUCH_ACTION_NONE;
     if (g->kind == TOUCH_GESTURE_KEY) {
+        if (g->key == TOUCH_KEY_COUNT / 2)
+            return g->hold_ms >= TOUCH_LONG_PRESS_MS ? TOUCH_ACTION_HOTSPOT : TOUCH_ACTION_MENU;
         if (g->key != 0 && g->key != TOUCH_KEY_COUNT - 1) return TOUCH_ACTION_NONE;
         // Measured 2026-10-29 at 180 deg: key 0 is the viewer's leftmost key.
         bool first = g->key == 0;
@@ -101,5 +118,11 @@ const char *touch_gesture_name(touch_gesture_kind_t kind)
 
 const char *touch_action_name(touch_action_t action)
 {
-    return action == TOUCH_ACTION_NEXT ? "next" : action == TOUCH_ACTION_PREVIOUS ? "previous" : "none";
+    switch (action) {
+    case TOUCH_ACTION_NEXT: return "next";
+    case TOUCH_ACTION_PREVIOUS: return "previous";
+    case TOUCH_ACTION_MENU: return "menu";
+    case TOUCH_ACTION_HOTSPOT: return "hotspot";
+    default: return "none";
+    }
 }

@@ -77,4 +77,29 @@ esp_err_t display_manager_push_rgb_column(int x, const uint8_t *rgb_col, int hei
 // A checked Read Pico refresh failure publishes no image/link/snapshot and releases the lock.
 esp_err_t display_manager_end_rgb_stream(bool show, const display_publish_t *pub);
 
+typedef struct {
+    const char *ssid;
+    const char *password;
+    const char *wifi_qr;  // "WIFI:T:WPA;..." text for the join code
+    const char *url;      // page address, also encoded as the second code
+    uint32_t idle_minutes;  // 0 = never closes by itself
+    const char *title;      // NULL = "PHOTO HOTSPOT"
+    const char *note;       // optional extra line above the footer
+} display_hotspot_screen_t;
+
+// Read Pico: draw the photo-transfer hotspot screen (two QR codes and ASCII
+// text) under the display mutex. Like calibration it unlinks the current
+// image; ESP_ERR_NOT_FINISHED when shown but the link was not confirmed.
+esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen);
+
+typedef struct {
+    const char *address;   // e.g. "192.168.1.21"; the code opens http://<address>
+    const char *hostname;  // mDNS name without ".local"; NULL to leave out
+    const char *network;   // home Wi-Fi name; NULL or non-ASCII = generic wording
+} display_setup_screen_t;
+
+// Read Pico: the first screen after Wi-Fi setup, drawn like the hotspot screen
+// for the panel in use (the upstream image is laid out for another panel).
+esp_err_t display_manager_show_setup_complete(const display_setup_screen_t *screen);
+
 #endif

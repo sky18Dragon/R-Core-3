@@ -170,6 +170,16 @@ menu "Board Configuration"
             horizontal swipe or the outer touch keys to next/previous image.
             Never pulses TP_RST; touch stays disabled if the panel does not answer.
 
+    config READ_PICO_HOTSPOT
+        bool "Read Pico photo-transfer hotspot (WPA2, on demand)"
+        depends on READ_PICO_LOCAL_FRAME
+        default y
+        help
+            Lets a phone upload photos without a router: on request (web page
+            or holding the middle touch key 3 s) the station is switched off
+            and a WPA2 AP serves the frame web page at 192.168.4.1. Off after
+            every boot; closes after the configured idle time; never open.
+
     config READ_PICO_PMU_SLEEP
         bool "Read Pico PMU soft sleep on battery (unverified, opt-in)"
         depends on READ_PICO_LOCAL_FRAME

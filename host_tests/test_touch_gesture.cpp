@@ -53,6 +53,30 @@ TEST(TouchGesture, KeysUseOriginStripAndPitch)
         EXPECT_EQ(f.g.kind, TOUCH_GESTURE_KEY);
         EXPECT_EQ(f.g.key, k);
     }
+    Feed held;  // a long press is reported once, while still held; release adds nothing
+    held.down(TOUCH_KEY_PITCH + 80, TOUCH_KEY_AREA_TOP + 20, 0);
+    for (int64_t ms = 50; ms < TOUCH_LONG_PRESS_MS; ms += 50)
+        EXPECT_FALSE(held.down(TOUCH_KEY_PITCH + 82, TOUCH_KEY_AREA_TOP + 21, ms));
+    ASSERT_TRUE(held.down(TOUCH_KEY_PITCH + 82, TOUCH_KEY_AREA_TOP + 21, TOUCH_LONG_PRESS_MS));
+    EXPECT_EQ(held.g.kind, TOUCH_GESTURE_KEY);
+    EXPECT_EQ(held.g.key, 1);
+    EXPECT_EQ(held.g.hold_ms, TOUCH_LONG_PRESS_MS);
+    for (int64_t ms = TOUCH_LONG_PRESS_MS + 50; ms < 3 * TOUCH_LONG_PRESS_MS; ms += 50)
+        EXPECT_FALSE(held.down(TOUCH_KEY_PITCH + 82, TOUCH_KEY_AREA_TOP + 21, ms));
+    EXPECT_FALSE(held.up(3 * TOUCH_LONG_PRESS_MS));
+    EXPECT_FALSE(touch_tracker_active(&held.t));
+    Feed slid;  // moving off the key before the time is not a long press
+    slid.down(TOUCH_KEY_PITCH + 80, TOUCH_KEY_AREA_TOP + 20, 0);
+    slid.down(TOUCH_KEY_PITCH + 80 + 2 * TOUCH_SLOP_PX, TOUCH_KEY_AREA_TOP + 20, 100);
+    EXPECT_FALSE(slid.down(TOUCH_KEY_PITCH + 80 + 2 * TOUCH_SLOP_PX, TOUCH_KEY_AREA_TOP + 20,
+                           TOUCH_LONG_PRESS_MS + 10));
+    ASSERT_TRUE(slid.up(TOUCH_LONG_PRESS_MS + 20));
+    EXPECT_EQ(slid.g.kind, TOUCH_GESTURE_CANCEL);
+    Feed multi;  // a second finger during a reported hold ends it quietly
+    multi.down(TOUCH_KEY_PITCH + 80, TOUCH_KEY_AREA_TOP + 20, 0);
+    ASSERT_TRUE(multi.down(TOUCH_KEY_PITCH + 80, TOUCH_KEY_AREA_TOP + 20, TOUCH_LONG_PRESS_MS));
+    EXPECT_FALSE(touch_tracker_feed(&multi.t, true, 2, 100, 100, TOUCH_LONG_PRESS_MS + 50, &multi.g));
+    EXPECT_FALSE(touch_tracker_active(&multi.t));
     Feed beyond;  // past the third key segment
     beyond.down(TOUCH_KEY_COUNT * TOUCH_KEY_PITCH + 5, TOUCH_KEY_AREA_TOP + 20, 0);
     ASSERT_TRUE(beyond.up(100));
@@ -109,11 +133,17 @@ TEST(TouchGesture, ActionMappingFollowsLayoutAndRotation)
     g.kind = TOUCH_GESTURE_KEY;
     // Measured at 180 deg: key 0 is the viewer's leftmost (previous).
     g.key = 0; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_PREVIOUS);
-    g.key = 1; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NONE);
+    g.key = 1; g.hold_ms = 200; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_MENU);
+    g.hold_ms = TOUCH_LONG_PRESS_MS - 1; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_MENU);
+    g.hold_ms = TOUCH_LONG_PRESS_MS; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_HOTSPOT);
+    EXPECT_EQ(touch_action_for(&g, false, true), TOUCH_ACTION_HOTSPOT);
+    g.hold_ms = 0;
     g.key = 2; EXPECT_EQ(touch_action_for(&g, true, true), TOUCH_ACTION_NEXT);
     g.key = 0; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_NEXT);
     g.key = 2; EXPECT_EQ(touch_action_for(&g, true, false), TOUCH_ACTION_PREVIOUS);
     EXPECT_EQ(touch_action_for(nullptr, true, false), TOUCH_ACTION_NONE);
     EXPECT_STREQ(touch_action_name(TOUCH_ACTION_NEXT), "next");
+    EXPECT_STREQ(touch_action_name(TOUCH_ACTION_MENU), "menu");
+    EXPECT_STREQ(touch_action_name(TOUCH_ACTION_HOTSPOT), "hotspot");
     EXPECT_STREQ(touch_gesture_name((touch_gesture_kind_t) 99), "unknown");
 }
