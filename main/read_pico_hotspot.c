@@ -4,14 +4,17 @@
 #include <string.h>
 
 #include "config.h"
+#include "config_manager.h"
 #include "display_manager.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "hotspot_policy.h"
 #include "nvs.h"
 #include "power_manager.h"
+#include "provisioning_session.h"
 #include "utils.h"
 #include "wifi_credentials.h"
 #include "wifi_manager.h"
@@ -20,6 +23,10 @@
 #define HOTSPOT_RECONNECT_FIRST_MS 30000
 #define HOTSPOT_RECONNECT_MAX_MS 600000
 #define HOTSPOT_RANDOM_BYTES 64
+// Let the save response reach the phone before restarting (as the old portal did).
+#define HOTSPOT_SAVE_RESTART_MS 3000
+// A middle-key press read right after a redraw is the same press: ignore it.
+#define HOTSPOT_SCREEN_DEBOUNCE_MS 1500
 
 static const char *TAG = "hotspot";
 
@@ -34,6 +41,7 @@ static esp_err_t s_last_error = ESP_OK;
 static atomic_bool s_ready, s_show_requested;
 static atomic_uint s_clients;
 static atomic_int s_transfers;
+static atomic_int s_mode = READ_PICO_HOTSPOT_MANUAL;
 
 // Owner task (read_pico_hotspot_poll) only.
 static bool s_screen_shown;
@@ -41,6 +49,9 @@ static char s_restore_path[DISPLAY_IMAGE_PATH_CAPACITY];
 static bool s_reconnect_pending;
 static int64_t s_reconnect_at_ms;
 static uint32_t s_reconnect_backoff_ms;
+static hotspot_retry_t s_retry;
+static int64_t s_restart_at_ms;  // 0 = none scheduled
+static int64_t s_screen_done_ms;
 
 // The sleep variant may run on battery, where a hotspot must always close by itself.
 static bool battery_possible(void)
@@ -162,6 +173,22 @@ esp_err_t read_pico_hotspot_toggle(void)
     return read_pico_hotspot_request(on);
 }
 
+esp_err_t read_pico_hotspot_start_fallback(read_pico_hotspot_mode_t mode)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    if (mode != READ_PICO_HOTSPOT_SETUP && mode != READ_PICO_HOTSPOT_RECOVERY) return ESP_ERR_INVALID_ARG;
+    int64_t now = now_ms();
+    taskENTER_CRITICAL(&s_lock);
+    s_mode = mode;
+    // Without home Wi-Fi this is the only way in: it stays until set up, except on battery.
+    hotspot_policy_set_idle_minutes(&s_policy, battery_possible() ? s_idle_minutes : 0, now);
+    bool accepted = hotspot_policy_request(&s_policy, true, now);
+    taskEXIT_CRITICAL(&s_lock);
+    ESP_LOGW(TAG, "%s: opening the device hotspot", mode == READ_PICO_HOTSPOT_SETUP
+                                                       ? "No saved Wi-Fi" : "Saved Wi-Fi unreachable");
+    return accepted ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
 esp_err_t read_pico_hotspot_show_screen(void)
 {
     if (!read_pico_hotspot_on()) return ESP_ERR_INVALID_STATE;
@@ -238,13 +265,20 @@ esp_err_t read_pico_hotspot_describe(cJSON *object)
     memcpy(active_ssid, s_active_ssid, sizeof(active_ssid));
     memcpy(active_password, s_active_password, sizeof(active_password));
     bool custom = s_ssid[0] != 0;
-    uint32_t idle = s_idle_minutes;
+    uint32_t idle = policy.idle_limit_ms / 60000;
     esp_err_t last_error = s_last_error;
     taskEXIT_CRITICAL(&s_lock);
     bool on = policy.state == HOTSPOT_ON;
     // While on, show what phones are actually joining; edits apply next start.
     bool pending_change = on && (strcmp(ssid, active_ssid) || strcmp(password, active_password));
     int64_t remaining = hotspot_policy_remaining_ms(&policy, now_ms());
+    int mode = atomic_load(&s_mode);
+    char home_ssid[WIFI_SSID_MAX_LEN] = {0}, home_password[WIFI_PASS_MAX_LEN] = {0};
+    bool home_configured = wifi_manager_load_credentials(home_ssid, home_password) == ESP_OK;
+    memset(home_password, 0, sizeof(home_password));
+    if (!home_configured) home_ssid[0] = 0;
+    // Owner-task fields read without a lock: a stale value only skews a display.
+    int64_t retry = mode == READ_PICO_HOTSPOT_RECOVERY ? hotspot_retry_remaining_ms(&s_retry, now_ms()) : -1;
     bool ok = cJSON_AddBoolToObject(object, "supported", true) &&
               cJSON_AddStringToObject(object, "state", hotspot_state_name(policy.state)) &&
               cJSON_AddBoolToObject(object, "on", on) &&
@@ -264,7 +298,15 @@ esp_err_t read_pico_hotspot_describe(cJSON *object)
               cJSON_AddStringToObject(object, "last_stop_reason",
                                       hotspot_reason_name(policy.last_stop_reason)) &&
               cJSON_AddBoolToObject(object, "stop_unconfirmed", policy.stop_unconfirmed) &&
-              cJSON_AddStringToObject(object, "last_error", esp_err_to_name(last_error));
+              cJSON_AddStringToObject(object, "last_error", esp_err_to_name(last_error)) &&
+              cJSON_AddStringToObject(object, "mode", mode == READ_PICO_HOTSPOT_SETUP ? "setup"
+                                                      : mode == READ_PICO_HOTSPOT_RECOVERY ? "recovery"
+                                                                                            : "manual") &&
+              cJSON_AddBoolToObject(object, "home_configured", home_configured) &&
+              cJSON_AddStringToObject(object, "home_ssid", home_ssid) &&
+              cJSON_AddNumberToObject(object, "retry_in_s",
+                                      retry < 0 ? -1 : (double) ((retry + 999) / 1000)) &&
+              cJSON_AddBoolToObject(object, "restarting", s_restart_at_ms != 0);
     memset(password, 0, sizeof(password));
     memset(active_password, 0, sizeof(active_password));
     return ok ? ESP_OK : ESP_ERR_NO_MEM;
@@ -282,12 +324,24 @@ static void show_screen(void)
         ESP_LOGE(TAG, "Wi-Fi QR text did not fit");
         return;
     }
+    int mode = atomic_load(&s_mode);
+    taskENTER_CRITICAL(&s_lock);
+    uint32_t idle = s_policy.idle_limit_ms / 60000;
+    taskEXIT_CRITICAL(&s_lock);
     display_hotspot_screen_t screen = {
         .ssid = s_active_ssid,
         .password = s_active_password,
         .wifi_qr = qr,
         .url = READ_PICO_HOTSPOT_URL,
-        .idle_minutes = s_idle_minutes,
+        .idle_minutes = idle,
+        .title = mode == READ_PICO_HOTSPOT_SETUP      ? "WELCOME"
+                 : mode == READ_PICO_HOTSPOT_RECOVERY ? "HOME WI-FI NOT FOUND"
+                                                      : NULL,
+        .note = mode == READ_PICO_HOTSPOT_SETUP
+                    ? "Open the page to connect your home Wi-Fi, or upload photos right away."
+                : mode == READ_PICO_HOTSPOT_RECOVERY
+                    ? "Retrying it in the background. Open the page to change Wi-Fi."
+                    : NULL,
     };
     esp_err_t err = display_manager_show_hotspot(&screen);
     memset(qr, 0, sizeof(qr));
@@ -296,6 +350,7 @@ static void show_screen(void)
         return;
     }
     s_screen_shown = true;
+    s_screen_done_ms = now_ms();
     // Give the user a full interval to scan before the slideshow moves on.
     power_manager_reset_rotate_timer();
 }
@@ -341,6 +396,7 @@ static void start_radio(int64_t now)
         return;
     }
     ESP_LOGI(TAG, "On: %s at %s", s_active_ssid, READ_PICO_HOTSPOT_URL);
+    if (atomic_load(&s_mode) == READ_PICO_HOTSPOT_RECOVERY) hotspot_retry_start(&s_retry, now);
     show_screen();
 }
 
@@ -354,6 +410,12 @@ static void stop_radio(int64_t now)
     memset(s_active_password, 0, sizeof(s_active_password));
     taskEXIT_CRITICAL(&s_lock);
     atomic_store(&s_clients, 0);
+    if (atomic_exchange(&s_mode, READ_PICO_HOTSPOT_MANUAL) != READ_PICO_HOTSPOT_MANUAL) {
+        taskENTER_CRITICAL(&s_lock);
+        hotspot_policy_set_idle_minutes(&s_policy, s_idle_minutes, now);
+        taskEXIT_CRITICAL(&s_lock);
+    }
+    hotspot_retry_stop(&s_retry);
     restore_screen();  // even when the radio exit is unconfirmed
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Stop unconfirmed (%s); station not restarted", esp_err_to_name(err));
@@ -396,6 +458,51 @@ static void reconnect_step(int64_t now)
     s_reconnect_backoff_ms = next > HOTSPOT_RECONNECT_MAX_MS ? HOTSPOT_RECONNECT_MAX_MS : next;
 }
 
+// Restart only after the AP, DNS and lease exit are confirmed, as the old portal did.
+static void restart_now(bool show_setup_complete)
+{
+    esp_err_t err = wifi_provisioning_ap_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Hotspot exit unconfirmed (%s); no automatic restart", esp_err_to_name(err));
+        s_restart_at_ms = 0;
+        return;
+    }
+    nvs_handle_t handle;
+    if (show_setup_complete && nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        if (nvs_set_u8(handle, NVS_SETUP_COMPLETE_KEY, 1) == ESP_OK) nvs_commit(handle);
+        nvs_close(handle);
+    }
+    ESP_LOGI(TAG, "Restarting to join home Wi-Fi");
+    esp_restart();
+}
+
+// Test the saved network with the AP kept up (the setup candidate path); on
+// success restart into it, so nothing about the station is reconfigured live.
+static void retry_home(int64_t now)
+{
+    char ssid[WIFI_SSID_MAX_LEN] = {0}, password[WIFI_PASS_MAX_LEN] = {0};
+    wifi_network_t network;
+    esp_err_t err = wifi_manager_load_credentials(ssid, password);
+    if (err == ESP_OK) err = config_manager_copy_network(&network);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "No saved Wi-Fi to retry (%s)", esp_err_to_name(err));
+        hotspot_retry_stop(&s_retry);
+        return;
+    }
+    uint32_t owner = 0;
+    err = wifi_manager_test_network_owned(ssid, password, &network, &owner);
+    memset(password, 0, sizeof(password));
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Saved Wi-Fi answers again (attempt %u)", (unsigned) s_retry.attempts);
+        restart_now(false);
+        if (owner) wifi_manager_cancel_candidate(owner);  // only reached when the exit failed
+        return;
+    }
+    hotspot_retry_failed(&s_retry, now_ms());
+    ESP_LOGI(TAG, "Saved Wi-Fi still unreachable (%s); next try in %u s", esp_err_to_name(err),
+             (unsigned) (s_retry.backoff_ms / 1000));
+}
+
 void read_pico_hotspot_poll(int64_t now)
 {
     if (!s_ready) return;
@@ -411,8 +518,21 @@ void read_pico_hotspot_poll(int64_t now)
     } else if (step == HOTSPOT_STEP_STOP) {
         stop_radio(now);
     } else if (on) {
-        if (atomic_exchange(&s_show_requested, false)) show_screen();
+        if (atomic_exchange(&s_show_requested, false) &&
+            now - s_screen_done_ms >= HOTSPOT_SCREEN_DEBOUNCE_MS)
+            show_screen();
         power_manager_reset_sleep_timer();  // no battery sleep while the hotspot is up
+        if (provisioning_session_complete()) {
+            if (!s_restart_at_ms) {
+                s_restart_at_ms = now + HOTSPOT_SAVE_RESTART_MS;
+                ESP_LOGI(TAG, "Home Wi-Fi saved; restarting in %d s", HOTSPOT_SAVE_RESTART_MS / 1000);
+            } else if (now >= s_restart_at_ms) {
+                restart_now(true);
+            }
+        } else if (atomic_load(&s_mode) == READ_PICO_HOTSPOT_RECOVERY &&
+                   hotspot_retry_step(&s_retry, now, clients, busy)) {
+            retry_home(now);
+        }
     } else {
         s_show_requested = false;
         reconnect_step(now);

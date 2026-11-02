@@ -166,7 +166,12 @@ Lets a phone upload photos with no router: the frame leaves the home Wi-Fi and o
   "remaining_s": 545,
   "last_stop_reason": "none",
   "stop_unconfirmed": false,
-  "last_error": "ESP_OK"
+  "last_error": "ESP_OK",
+  "mode": "manual",
+  "home_configured": true,
+  "home_ssid": "MyHomeWiFi",
+  "retry_in_s": -1,
+  "restarting": false
 }
 ```
 
@@ -174,6 +179,9 @@ Lets a phone upload photos with no router: the frame leaves the home Wi-Fi and o
 - `remaining_s`: seconds until the automatic close (counts only while no phone is connected and no upload runs), `-1` when none.
 - `never_close_allowed`: `false` on the battery-sleep build, where `idle_minutes` cannot be `0`.
 - `stop_unconfirmed`: the last radio exit failed; turning on is refused until an explicit off succeeds.
+- `mode`: `manual` (turned on by the user), `setup` (booted without saved Wi-Fi) or `recovery` (saved Wi-Fi unreachable). Setup and recovery hotspots open by themselves at boot and do not close by themselves except on the battery-sleep build.
+- `retry_in_s`: in `recovery`, seconds until the saved Wi-Fi is tried again (only while no phone is joined); `-1` otherwise. When it answers the frame restarts into it.
+- `restarting`: a Wi-Fi setup was saved and the frame restarts in about 3 s.
 
 ### `POST /api/hotspot`
 
@@ -193,6 +201,10 @@ All fields optional; settings are saved first, then `on` is applied about 1.5 s 
 - `idle_minutes`: `10`, `30`, `60`, or `0` (never; not on the battery-sleep build).
 
 Returns the status above. `400` for an invalid value, `409` when turning on is refused (`stop_unconfirmed`) or the settings could not be saved.
+
+### Wi-Fi setup on the hotspot
+
+While the hotspot is on, the frame also serves the setup page: `GET /provision` (web page), `GET /api/wifi/scan` and `POST /save` (form fields `ssid`, `password`, `deviceName`, optional `ipMode`/`staticIp`/`staticNetmask`/`staticGateway`/`dnsServer`). A save first test-connects the network with the hotspot kept up and only then stores it; the frame then restarts into it. When the hotspot is off these return `409`.
 
 ### Connectivity probes
 

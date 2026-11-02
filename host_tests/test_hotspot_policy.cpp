@@ -287,3 +287,47 @@ TEST(HotspotClock, Range)
     EXPECT_TRUE(hotspot_clock_valid(1793577600));  // 2026-11-01
     EXPECT_FALSE(hotspot_clock_valid(HOTSPOT_CLOCK_MAX));
 }
+
+TEST(HotspotRetry, WaitsFirstDelayThenBacksOffToTheCap)
+{
+    hotspot_retry_t retry;
+    hotspot_retry_start(&retry, 0);
+    EXPECT_EQ(hotspot_retry_remaining_ms(&retry, 0), HOTSPOT_RETRY_FIRST_MS);
+    EXPECT_FALSE(hotspot_retry_step(&retry, HOTSPOT_RETRY_FIRST_MS - 1, 0, false));
+    int64_t now = HOTSPOT_RETRY_FIRST_MS;
+    ASSERT_TRUE(hotspot_retry_step(&retry, now, 0, false));
+    uint32_t expected = 2 * HOTSPOT_RETRY_FIRST_MS;
+    for (int i = 0; i < 8; ++i) {
+        hotspot_retry_failed(&retry, now);
+        EXPECT_EQ(hotspot_retry_remaining_ms(&retry, now), expected);
+        EXPECT_FALSE(hotspot_retry_step(&retry, now + expected - 1, 0, false));
+        now += expected;
+        ASSERT_TRUE(hotspot_retry_step(&retry, now, 0, false));
+        expected = expected * 2 > HOTSPOT_RETRY_MAX_MS ? HOTSPOT_RETRY_MAX_MS : expected * 2;
+    }
+    EXPECT_EQ(retry.attempts, 9u);
+}
+
+TEST(HotspotRetry, NeverRunsUnderAPhoneOrUpload)
+{
+    hotspot_retry_t retry;
+    hotspot_retry_start(&retry, 0);
+    int64_t t = 0;
+    for (; t < 60 * kMinute; t += 1000) EXPECT_FALSE(hotspot_retry_step(&retry, t, 1, false));
+    for (int64_t end = t + 10 * kMinute; t < end; t += 1000)
+        EXPECT_FALSE(hotspot_retry_step(&retry, t, 0, true));
+    // After the last one leaves it waits the first delay again.
+    EXPECT_FALSE(hotspot_retry_step(&retry, t, 0, false));
+    EXPECT_TRUE(hotspot_retry_step(&retry, t - 1000 + HOTSPOT_RETRY_FIRST_MS, 0, false));
+}
+
+TEST(HotspotRetry, StoppedRetryDoesNothing)
+{
+    hotspot_retry_t retry;
+    hotspot_retry_start(&retry, 0);
+    hotspot_retry_stop(&retry);
+    EXPECT_FALSE(hotspot_retry_step(&retry, 10 * kMinute, 0, false));
+    hotspot_retry_failed(&retry, 10 * kMinute);
+    EXPECT_FALSE(retry.armed);
+    EXPECT_EQ(hotspot_retry_remaining_ms(&retry, 0), -1);
+}

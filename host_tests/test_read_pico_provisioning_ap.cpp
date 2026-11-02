@@ -389,7 +389,7 @@ TEST_F(ReadPicoProvisioningAP, HotspotIsWpa2AndLeavesFrameHttpRunning) {
     EXPECT_STREQ(reinterpret_cast<const char *>(captured.ap.ssid), "PhotoFrame - 3F2A1");
     EXPECT_EQ(calls, (std::vector<std::string>{"netif", "initial-stop", "mode", "config", "radio-start",
                                               "delay", "dhcp-stop", "ip", "dhcp-start", "dns-start"}));
-    EXPECT_EQ(provisioning_session_ticket(), 0u); // no provisioning save session
+    EXPECT_NE(provisioning_session_ticket(), 0u); // merged hotspot: Wi-Fi setup session
     station_count = 2; EXPECT_EQ(wifi_provisioning_ap_client_count(), 2u);
     station_list_error = ESP_FAIL; EXPECT_EQ(wifi_provisioning_ap_client_count(), 0u);
     ASSERT_EQ(wifi_provisioning_ap_stop(), ESP_OK);

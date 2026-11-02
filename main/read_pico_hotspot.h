@@ -6,12 +6,19 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// Photo-transfer hotspot (docs/PRD-HOTSPOT-SETTINGS.md, H1). Any task may
+// Device hotspot for photo transfer and Wi-Fi setup (docs/PRD-HOTSPOT-SETTINGS.md,
+// H1 + H3), always WPA2. Any task may
 // request a change; the button/touch task owns the radio switch by calling
 // read_pico_hotspot_poll(). While on, the home station is off (the two are
 // exclusive), a WPA2 AP serves 192.168.4.1 and the frame HTTP server keeps
 // serving. Off restores the screen and reconnects the saved station.
 #define READ_PICO_HOTSPOT_URL "http://192.168.4.1"
+
+typedef enum {
+    READ_PICO_HOTSPOT_MANUAL,    // turned on by the user (web page or middle key)
+    READ_PICO_HOTSPOT_SETUP,     // boot without saved Wi-Fi: set up or use offline
+    READ_PICO_HOTSPOT_RECOVERY,  // saved Wi-Fi unreachable at boot: retried in the background
+} read_pico_hotspot_mode_t;
 
 typedef struct {
     const char *ssid;          // NULL = unchanged, "" = back to the device default
@@ -27,6 +34,11 @@ void read_pico_hotspot_poll(int64_t now_ms);
 // ESP_ERR_INVALID_STATE when turning on is refused (an earlier stop was not confirmed).
 esp_err_t read_pico_hotspot_request(bool on);
 esp_err_t read_pico_hotspot_toggle(void);
+// Boot fallback instead of the old open setup portal: the frame keeps running
+// and opens the encrypted hotspot. It does not close by itself unless the build
+// may run on battery. RECOVERY retries the saved Wi-Fi while no phone is joined
+// and restarts into it once it answers. A saved setup also restarts the frame.
+esp_err_t read_pico_hotspot_start_fallback(read_pico_hotspot_mode_t mode);
 // Middle key short press: show the connection screen again while on.
 esp_err_t read_pico_hotspot_show_screen(void);
 // The hotspot holds or is changing the radio: station recovery must not run.

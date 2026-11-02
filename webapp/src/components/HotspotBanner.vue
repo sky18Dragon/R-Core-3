@@ -1,6 +1,7 @@
 <script setup>
 import { t } from "../i18n";
 import { computed, ref } from "vue";
+import { useRouter } from "vue-router";
 import { useHotspotStore } from "../stores";
 import { formatRemaining } from "../utils/hotspot";
 
@@ -9,6 +10,13 @@ import { formatRemaining } from "../utils/hotspot";
 const hotspot = useHotspotStore();
 const status = computed(() => hotspot.status || {});
 const remaining = computed(() => formatRemaining(status.value.remaining_s));
+const retryIn = computed(() => formatRemaining(status.value.retry_in_s));
+// Setup/recovery hotspots are the only way in without home Wi-Fi: no turn-off button.
+const fallback = computed(() => status.value.mode === "setup" || status.value.mode === "recovery");
+const router = useRouter();
+function setUpWifi() {
+  router.push("/provision");
+}
 const syncing = ref(false);
 const syncError = ref("");
 
@@ -35,6 +43,51 @@ const handoffOpen = computed({
 <template>
   <div>
     <v-alert
+      v-if="status.on && status.mode === 'setup'"
+      type="info"
+      variant="tonal"
+      icon="mdi-wifi"
+      class="mb-4"
+      :title="t('Welcome')"
+    >
+      <p class="mb-2">
+        {{
+          t(
+            "This frame has no home Wi-Fi yet. Connect it to your home Wi-Fi, or keep using this hotspot to upload photos."
+          )
+        }}
+      </p>
+      <v-btn color="primary" variant="flat" size="small" @click="setUpWifi">
+        {{ t("Connect home Wi-Fi") }}
+      </v-btn>
+    </v-alert>
+
+    <v-alert
+      v-if="status.on && status.mode === 'recovery'"
+      type="warning"
+      variant="tonal"
+      icon="mdi-wifi"
+      class="mb-4"
+    >
+      <div class="d-flex align-center flex-wrap ga-2">
+        <span>
+          {{ t('Cannot reach home Wi-Fi "{name}".', { name: status.home_ssid }) }}
+          <template v-if="retryIn">
+            {{ t("Retrying automatically in {time}.", { time: retryIn }) }}
+          </template>
+        </span>
+        <v-spacer />
+        <v-btn size="small" variant="outlined" @click="setUpWifi">
+          {{ t("Change Wi-Fi") }}
+        </v-btn>
+      </div>
+    </v-alert>
+
+    <v-alert v-if="status.restarting" type="info" variant="tonal" density="compact" class="mb-4">
+      {{ t("Home Wi-Fi saved. The frame is restarting to join it.") }}
+    </v-alert>
+
+    <v-alert
       v-if="status.on"
       type="info"
       variant="tonal"
@@ -52,6 +105,7 @@ const handoffOpen = computed({
         </span>
         <v-spacer />
         <v-btn
+          v-if="!fallback"
           size="small"
           variant="outlined"
           :loading="hotspot.busy"

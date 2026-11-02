@@ -58,6 +58,7 @@
 #include <sys/time.h>
 #include "hotspot_policy.h"
 #include "read_pico_hotspot.h"
+#include "wifi_provisioning.h"
 #endif
 
 #ifndef MIN
@@ -3063,6 +3064,30 @@ static esp_err_t register_probe(httpd_handle_t handle, const char *uri)
     return httpd_register_uri_handler(handle, &u);
 }
 
+// Home Wi-Fi setup on the merged device hotspot: same scan and test-then-save
+// handlers as the old setup portal, refused unless the hotspot is serving.
+static esp_err_t setup_refused(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "409 Conflict");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"error\":\"Wi-Fi setup is only available on the frame's hotspot\"}");
+}
+
+static esp_err_t setup_scan_handler(httpd_req_t *req)
+{
+    if (!read_pico_hotspot_on()) return setup_refused(req);
+    return wifi_provisioning_scan_request(req);
+}
+
+static esp_err_t setup_save_handler(httpd_req_t *req)
+{
+    if (!read_pico_hotspot_on()) return setup_refused(req);
+    read_pico_hotspot_transfer(true);  // the connection test takes up to 15 s
+    esp_err_t err = wifi_provisioning_save_request(req);
+    read_pico_hotspot_transfer(false);
+    return err;
+}
+
 // Uploads in flight keep the hotspot from closing under the phone.
 static esp_err_t counted_upload_image_handler(httpd_req_t *req)
 {
@@ -3458,6 +3483,9 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/hotspot", HTTP_GET, hotspot_handler);
         HTTP_REGISTER("/api/hotspot", HTTP_POST, hotspot_handler);
         HTTP_REGISTER("/api/time", HTTP_POST, time_set_handler);
+        HTTP_REGISTER("/provision", HTTP_GET, index_handler);
+        HTTP_REGISTER("/api/wifi/scan", HTTP_GET, setup_scan_handler);
+        HTTP_REGISTER("/save", HTTP_POST, setup_save_handler);
         static const char *const probes[] = {"/generate_204", "/gen_204", "/hotspot-detect.html",
                                              "/library/test/success.html", "/connecttest.txt",
                                              "/ncsi.txt"};

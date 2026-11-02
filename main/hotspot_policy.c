@@ -197,6 +197,43 @@ bool hotspot_wifi_qr(const char *ssid, const char *password, char *out, size_t c
     return true;
 }
 
+void hotspot_retry_start(hotspot_retry_t *retry, int64_t now_ms)
+{
+    memset(retry, 0, sizeof(*retry));
+    retry->armed = true;
+    retry->due_ms = now_ms + HOTSPOT_RETRY_FIRST_MS;
+    retry->backoff_ms = HOTSPOT_RETRY_FIRST_MS;
+}
+
+void hotspot_retry_stop(hotspot_retry_t *retry) { memset(retry, 0, sizeof(*retry)); }
+
+bool hotspot_retry_step(hotspot_retry_t *retry, int64_t now_ms, unsigned clients, bool busy)
+{
+    if (!retry->armed) return false;
+    if (clients || busy) {
+        int64_t earliest = now_ms + HOTSPOT_RETRY_FIRST_MS;
+        if (retry->due_ms < earliest) retry->due_ms = earliest;  // never under a phone
+        return false;
+    }
+    if (now_ms < retry->due_ms) return false;
+    ++retry->attempts;
+    return true;
+}
+
+void hotspot_retry_failed(hotspot_retry_t *retry, int64_t now_ms)
+{
+    if (!retry->armed) return;
+    uint32_t next = retry->backoff_ms * 2;
+    retry->backoff_ms = next > HOTSPOT_RETRY_MAX_MS || next < retry->backoff_ms ? HOTSPOT_RETRY_MAX_MS : next;
+    retry->due_ms = now_ms + retry->backoff_ms;
+}
+
+int64_t hotspot_retry_remaining_ms(const hotspot_retry_t *retry, int64_t now_ms)
+{
+    if (!retry->armed) return -1;
+    return retry->due_ms > now_ms ? retry->due_ms - now_ms : 0;
+}
+
 bool hotspot_clock_valid(int64_t unix_seconds)
 {
     return unix_seconds >= HOTSPOT_CLOCK_MIN && unix_seconds < HOTSPOT_CLOCK_MAX;

@@ -61,8 +61,8 @@ failed:
     return error; // Retain exactly the objects whose exit was not confirmed.
 }
 
-// register_routes == NULL is the photo-transfer hotspot: the frame HTTP server
-// keeps serving on every interface, so no HTTP role or save session is taken.
+// register_routes == NULL is the device hotspot: the frame HTTP server keeps
+// serving on every interface (including the setup routes), so no HTTP role is taken.
 static esp_err_t start_ap(const char *ssid, const char *password,
                           esp_err_t (*register_routes)(httpd_handle_t))
 {
@@ -127,7 +127,8 @@ static esp_err_t start_ap(const char *ssid, const char *password,
     }
     s_dns_attempted = true; // Even failed DNS start can have an unconfirmed close.
     AP_REQUIRE(dns_server_start());
-    if (register_routes && !provisioning_session_begin()) { error = ESP_ERR_INVALID_STATE; goto failed; }
+    // Both modes carry a save session: the merged hotspot also sets up home Wi-Fi.
+    if (!provisioning_session_begin()) { error = ESP_ERR_INVALID_STATE; goto failed; }
     AP_REQUIRE(wifi_manager_provisioning_finish(s_manager_owner, WIFI_PROVISION_READY));
     manager_acquired = false;
     s_state = AP_ACTIVE;

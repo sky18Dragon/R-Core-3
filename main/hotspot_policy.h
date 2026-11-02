@@ -81,6 +81,28 @@ bool hotspot_ssid_valid(const char *ssid);
 // phone cameras. Returns false, leaving out unchanged, if it does not fit.
 bool hotspot_wifi_qr(const char *ssid, const char *password, char *out, size_t capacity);
 bool hotspot_clock_valid(int64_t unix_seconds);
+
+// Retrying the saved home Wi-Fi while a recovery hotspot runs (the router was
+// off or out of range at boot). An attempt never runs while a phone is joined
+// or an upload runs; after they leave it waits at least the first delay.
+#define HOTSPOT_RETRY_FIRST_MS 30000
+#define HOTSPOT_RETRY_MAX_MS 600000
+
+typedef struct {
+    bool armed;
+    int64_t due_ms;
+    uint32_t backoff_ms;  // delay after the next failure
+    uint32_t attempts;
+} hotspot_retry_t;
+
+void hotspot_retry_start(hotspot_retry_t *retry, int64_t now_ms);
+void hotspot_retry_stop(hotspot_retry_t *retry);
+// True when an attempt should run now; the caller then reports a failure with
+// hotspot_retry_failed() (success ends the hotspot, so needs no call).
+bool hotspot_retry_step(hotspot_retry_t *retry, int64_t now_ms, unsigned clients, bool busy);
+void hotspot_retry_failed(hotspot_retry_t *retry, int64_t now_ms);
+// Milliseconds until the next attempt, or -1 when none is armed.
+int64_t hotspot_retry_remaining_ms(const hotspot_retry_t *retry, int64_t now_ms);
 #ifdef __cplusplus
 }
 #endif

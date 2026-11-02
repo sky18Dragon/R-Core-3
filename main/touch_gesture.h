@@ -15,7 +15,8 @@ extern "C" {
 #define TOUCH_SLOP_PX 24
 #define TOUCH_SWIPE_MIN_PX 120
 #define TOUCH_SWIPE_MAX_MS 1500
-// Holding the middle key this long is a long press (hotspot on/off).
+// Holding a key this long is a long press (middle key: hotspot on/off). It is
+// reported while still held, so the user gets the action without guessing.
 #define TOUCH_LONG_PRESS_MS 3000
 
 typedef enum {
@@ -36,7 +37,7 @@ typedef struct {
 } touch_gesture_t;
 
 typedef struct {
-    bool active, on_key, moved;
+    bool active, on_key, moved, held;  // held: long key press already reported
     uint16_t x0, y0, x, y;
     int64_t t0_ms, last_ms;
 } touch_tracker_t;
@@ -52,7 +53,8 @@ typedef enum {
 void touch_tracker_reset(touch_tracker_t *tracker);
 bool touch_tracker_active(const touch_tracker_t *tracker);
 // Feed one panel sample. Returns true and fills out when a contact ends
-// (release, multi-touch or clock regression cancel). A pressed (0,0) sample is
+// (release, multi-touch or clock regression cancel), or once when a key has been
+// held TOUCH_LONG_PRESS_MS (its release then reports nothing). A pressed (0,0) sample is
 // an empty driver slot, not a contact position, and is ignored.
 bool touch_tracker_feed(touch_tracker_t *tracker, bool touched, uint8_t count, uint16_t x,
                         uint16_t y, int64_t now_ms, touch_gesture_t *out);

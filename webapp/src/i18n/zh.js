@@ -500,4 +500,13 @@ export default {
   "Hotspot is turning off": "正在关闭热点",
   "The frame is rejoining your home Wi-Fi and this page disconnects now. Switch your phone back to your home Wi-Fi to reach the frame again.":
     "相框正在重新连接家里的 Wi-Fi，本页面即将断开。请把手机切回家里的 Wi-Fi 后再访问相框。",
+  Welcome: "欢迎使用",
+  "This frame has no home Wi-Fi yet. Connect it to your home Wi-Fi, or keep using this hotspot to upload photos.":
+    "这台相框还没有连接家里的 Wi-Fi。可以现在连接，也可以继续用这个热点直接上传照片。",
+  "Connect home Wi-Fi": "连接家里的 Wi-Fi",
+  'Cannot reach home Wi-Fi "{name}".': "连不上家里的 Wi-Fi「{name}」。",
+  "Retrying automatically in {time}.": "{time} 后自动重试。",
+  "Change Wi-Fi": "更换 Wi-Fi",
+  "Home Wi-Fi saved. The frame is restarting to join it.":
+    "已保存家里的 Wi-Fi，相框正在重启并连接。",
 };

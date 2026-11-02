@@ -647,6 +647,19 @@ static esp_err_t provision_save_handler(httpd_req_t *req)
 #endif
 }
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+esp_err_t wifi_provisioning_scan_request(httpd_req_t *req) { return provision_scan_handler(req); }
+
+esp_err_t wifi_provisioning_save_request(httpd_req_t *req)
+{
+    if (!provisioning_session_ticket()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "Wi-Fi setup is not available right now");
+    }
+    return provision_save_handler(req);
+}
+#endif
+
 esp_err_t wifi_provisioning_init(void)
 {
     ESP_LOGI(TAG, "WiFi provisioning initialized");

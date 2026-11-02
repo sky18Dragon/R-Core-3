@@ -608,8 +608,8 @@ class ReadPicoBuildTests(unittest.TestCase):
         self.assertLess(start.index('AP_REQUIRE(dns_server_start())'),
                         start.index('provisioning_session_begin()'))
         self.assertLess(start.index('provisioning_session_begin()'), start.index('s_state = AP_ACTIVE'))
-        # The photo-transfer hotspot shares this lifecycle: WPA2 only, no save session.
-        self.assertIn('if (register_routes && !provisioning_session_begin())', start)
+        # The device hotspot shares this lifecycle: WPA2 only, with its own save session.
+        self.assertIn('if (!provisioning_session_begin())', start)
         self.assertIn('config.ap.authmode = WIFI_AUTH_WPA2_PSK;', start)
         hotspot = ap[ap.index('esp_err_t wifi_provisioning_ap_start_hotspot'):]
         self.assertIn('if (!password) return ESP_ERR_INVALID_ARG;', hotspot)
@@ -692,6 +692,9 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/hotspot", "HTTP_GET"),  # CONFIG_READ_PICO_HOTSPOT only
             ("/api/hotspot", "HTTP_POST"),
             ("/api/time", "HTTP_POST"),
+            ("/provision", "HTTP_GET"),
+            ("/api/wifi/scan", "HTTP_GET"),
+            ("/save", "HTTP_POST"),
             ("/api/time/sync", "HTTP_POST"),
             ("/api/keep_alive", "HTTP_POST"),
             ("/api/format-storage", "HTTP_POST"),

@@ -83,6 +83,8 @@ typedef struct {
     const char *wifi_qr;  // "WIFI:T:WPA;..." text for the join code
     const char *url;      // page address, also encoded as the second code
     uint32_t idle_minutes;  // 0 = never closes by itself
+    const char *title;      // NULL = "PHOTO HOTSPOT"
+    const char *note;       // optional extra line above the footer
 } display_hotspot_screen_t;
 
 // Read Pico: draw the photo-transfer hotspot screen (two QR codes and ASCII

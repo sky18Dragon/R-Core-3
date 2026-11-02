@@ -739,7 +739,8 @@ esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
     bool landscape = width >= height;
     UWORD qr = landscape ? 320 : (width - 3 * HOTSPOT_MARGIN) / 2;
     UWORD qr_top = 110, line = Font24.Height;
-    hotspot_draw_text(HOTSPOT_MARGIN, 36, width - 2 * HOTSPOT_MARGIN, "PHOTO HOTSPOT", 2);
+    hotspot_draw_text(HOTSPOT_MARGIN, 36, width - 2 * HOTSPOT_MARGIN,
+                      screen->title ? screen->title : "PHOTO HOTSPOT", 2);
     UWORD second_x = 2 * HOTSPOT_MARGIN + qr;
     esp_err_t err = hotspot_draw_qr(screen->wifi_qr, HOTSPOT_MARGIN, qr_top, qr);
     if (err == ESP_OK) err = hotspot_draw_qr(screen->url, second_x, qr_top, qr);
@@ -768,6 +769,9 @@ esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
     else
         snprintf(footer, sizeof(footer), "Stays on until turned off.");
     UWORD footer_y = height - HOTSPOT_MARGIN - 2 * line - 8;
+    if (screen->note)
+        hotspot_draw_text(HOTSPOT_MARGIN, footer_y - line - 16, width - 2 * HOTSPOT_MARGIN,
+                          screen->note, 1);
     hotspot_draw_text(HOTSPOT_MARGIN, footer_y, width - 2 * HOTSPOT_MARGIN, footer, 1);
     hotspot_draw_text(HOTSPOT_MARGIN, footer_y + line + 8, width - 2 * HOTSPOT_MARGIN,
                       "Hold the middle key 3 s to turn off.", 1);
