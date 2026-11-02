@@ -28,6 +28,9 @@ void power_manager_reset_sleep_timer(void);
  */
 void power_manager_set_auto_sleep_timeout(uint32_t seconds);
 void power_manager_reset_rotate_timer(void);
+// Skips the next scheduled rotation: a screen just shown (the hotspot page)
+// stays up for at least one full interval even when the slot is imminent.
+void power_manager_skip_next_rotation(void);
 // Seconds until the active-rotation timer fires; -1 when auto-rotate is off
 // or not yet scheduled.
 int64_t power_manager_seconds_to_next_rotation(void);

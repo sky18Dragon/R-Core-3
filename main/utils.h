@@ -74,6 +74,8 @@ struct cJSON *create_battery_json(void);
 // Evaluates the configured cron rules (earliest match wins) and applies the
 // quiet-hours mask. Returns CRON_FALLBACK_SEC when no rules are configured.
 int get_seconds_until_next_wakeup(void);
+// The same, for the scheduled rotation after the next one.
+int get_seconds_until_wakeup_after_next(void);
 
 // Sanitize device name to create a valid mDNS hostname
 // Converts to lowercase, replaces spaces and special chars with hyphens

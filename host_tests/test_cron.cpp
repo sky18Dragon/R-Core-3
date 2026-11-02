@@ -121,6 +121,24 @@ TEST_F(CronUtc, SpecificTimesDifferingMinutesSplitRules)
     EXPECT_EQ(seconds_until(make_tm(2026, 6, 27, 10, 0, 0), {"15 9 *", "45 12 *"}), 9900);
 }
 
+TEST_F(CronUtc, AfterNextSkipsOneSlot)
+{
+    auto rules = compile({"0 */12 *"});
+    // 11:58:44 (the device case): next is 12:00 in 76 s, after it 24:00.
+    struct tm now = make_tm(2026, 6, 27, 11, 58, 44);
+    EXPECT_EQ(cron_seconds_until_after_next(&now, rules.data(), 1), 76 + 12 * 3600);
+    // Exactly on a slot: it counts as passed, so next is 12:00 and after it 24:00.
+    now = make_tm(2026, 6, 27, 0, 0, 0);
+    EXPECT_EQ(cron_seconds_until_after_next(&now, rules.data(), 1), 24 * 3600);
+    auto every = compile({"* * *"});
+    now = make_tm(2026, 6, 27, 10, 0, 30);
+    EXPECT_EQ(cron_seconds_until_after_next(&now, every.data(), 1), 90);
+    auto mixed = compile({"15 9 *", "45 12 *"});
+    now = make_tm(2026, 6, 27, 10, 0, 0);
+    EXPECT_EQ(cron_seconds_until_after_next(&now, mixed.data(), 2), 9900 + 20 * 3600 + 30 * 60);
+    EXPECT_EQ(cron_seconds_until_after_next(&now, nullptr, 0), 2 * CRON_FALLBACK_SEC);
+}
+
 TEST_F(CronUtc, EmptyRulesFallback)
 {
     struct tm now = make_tm(2026, 6, 27, 10, 0, 0);

@@ -201,3 +201,21 @@ int cron_seconds_until_next(const struct tm *now, const cron_rule_t *rules, int 
 
     return CRON_FALLBACK_SEC;
 }
+
+int cron_seconds_until_after_next(const struct tm *now, const cron_rule_t *rules, int n_rules)
+{
+    int first = cron_seconds_until_next(now, rules, n_rules);
+    if (!now) {
+        return first;
+    }
+    struct tm base = *now;
+    time_t t0 = mktime(&base);
+    if (t0 == (time_t) -1) {
+        return first;
+    }
+    // The first match is a whole minute; scanning from it starts one minute later.
+    time_t t1 = t0 + first;
+    struct tm next;
+    localtime_r(&t1, &next);
+    return first + cron_seconds_until_next(&next, rules, n_rules);
+}

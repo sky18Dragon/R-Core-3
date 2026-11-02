@@ -47,6 +47,10 @@ bool cron_match(const cron_rule_t *r, const struct tm *t);
 // CRON_FALLBACK_SEC if no match is found within CRON_MAX_HORIZON_SEC.
 int cron_seconds_until_next(const struct tm *now, const cron_rule_t *rules, int n_rules);
 
+// Seconds from `now` until the match after the next one: skips one slot, so a
+// screen just shown stays up for at least one full interval.
+int cron_seconds_until_after_next(const struct tm *now, const cron_rule_t *rules, int n_rules);
+
 #ifdef __cplusplus
 }
 #endif

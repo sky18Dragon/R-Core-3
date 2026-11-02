@@ -2376,6 +2376,22 @@ int get_seconds_until_next_wakeup(void)
     return cron_seconds_until_next(&timeinfo, rules, n);
 }
 
+int get_seconds_until_wakeup_after_next(void)
+{
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    cron_rule_t rules[MAX_CRON_RULES];
+    int n = config_manager_get_compiled_cron_rules(rules, MAX_CRON_RULES);
+    if (n == 0) {
+        return CRON_FALLBACK_SEC;
+    }
+
+    return cron_seconds_until_after_next(&timeinfo, rules, n);
+}
+
 void sanitize_hostname(const char *device_name, char *hostname, size_t max_len)
 {
     size_t i = 0, j = 0;

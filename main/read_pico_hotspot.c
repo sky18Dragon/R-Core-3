@@ -351,8 +351,9 @@ static void show_screen(void)
     }
     s_screen_shown = true;
     s_screen_done_ms = now_ms();
-    // Give the user a full interval to scan before the slideshow moves on.
-    power_manager_reset_rotate_timer();
+    // Give the user a full interval to scan before the slideshow moves on. The
+    // schedule is wall-clock (cron), so a plain reset could land seconds away.
+    power_manager_skip_next_rotation();
 }
 
 // The screen shows the password in clear text and e-paper keeps it without
