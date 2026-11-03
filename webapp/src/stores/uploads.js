@@ -51,6 +51,18 @@ export const useUploadsStore = defineStore("uploads", () => {
   let cancelRequested = false;
   let nextId = 1;
 
+  // The upload dialog: opened with photos from any "+" button or a drop
+  const dialogOpen = ref(false);
+
+  // Adds photos and opens the dialog; album (when given) becomes the target,
+  // e.g. "+" inside an album uploads to that album.
+  async function begin(files, album = null) {
+    if (album && !running.value) targetAlbum.value = album;
+    const result = await addFiles(files);
+    if (items.value.length) dialogOpen.value = true;
+    return result;
+  }
+
   const targetAlbum = ref(lastUploadAlbum.value);
   watch(targetAlbum, (name) => {
     lastUploadAlbum.value = name;
@@ -380,6 +392,7 @@ export const useUploadsStore = defineStore("uploads", () => {
     await appStore.loadSystemInfo();
     await appStore.loadAlbums();
     if (appStore.selectedAlbum === album) await appStore.loadImages(album);
+    await appStore.reloadAlbumImages(album);
     return summary.value;
   }
 
@@ -397,6 +410,8 @@ export const useUploadsStore = defineStore("uploads", () => {
   return {
     items,
     running,
+    dialogOpen,
+    begin,
     summary,
     lastBatch,
     targetAlbum,

@@ -2,26 +2,80 @@
 import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
-import { useAppStore, useHotspotStore, useSettingsStore } from "../stores";
+import { useAppStore, useHotspotStore, useSettingsStore, useUploadsStore } from "../stores";
 import AppHeader from "../components/AppHeader.vue";
+import AppNav from "../components/AppNav.vue";
 import HotspotBanner from "../components/HotspotBanner.vue";
+import PhotoUploader from "../components/PhotoUploader.vue";
+import SelectionBar from "../components/SelectionBar.vue";
 import SystemSettings from "../components/SystemSettings.vue";
-import UploadView from "./UploadView.vue";
+import PhotosView from "./PhotosView.vue";
 import AlbumsView from "./AlbumsView.vue";
-import { currentView, goTo } from "../utils/viewState";
+import SlideshowView from "./SlideshowView.vue";
+import { currentAlbum, currentView } from "../utils/viewState";
+import { clearSelection } from "../utils/selection";
+import { prefersDark } from "../utils/colorScheme";
 import "../styles/paper.css";
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
 const hotspotStore = useHotspotStore();
-const { xs } = useDisplay();
+const uploads = useUploadsStore();
+const { mdAndUp } = useDisplay();
+const navOpen = ref(false); // the phone drawer
 
 const hasStorage = computed(
   () => appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage
 );
 
-// Each view starts at the top when you switch to it
-watch(currentView, () => window.scrollTo(0, 0));
+// Each view starts at the top when you switch to it, with nothing picked
+watch([currentView, currentAlbum], () => {
+  clearSelection();
+  window.scrollTo(0, 0);
+});
+
+// The photo wall needs every album's list; refetch when albums come or go.
+watch(
+  () => appStore.albums.map((a) => a.name).join("\n"),
+  () => appStore.loadAllImages()
+);
+
+// Photos dropped anywhere open the upload dialog (into the open album, if any).
+const dragDepth = ref(0);
+function hasFiles(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+function onDragEnter(event) {
+  if (!hasFiles(event) || uploads.dialogOpen) return;
+  dragDepth.value++;
+}
+function onDragLeave() {
+  if (dragDepth.value > 0) dragDepth.value--;
+}
+function onDragOver(event) {
+  if (hasFiles(event)) event.preventDefault(); // allows the drop
+}
+function onDrop(event) {
+  const wasDragging = dragDepth.value > 0;
+  dragDepth.value = 0;
+  if (!wasDragging || uploads.running) return;
+  event.preventDefault(); // keep the browser from opening the photo
+  const album = currentView.value === "albums" ? currentAlbum.value : null;
+  uploads.begin(event.dataTransfer.files, album);
+}
+// On the window, so the whole page takes a drop without wrapping the layout.
+onMounted(() => {
+  window.addEventListener("dragenter", onDragEnter);
+  window.addEventListener("dragover", onDragOver);
+  window.addEventListener("dragleave", onDragLeave);
+  window.addEventListener("drop", onDrop);
+});
+onUnmounted(() => {
+  window.removeEventListener("dragenter", onDragEnter);
+  window.removeEventListener("dragover", onDragOver);
+  window.removeEventListener("dragleave", onDragLeave);
+  window.removeEventListener("drop", onDrop);
+});
 
 onMounted(async () => {
   // Load system info first to check for SD card
@@ -40,7 +94,6 @@ onMounted(async () => {
   if (appStore.isGrayscale) {
     settingsStore.applyGrayscaleDefaultIfUntouched();
   }
-  appStore.selectAlbum("Default");
 
   // Refresh battery every 30s
   setInterval(() => appStore.loadBatteryStatus(), 30000);
@@ -128,12 +181,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <v-app theme="paper">
-    <AppHeader />
+  <v-app :theme="prefersDark ? 'paperDark' : 'paper'">
+    <AppHeader @toggle-nav="navOpen = !navOpen" />
+    <AppNav v-model="navOpen" :temporary="!mdAndUp" />
+    <SelectionBar />
     <SystemSettings />
 
     <v-main class="bg-background">
-      <v-container class="py-3 py-sm-6" style="max-width: 1200px">
+      <v-container fluid class="page px-3 px-sm-6 pt-2 pb-10">
         <v-alert
           v-if="
             appStore.systemInfo.has_sdcard &&
@@ -153,11 +208,19 @@ onUnmounted(() => {
 
         <HotspotBanner />
 
-        <!-- Both views stay mounted so a half-finished upload survives a trip to the albums -->
-        <UploadView v-show="currentView === 'upload'" />
+        <PhotosView v-show="currentView === 'photos'" />
         <AlbumsView v-if="hasStorage" v-show="currentView === 'albums'" />
+        <SlideshowView v-show="currentView === 'slideshow'" />
       </v-container>
     </v-main>
+
+    <PhotoUploader />
+
+    <!-- Dropping photos anywhere -->
+    <div v-if="dragDepth > 0" class="drop-overlay" aria-hidden="true">
+      <v-icon icon="mdi-upload" size="40" />
+      <span class="text-h6 mt-2">{{ t("Drop to upload") }}</span>
+    </div>
 
     <!-- Device-asleep hint: shown when the device stops responding to keep-alive -->
     <v-dialog v-model="deviceAsleep" max-width="440" persistent>
@@ -183,26 +246,27 @@ onUnmounted(() => {
         </v-card-actions>
       </v-card>
     </v-dialog>
-
-    <!-- Phones: the two views live in a thumb-reachable bottom bar -->
-    <v-bottom-navigation
-      v-if="xs"
-      :model-value="currentView"
-      grow
-      color="primary"
-      @update:model-value="goTo"
-    >
-      <v-btn value="upload">
-        <v-icon>mdi-image-plus</v-icon>
-        <span>{{ t("Add photos") }}</span>
-      </v-btn>
-      <v-btn value="albums">
-        <v-icon>mdi-image-multiple</v-icon>
-        <span>{{ t("Albums") }}</span>
-      </v-btn>
-    </v-bottom-navigation>
   </v-app>
 </template>
+
+<style scoped>
+.page {
+  max-width: 1600px;
+}
+.drop-overlay {
+  position: fixed;
+  inset: 12px;
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed rgb(var(--v-theme-on-surface));
+  border-radius: 16px;
+  background: rgba(var(--v-theme-background), 0.88);
+  pointer-events: none;
+}
+</style>
 
 <!-- Touch screens: small icon buttons get a 44px hit area (the thumbnail delete
      overlay keeps its own, thumbnail-sized target). -->

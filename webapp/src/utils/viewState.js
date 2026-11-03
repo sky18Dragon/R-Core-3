@@ -1,27 +1,63 @@
 import { ref } from "vue";
 
-// The two main views of the page: "upload" (home) and "albums". The URL hash is
-// the source of truth (#/albums), so back, refresh and bookmarks work. A hash is
-// used rather than a path because the device serves the page only at "/".
-export const VIEWS = ["upload", "albums"];
+// Where the page is: "photos" (home, every photo grouped by album), "albums"
+// (the album list, or one album when `album` is set) and "slideshow". The URL
+// hash is the source of truth (#/albums/Trips), so back, refresh and bookmarks
+// work. A hash is used rather than a path because the device serves the page
+// only at "/".
+export const VIEWS = ["photos", "albums", "slideshow"];
 
-export function viewFromHash(hash) {
-  return String(hash || "").replace(/^#\/?/, "") === "albums" ? "albums" : "upload";
+export function routeFromHash(hash) {
+  const parts = String(hash || "")
+    .replace(/^#\/?/, "")
+    .split("/");
+  if (parts[0] === "albums") {
+    let album = null;
+    if (parts.length > 1 && parts[1]) {
+      try {
+        album = decodeURIComponent(parts.slice(1).join("/"));
+      } catch {
+        album = null;
+      }
+    }
+    return { view: "albums", album };
+  }
+  if (parts[0] === "slideshow") return { view: "slideshow", album: null };
+  return { view: "photos", album: null };
 }
 
-export const currentView = ref(
-  typeof window === "undefined" ? "upload" : viewFromHash(window.location.hash)
-);
+export function hashForRoute(view, album = null) {
+  if (view === "albums") return album ? `#/albums/${encodeURIComponent(album)}` : "#/albums";
+  if (view === "slideshow") return "#/slideshow";
+  return "#/";
+}
+
+const initial =
+  typeof window === "undefined"
+    ? { view: "photos", album: null }
+    : routeFromHash(window.location.hash);
+
+export const currentView = ref(initial.view);
+// The open album on the albums view; null shows the album list.
+export const currentAlbum = ref(initial.album);
 
 if (typeof window !== "undefined") {
   window.addEventListener("hashchange", () => {
-    currentView.value = viewFromHash(window.location.hash);
+    const route = routeFromHash(window.location.hash);
+    currentView.value = route.view;
+    currentAlbum.value = route.album;
   });
 }
 
-export function goTo(view) {
+export function goTo(view, album = null) {
   if (!VIEWS.includes(view)) return;
-  const hash = view === "albums" ? "#/albums" : "#/";
+  const target = view === "albums" ? album : null;
+  const hash = hashForRoute(view, target);
   if (window.location.hash !== hash) window.location.hash = hash;
   currentView.value = view;
+  currentAlbum.value = target;
+}
+
+export function openAlbum(name) {
+  goTo("albums", name);
 }

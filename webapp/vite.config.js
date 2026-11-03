@@ -58,7 +58,8 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://192.168.0.140",
+        // FRAME_URL=http://<frame-ip> npm run dev  -- to develop against a real frame
+        target: process.env.FRAME_URL || "http://192.168.0.140",
         changeOrigin: true,
       },
     },
