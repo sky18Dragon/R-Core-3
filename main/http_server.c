@@ -35,6 +35,10 @@
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
 #include "periodic_tasks.h"
+#include "photo_meta.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_orientation.h"
+#endif
 #include "power_manager.h"
 #include "processing_settings.h"
 #include "sdcard.h"
@@ -1046,6 +1050,33 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
     dst[j] = '\0';
 }
 
+// The photo index is a convenience: a failed update is logged, never an upload or
+// delete failure (a missing entry means a landscape photo of unknown age).
+static void record_new_photo(const char *album_path, const char *name)
+{
+    time_t now = time(NULL);
+    int64_t added = now >= 1704067200 ? (int64_t) now : 0; // only a set clock
+    cJSON *meta = photo_meta_load(album_path);
+    if (!photo_meta_set(meta, name, 0, added) || !photo_meta_save(album_path, meta))
+        ESP_LOGW(TAG, "Photo index not updated for %s", name);
+    cJSON_Delete(meta);
+}
+
+static void forget_photo(const char *image_path)
+{
+    const char *slash = strrchr(image_path, '/');
+    char album_path[512];
+    if (!slash || (size_t) (slash - image_path) >= sizeof(album_path)) return;
+    memcpy(album_path, image_path, (size_t) (slash - image_path));
+    album_path[slash - image_path] = '\0';
+    cJSON *meta = photo_meta_load(album_path);
+    if (cJSON_GetObjectItemCaseSensitive(meta, slash + 1)) {
+        photo_meta_forget(meta, slash + 1);
+        if (!photo_meta_save(album_path, meta)) ESP_LOGW(TAG, "Photo index not updated");
+    }
+    cJSON_Delete(meta);
+}
+
 static esp_err_t upload_image_handler(httpd_req_t *req)
 {
     if (!http_requests_ready(req)) {
@@ -1209,6 +1240,7 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
 #endif
 
     ESP_LOGI(TAG, "Image saved successfully: %s (thumbnail: %s)", dest_filename, jpg_filename);
+    record_new_photo(album_path, dest_filename);
 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "success");
@@ -1408,6 +1440,7 @@ static esp_err_t delete_image_handler(httpd_req_t *req)
 
     // Delete thumbnail (ignore errors if it doesn't exist)
     unlink(jpg_path);
+    forget_photo(filepath);
 
     ESP_LOGI(TAG, "Image deleted successfully: %s", filepath_copy);
 
@@ -1421,6 +1454,97 @@ static esp_err_t delete_image_handler(httpd_req_t *req)
     free(json_str);
     cJSON_Delete(response);
 
+    return ESP_OK;
+}
+
+#if CONFIG_READ_PICO_LOCAL_FRAME
+// GET /api/orientation: the accelerometer reading and which way the frame stands.
+static esp_err_t orientation_handler(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    if (!response) return httpd_resp_send_500(req);
+    read_pico_orientation_describe(response);
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, json_str ? json_str : "{}");
+    free(json_str);
+    return err;
+}
+#endif
+
+// PATCH /api/photo {"filepath": "<album>/<name>", "up": 0|90|180|270}: which way
+// is up for one photo. "redraw" tells the page the frame shows this photo and
+// should show it again the new way round.
+static esp_err_t photo_handler(httpd_req_t *req)
+{
+    if (!http_requests_ready(req)) {
+        httpd_resp_set_status(req, HTTPD_503);
+        httpd_resp_sendstr(req, "System is still initializing");
+        return ESP_FAIL;
+    }
+    if (!storage_has_persistent_storage()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Storage not found");
+        return ESP_FAIL;
+    }
+    char buf[384];
+    int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data received");
+        return ESP_FAIL;
+    }
+    buf[received] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    const cJSON *path_item = cJSON_GetObjectItem(root, "filepath");
+    const cJSON *up_item = cJSON_GetObjectItem(root, "up");
+    const char *relative = cJSON_GetStringValue(path_item);
+    if (!relative || !cJSON_IsNumber(up_item) || !photo_meta_up_valid(up_item->valueint) ||
+        !is_path_safe(relative) || !strchr(relative, '/')) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Need filepath and up (0, 90, 180, 270)");
+        return ESP_FAIL;
+    }
+    int up = up_item->valueint;
+    char image_path[512];
+    int n = snprintf(image_path, sizeof(image_path), "%s/%s", IMAGE_DIRECTORY, relative);
+    cJSON_Delete(root);
+    struct stat st;
+    if (n <= 0 || (size_t) n >= sizeof(image_path) || stat(image_path, &st) != 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such photo");
+        return ESP_FAIL;
+    }
+    char *slash = strrchr(image_path, '/');
+    *slash = '\0'; // image_path is now the album directory
+    cJSON *meta = photo_meta_load(image_path);
+    int old_up = photo_meta_up(meta, slash + 1);
+    bool saved = photo_meta_set(meta, slash + 1, up, 0) && photo_meta_save(image_path, meta);
+    cJSON_Delete(meta);
+    *slash = '/';
+    if (!saved) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not save the photo index");
+        return ESP_FAIL;
+    }
+    bool redraw = false;
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Shown again when it changes how it suits the way the frame stands.
+    char current[DISPLAY_IMAGE_PATH_CAPACITY];
+    bool known = false;
+    bool is_current = display_manager_copy_current_image(current, sizeof(current), &known) &&
+                      known && strcmp(current, image_path) == 0;
+    int stands = read_pico_orientation_get();
+    redraw = is_current && photo_meta_turn(old_up, stands) != photo_meta_turn(up, stands);
+#else
+    (void) old_up; // only the local frame turns photos when showing them
+#endif
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "success");
+    cJSON_AddNumberToObject(response, "up", up);
+    cJSON_AddBoolToObject(response, "redraw", redraw);
+    char *json_str = cJSON_PrintUnformatted(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str ? json_str : "{}");
+    free(json_str);
+    cJSON_Delete(response);
     return ESP_OK;
 }
 
@@ -2056,6 +2180,15 @@ static esp_err_t config_handler(httpd_req_t *req)
         // Other
         cJSON_AddBoolToObject(root, "deep_sleep_enabled", config_manager_get_deep_sleep_enabled());
         cJSON_AddBoolToObject(root, "debug_log_enabled", config_manager_get_debug_log_enabled());
+#if CONFIG_BOARD_DRIVER_READ_PICO
+        cJSON_AddStringToObject(root, "photo_refresh",
+                                config_manager_get_photo_wash() ? "clean" : "fast");
+#endif
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        static const char *const orient_names[] = {"auto", "landscape", "portrait"};
+        cJSON_AddStringToObject(root, "orientation_mode",
+                                orient_names[config_manager_get_orient_mode() % 3]);
+#endif
 
         char *json_str = cJSON_Print(root);
         httpd_resp_set_type(req, "application/json");
@@ -2453,11 +2586,12 @@ static esp_err_t album_images_handler(httpd_req_t *req)
     }
 
     cJSON *response = cJSON_CreateArray();
+    cJSON *meta = photo_meta_load(album_path); // which way is up, when added
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_REG) {
-            if (entry->d_name[0] == '.' && entry->d_name[1] == '_') {
-                continue;
+            if (entry->d_name[0] == '.') {
+                continue; // AppleDouble files and the photo index
             }
             const char *ext = strrchr(entry->d_name, '.');
             if (ext && (strcasecmp(ext, ".bmp") == 0 || strcasecmp(ext, ".png") == 0 ||
@@ -2465,6 +2599,9 @@ static esp_err_t album_images_handler(httpd_req_t *req)
                 cJSON *image_obj = cJSON_CreateObject();
                 cJSON_AddStringToObject(image_obj, "filename", entry->d_name);
                 cJSON_AddStringToObject(image_obj, "album", decoded_album_name);
+                cJSON_AddNumberToObject(image_obj, "up", photo_meta_up(meta, entry->d_name));
+                int64_t added = photo_meta_added(meta, entry->d_name);
+                if (added) cJSON_AddNumberToObject(image_obj, "added", (double) added);
 
                 // Check if a corresponding JPG thumbnail exists for any image type
                 char thumbnail_name[256];
@@ -2488,6 +2625,7 @@ static esp_err_t album_images_handler(httpd_req_t *req)
         }
     }
     closedir(dir);
+    cJSON_Delete(meta);
 
     char *json_str = cJSON_Print(response);
     httpd_resp_set_type(req, "application/json");
@@ -3518,6 +3656,10 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/display", HTTP_POST, display_image_handler);
 
         HTTP_REGISTER("/api/delete", HTTP_POST, delete_image_handler);
+        HTTP_REGISTER("/api/photo", HTTP_PATCH, photo_handler);
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        HTTP_REGISTER("/api/orientation", HTTP_GET, orientation_handler);
+#endif
 
         HTTP_REGISTER("/api/image", HTTP_GET, serve_image_handler);
 

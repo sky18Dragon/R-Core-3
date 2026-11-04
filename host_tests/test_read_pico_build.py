@@ -707,6 +707,8 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/upload", "HTTP_POST"),
             ("/api/display", "HTTP_POST"),
             ("/api/delete", "HTTP_POST"),
+            ("/api/photo", "HTTP_PATCH"),
+            ("/api/orientation", "HTTP_GET"),
             ("/api/image", "HTTP_GET"),
             ("/api/settings/processing", "HTTP_GET"),
             ("/api/settings/processing", "HTTP_POST"),

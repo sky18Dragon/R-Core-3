@@ -27,6 +27,8 @@ const char *display_manager_get_current_image(void);
 // Checked copy under the existing display mutex, never a racing borrowed pointer.
 bool display_manager_copy_current_image(char *out, size_t capacity, bool *known);
 void display_manager_initialize_paint(void);
+// Read Pico: how photos replace each other (config "photo_refresh"); other boards ignore it.
+void display_manager_set_photo_wash(bool wash);
 
 /**
  * @brief Display an RGB buffer directly on the e-paper display
@@ -101,5 +103,9 @@ typedef struct {
 // Read Pico: the first screen after Wi-Fi setup, drawn like the hotspot screen
 // for the panel in use (the upstream image is laid out for another panel).
 esp_err_t display_manager_show_setup_complete(const display_setup_screen_t *screen);
+
+// Local frame: no photo in the slideshow suits the way the frame stands
+// (`orientation`, 0/90/180/270): a page saying so, drawn that way round.
+esp_err_t display_manager_show_orientation_hint(int orientation);
 
 #endif

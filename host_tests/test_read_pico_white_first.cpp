@@ -28,6 +28,10 @@ EpdDrawError epd_hl_update_screen_full(EpdiyHighlevelState *hl, int mode, int te
     memcpy(hl->back_fb, hl->front_fb, kBytes); // vendor HL updates back_fb even on failure
     return full_result;
 }
+void epd_clear(void)
+{
+    calls.push_back("wash");
+}
 EpdDrawError epd_hl_update_screen_from_white(EpdiyHighlevelState *hl, int mode, int temperature)
 {
     EXPECT_EQ(mode, MODE_GC16);
@@ -64,7 +68,7 @@ protected:
 
 TEST_F(ReadPicoWhiteFirst, PhotoChangeFlashesWhiteThenDrawsTargetFromWhite)
 {
-    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, 31, healthy), EPD_DRAW_SUCCESS);
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, false, 31, healthy), EPD_DRAW_SUCCESS);
     ASSERT_EQ(calls, (std::vector<std::string>{"full", "from_white"}));
     EXPECT_EQ(drawn[0], std::vector<uint8_t>(kBytes, 0xff)); // first pass: all white
     EXPECT_EQ(drawn[1], target);                             // second pass: the photo
@@ -74,7 +78,7 @@ TEST_F(ReadPicoWhiteFirst, PhotoChangeFlashesWhiteThenDrawsTargetFromWhite)
 
 TEST_F(ReadPicoWhiteFirst, AlreadyWhitePanelSkipsTheFlash)
 {
-    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, true, 31, healthy), EPD_DRAW_SUCCESS);
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, true, false, 31, healthy), EPD_DRAW_SUCCESS);
     ASSERT_EQ(calls, (std::vector<std::string>{"from_white"}));
     EXPECT_EQ(drawn[0], target);
     EXPECT_EQ(healthy_calls, 0);
@@ -83,7 +87,7 @@ TEST_F(ReadPicoWhiteFirst, AlreadyWhitePanelSkipsTheFlash)
 TEST_F(ReadPicoWhiteFirst, FlashFailureStopsAndRestoresTargetBuffer)
 {
     full_result = MOCK_DRAW_FAILURE;
-    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, 31, healthy), MOCK_DRAW_FAILURE);
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, false, 31, healthy), MOCK_DRAW_FAILURE);
     ASSERT_EQ(calls, (std::vector<std::string>{"full"}));
     EXPECT_EQ(std::vector<uint8_t>(front, front + kBytes), target);
     EXPECT_EQ(healthy_calls, 0);
@@ -92,7 +96,7 @@ TEST_F(ReadPicoWhiteFirst, FlashFailureStopsAndRestoresTargetBuffer)
 TEST_F(ReadPicoWhiteFirst, UnhealthyBusAfterFlashNeverStartsSecondTransaction)
 {
     healthy_answer = false;
-    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, 31, healthy), -1);
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, false, 31, healthy), -1);
     ASSERT_EQ(calls, (std::vector<std::string>{"full"}));
     EXPECT_EQ(std::vector<uint8_t>(front, front + kBytes), target);
 }
@@ -100,6 +104,27 @@ TEST_F(ReadPicoWhiteFirst, UnhealthyBusAfterFlashNeverStartsSecondTransaction)
 TEST_F(ReadPicoWhiteFirst, FromWhiteFailureIsReturned)
 {
     white_result = MOCK_DRAW_FAILURE;
-    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, 31, healthy), MOCK_DRAW_FAILURE);
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, false, 31, healthy), MOCK_DRAW_FAILURE);
     ASSERT_EQ(calls, (std::vector<std::string>{"full", "from_white"}));
+}
+
+TEST_F(ReadPicoWhiteFirst, WashReplacesTheWhiteFlashAndKeepsTheTarget)
+{
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, true, 31, healthy),
+              EPD_DRAW_SUCCESS);
+    ASSERT_EQ(calls, (std::vector<std::string>{"wash", "from_white"}));
+    EXPECT_EQ(drawn[0], target); // the photo is drawn from white, untouched by the wash
+    EXPECT_EQ(healthy_calls, 1);
+}
+
+TEST_F(ReadPicoWhiteFirst, WashSkippedOnAWhitePanelAndStopsOnABadBus)
+{
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, true, true, 31, healthy),
+              EPD_DRAW_SUCCESS);
+    ASSERT_EQ(calls, (std::vector<std::string>{"from_white"}));
+    calls.clear();
+    healthy_answer = false;
+    EXPECT_EQ(read_pico_white_first_gc16(&hl, saved, kBytes, false, true, 31, healthy), -1);
+    ASSERT_EQ(calls, (std::vector<std::string>{"wash"}));
+    EXPECT_EQ(std::vector<uint8_t>(front, front + kBytes), target);
 }

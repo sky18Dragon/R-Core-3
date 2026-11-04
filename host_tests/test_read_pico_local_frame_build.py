@@ -80,6 +80,7 @@ class LocalFrameBuildTests(unittest.TestCase):
         local = draw[draw.index("#if CONFIG_READ_PICO_LOCAL_FRAME"):draw.index("#else", draw.index("#if CONFIG_READ_PICO_LOCAL_FRAME"))]
         self.assertIn("read_pico_white_first_gc16(&hl, target_fb", local)
         self.assertIn("untouched_white", local)
+        self.assertIn("photo_wash", local)  # wash before each photo unless set to fast
         self.assertNotIn("epd_hl_update_screen_full", local)
         cmake = (ROOT / "components/epaper_driver_read_pico/CMakeLists.txt").read_text()
         self.assertIn('if(CONFIG_READ_PICO_LOCAL_FRAME)\n        list(APPEND READ_PICO_SOURCES "src/read_pico_white_first.c")', cmake)

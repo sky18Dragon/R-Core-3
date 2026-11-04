@@ -165,6 +165,16 @@ target_include_directories(remote_config_test PRIVATE "${read_pico_cjson_dir}" s
 target_link_libraries(remote_config_test GTest::gtest_main)
 gtest_discover_tests(remote_config_test)
 
+add_executable(frame_orientation_test test_frame_orientation.cpp ../main/frame_orientation.c)
+target_include_directories(frame_orientation_test PRIVATE ../main)
+target_link_libraries(frame_orientation_test GTest::gtest_main)
+gtest_discover_tests(frame_orientation_test)
+
+add_executable(photo_meta_test test_photo_meta.cpp ../main/photo_meta.c "${read_pico_cjson_dir}/cJSON.c")
+target_include_directories(photo_meta_test PRIVATE "${read_pico_cjson_dir}" ../main)
+target_link_libraries(photo_meta_test GTest::gtest_main)
+gtest_discover_tests(photo_meta_test)
+
 add_executable(config_apply_test test_config_apply.cpp ../main/config_apply.c)
 target_include_directories(config_apply_test PRIVATE stubs ../main)
 target_link_libraries(config_apply_test GTest::gtest_main)

@@ -13,6 +13,7 @@ import {
   effectiveRotation,
 } from "../utils/imageGeometry";
 import { decodeToCanvas, loadImageFromFile } from "../utils/imageLoad";
+import { relativePhotoPath, upForUpload } from "../utils/orientation";
 import {
   makeBaseName,
   classifyUploadFailure,
@@ -313,7 +314,10 @@ export const useUploadsStore = defineStore("uploads", () => {
   async function post(url, form) {
     try {
       const response = await fetch(url, { method: "POST", body: form });
-      if (response.ok) return { ok: true };
+      if (response.ok) {
+        const body = await response.json().catch(() => ({}));
+        return { ok: true, filepath: body.filepath || "" };
+      }
       const text = await response.text().catch(() => "");
       return { ok: false, code: classifyUploadFailure(response.status, text) };
     } catch {
@@ -358,6 +362,14 @@ export const useUploadsStore = defineStore("uploads", () => {
       try {
         const result = await sendToAlbum(item, album);
         if (result.ok) {
+          // A portrait photo is stored on its side to fill the panel: record
+          // which way is up so the page and the frame can stand it upright.
+          const up = upForUpload(rotationOf(item), item.height > item.width);
+          const relative = relativePhotoPath(result.filepath);
+          if (up && relative) {
+            const [photoAlbum, filename] = relative.split("/");
+            await appStore.setPhotoUp({ album: photoAlbum, filename }, up);
+          }
           item.status = "done";
           done++;
           lastBatch.value.push({ id: item.id, name: item.name, album, thumbUrl: item.thumbUrl });

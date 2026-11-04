@@ -13,8 +13,12 @@
 //
 // hl->front_fb holds the target on entry and again on return. `saved` is a
 // caller-owned scratch frame of `bytes`. When `panel_white` is true the physical
-// panel is already white and the flash is skipped. `healthy` is consulted after
-// the flash; returning false stops before the second energized transaction.
+// panel is already white and the flash is skipped. With `wash` the flash is the
+// vendor's black/white wash (epd_clear: 3 cycles, as on its boot and lock
+// screens) instead of one GC16 pass to white: it clears high-contrast ghosts
+// that a single pass leaves, for about a second more. `healthy` is consulted
+// after the flash; returning false stops before the second energized transaction.
 // Returns the first non-success EpdDrawError, or -1 when `healthy` refused.
 int read_pico_white_first_gc16(EpdiyHighlevelState *hl, uint8_t *saved, size_t bytes,
-                               bool panel_white, int temperature, bool (*healthy)(void));
+                               bool panel_white, bool wash, int temperature,
+                               bool (*healthy)(void));

@@ -1,11 +1,14 @@
 <script setup>
 import { t } from "../i18n";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { useAppStore } from "../stores";
+import { useAppStore, useUploadsStore } from "../stores";
+import UprightPhoto from "./UprightPhoto.vue";
 import { albumLabel } from "../utils/albums";
+import { uprightAspect } from "../utils/orientation";
 
-// Full-screen look at one photo, with the two things you can do to it: put it
-// on the frame, or delete it. Arrow keys / swipes move through the list.
+// Full-screen look at one photo, standing upright, with what you can do to it:
+// turn it the right way up, put it on the frame, or delete it. Arrow keys /
+// swipes move through the list.
 const props = defineProps({
   images: { type: Array, required: true },
   modelValue: { type: Number, default: -1 }, // index; -1 = closed
@@ -13,6 +16,7 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue"]);
 
 const appStore = useAppStore();
+const uploads = useUploadsStore();
 const open = computed({
   get: () => props.modelValue >= 0 && props.modelValue < props.images.length,
   set: (value) => {
@@ -25,6 +29,39 @@ const src = computed(() =>
     ? `/api/image?filepath=${encodeURIComponent(image.value.album + "/" + image.value.thumbnail)}`
     : ""
 );
+
+// The photo's upright shape; the box is as large as the stage allows.
+const aspect = computed(() => {
+  const [w, h] = String(uploads.frameAspect).split("/").map(Number);
+  return uprightAspect(image.value?.up, w && h ? w / h : 16 / 9);
+});
+const boxStyle = computed(() => ({
+  aspectRatio: aspect.value,
+  width: `min(100%, calc((100vh - 112px) * ${aspect.value}), ${Math.round(900 * Math.min(aspect.value, 1))}px)`,
+}));
+
+// Turning: saved at once; "Undo" turns it back while the note shows.
+const turned = ref(null); // { image, delta } of the last turn
+const turnShown = computed({
+  get: () => !!turned.value,
+  set: (value) => {
+    if (!value) turned.value = null;
+  },
+});
+async function rotate(delta) {
+  busy.value = true;
+  const target = image.value;
+  const ok = (await appStore.rotatePhotos([target], delta)) === 1;
+  busy.value = false;
+  if (ok) turned.value = { album: target.album, filename: target.filename, delta };
+  else notice.value = t("Could not turn the photo");
+}
+async function undoTurn() {
+  const last = turned.value;
+  turned.value = null;
+  const current = props.images.find((i) => i.album === last.album && i.filename === last.filename);
+  if (current) await appStore.rotatePhotos([current], -last.delta);
+}
 
 const confirmDelete = ref(false);
 const busy = ref(false);
@@ -101,6 +138,15 @@ function touchEnd(event) {
         />
         <span v-if="image" class="viewer-title">{{ albumLabel(image.album) }}</span>
         <v-spacer />
+        <v-btn
+          icon="mdi-rotate-right"
+          variant="text"
+          color="white"
+          :disabled="busy"
+          :title="t('Rotate right 90°')"
+          :aria-label="t('Rotate right 90°')"
+          @click="rotate(90)"
+        />
         <v-btn variant="text" color="white" :loading="busy" @click="showOnFrame">
           <v-icon icon="mdi-monitor" start />
           <span class="d-none d-sm-inline">{{ t("Show on frame") }}</span>
@@ -117,7 +163,9 @@ function touchEnd(event) {
       </div>
 
       <div class="viewer-stage" @click.self="open = false">
-        <img v-if="image" :key="src" :src="src" alt="" class="viewer-image" />
+        <div v-if="image" :key="src" class="viewer-box" :style="boxStyle">
+          <UprightPhoto :src="src" :up="image.up || 0" :box-aspect="aspect" :lazy="false" />
+        </div>
         <v-btn
           v-if="modelValue > 0"
           icon="mdi-chevron-left"
@@ -151,6 +199,12 @@ function touchEnd(event) {
       </v-card>
     </v-dialog>
 
+    <v-snackbar v-model="turnShown" :timeout="4000" location="bottom">
+      {{ t("Turned. The frame uses the new way round.") }}
+      <template #actions>
+        <v-btn variant="text" @click="undoTurn">{{ t("Undo") }}</v-btn>
+      </template>
+    </v-snackbar>
     <v-snackbar v-model="noticeShown" :timeout="3500" location="bottom">
       {{ notice }}
     </v-snackbar>
@@ -188,13 +242,10 @@ function touchEnd(event) {
   padding: 64px 16px 24px;
   min-height: 0;
 }
-.viewer-image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  image-rendering: auto;
-  /* Thumbnails are small; keep them from blowing up past twice their size. */
-  width: min(100%, 800px);
+/* Sized in script to the photo's upright shape; thumbnails are small, so it
+   stops growing at about twice their size. */
+.viewer-box {
+  position: relative;
 }
 .viewer-nav {
   position: absolute;

@@ -2,7 +2,13 @@
 import { t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useAppStore } from "../stores";
-import { clearSelection, selectedCount, selectedPhotos, selecting } from "../utils/selection";
+import {
+  clearSelection,
+  selectAll,
+  selectedCount,
+  selectedPhotos,
+  selecting,
+} from "../utils/selection";
 
 // Replaces the top bar while photos are picked: how many, and what to do with them.
 const appStore = useAppStore();
@@ -25,6 +31,23 @@ async function showOnFrame() {
     ? t("Sent to the frame. The screen is refreshing.")
     : t("Could not show it on the frame");
   if (ok) clearSelection();
+}
+
+// Turning keeps the selection, so a batch can be turned again until it is right.
+async function rotate(delta) {
+  busy.value = true;
+  const list = selectedPhotos.value;
+  const turned = await appStore.rotatePhotos(list, delta);
+  busy.value = false;
+  // The picked entries still hold the old way round: re-pick the updated ones.
+  const fresh = list
+    .map((image) =>
+      (appStore.imagesByAlbum[image.album] || []).find((i) => i.filename === image.filename)
+    )
+    .filter(Boolean);
+  clearSelection();
+  selectAll(fresh);
+  if (turned !== list.length) notice.value = t("Could not turn the photo");
 }
 
 async function remove() {
@@ -70,6 +93,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <v-icon icon="mdi-monitor" start />
         <span class="d-none d-sm-inline">{{ t("Show on frame") }}</span>
       </v-btn>
+      <v-btn
+        icon="mdi-rotate-left"
+        variant="text"
+        :disabled="busy"
+        :title="t('Rotate left 90°')"
+        :aria-label="t('Rotate left 90°')"
+        @click="rotate(-90)"
+      />
+      <v-btn
+        icon="mdi-rotate-right"
+        variant="text"
+        :disabled="busy"
+        :title="t('Rotate right 90°')"
+        :aria-label="t('Rotate right 90°')"
+        @click="rotate(90)"
+      />
       <v-btn
         icon="mdi-delete-outline"
         variant="text"

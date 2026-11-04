@@ -6,6 +6,7 @@ import ImageSettings from "../components/ImageSettings.vue";
 import { albumLabel } from "../utils/albums";
 import { scheduleSummary } from "../utils/slideshow";
 import { currentView } from "../utils/viewState";
+import { isPortraitUp } from "../utils/orientation";
 
 // Everything about what the frame shows by itself: the picture now, how often
 // it changes, and which albums take part.
@@ -69,6 +70,44 @@ const schedule = computed(() =>
 function photoCount(album) {
   return (appStore.imagesByAlbum[album.name] || []).length;
 }
+
+// Which way the frame stands decides which photos take turns (frames with an
+// orientation sensor; null elsewhere). Checked while this page is open.
+const stands = ref(null);
+let standsTimer = null;
+async function loadOrientation() {
+  try {
+    const response = await fetch("/api/orientation", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    stands.value = Number.isFinite(data.orientation) ? data.orientation : null;
+  } catch {
+    // Older frames have no sensor: nothing to show.
+  }
+}
+watch(
+  currentView,
+  (view) => {
+    clearInterval(standsTimer);
+    if (view !== "slideshow") return;
+    loadOrientation();
+    standsTimer = setInterval(loadOrientation, 10000);
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => clearInterval(standsTimer));
+
+const standsUp = computed(() => stands.value !== null && isPortraitUp(stands.value));
+function shapeCounts(album) {
+  const list = appStore.imagesByAlbum[album.name] || [];
+  const portrait = list.filter((i) => isPortraitUp(i.up)).length;
+  return { landscape: list.length - portrait, portrait };
+}
+const suitingCount = computed(() =>
+  appStore.albums
+    .filter((a) => a.enabled)
+    .reduce((n, a) => n + shapeCounts(a)[standsUp.value ? "portrait" : "landscape"], 0)
+);
 function coverUrl(album) {
   const [first] = appStore.imagesByAlbum[album.name] || [];
   return first
@@ -94,7 +133,22 @@ function coverUrl(album) {
       </div>
       <div class="now-text">
         <div class="text-overline text-medium-emphasis">{{ t("Now showing") }}</div>
-        <div class="text-body-1 mb-3">{{ schedule }}</div>
+        <div class="text-body-1">{{ schedule }}</div>
+        <div v-if="stands !== null" class="text-body-2 text-medium-emphasis mt-1">
+          {{
+            standsUp
+              ? t("The frame stands up: portrait photos take turns ({n}).", { n: suitingCount })
+              : t("The frame lies sideways: landscape photos take turns ({n}).", {
+                  n: suitingCount,
+                })
+          }}
+        </div>
+        <div v-if="stands !== null && suitingCount === 0" class="text-body-2 mt-1">
+          <v-icon icon="mdi-information-outline" size="small" class="mr-1" />{{
+            t("No photo in the slideshow suits this way round; the frame shows a hint.")
+          }}
+        </div>
+        <div class="mb-3" />
         <v-btn variant="tonal" :loading="rotating" @click="next">
           <v-icon icon="mdi-skip-next" start />
           {{ t("Show next image") }}
@@ -119,9 +173,18 @@ function coverUrl(album) {
             </span>
           </template>
           <v-list-item-title>{{ albumLabel(album.name) }}</v-list-item-title>
-          <v-list-item-subtitle>{{
-            t("{n} photos", { n: photoCount(album) })
-          }}</v-list-item-subtitle>
+          <v-list-item-subtitle>
+            {{ t("{n} photos", { n: photoCount(album) }) }}
+            <template v-if="stands !== null">
+              ·
+              {{
+                t("{l} landscape, {p} portrait", {
+                  l: shapeCounts(album).landscape,
+                  p: shapeCounts(album).portrait,
+                })
+              }}
+            </template>
+          </v-list-item-subtitle>
           <template #append>
             <v-switch
               :model-value="album.enabled"

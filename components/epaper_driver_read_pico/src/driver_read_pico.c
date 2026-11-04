@@ -42,6 +42,8 @@ static read_pico_sy_handle_t sy;
 static EpdiyHighlevelState hl;
 static bool initialized, renderer_initialized, lease, rails, fault, reference_known, white_pending;
 static bool untouched_white;
+// Local frame: wash the panel black/white before each photo (see read_pico_white_first.h).
+static bool photo_wash = true;
 static esp_pm_lock_handle_t cpu_pm_lock, apb_pm_lock;
 static bool pm_locks_held;
 static esp_err_t callback_error;
@@ -304,7 +306,8 @@ static int draw_frame(const uint8_t *frame, size_t size, int temperature, unsign
     {
 #if CONFIG_READ_PICO_LOCAL_FRAME
         int result = read_pico_white_first_gc16(&hl, target_fb, READ_PICO_FRAME_BYTES,
-                                                untouched_white, temperature, bus_healthy);
+                                                untouched_white, photo_wash, temperature,
+                                                bus_healthy);
         draw = result < 0 ? EPD_DRAW_SUCCESS : (enum EpdDrawError) result; // -1: callback_error set
 #else
         draw = epd_hl_update_screen_full(&hl, MODE_GC16, temperature);
@@ -686,6 +689,11 @@ esp_err_t read_pico_epaper_confirm_white_reference(void)
 }
 
 #if CONFIG_READ_PICO_LOCAL_FRAME
+void read_pico_epaper_set_photo_wash(bool wash)
+{
+    photo_wash = wash;
+}
+
 esp_err_t read_pico_epaper_prepare_local_frame(void)
 {
     // Product startup deliberately accepts a software reference after one clear.

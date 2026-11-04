@@ -180,6 +180,17 @@ const orientationOptions = computed(() => {
 // 90/270 would swap the panel's logical dimensions, which the streaming
 // pipeline and dimensionless .epdgz payloads can't represent; portrait
 // mounting is handled by the orientation setting instead
+const orientationModeOptions = computed(() => [
+  { title: t("Automatic (follows how the frame stands)"), value: "auto" },
+  { title: t("Always landscape"), value: "landscape" },
+  { title: t("Always portrait"), value: "portrait" },
+]);
+
+const photoRefreshOptions = computed(() => [
+  { title: t("Clean (about 3 s, flashes a few times)"), value: "clean" },
+  { title: t("Fast (about 2 s, may leave a faint trace)"), value: "fast" },
+]);
+
 const rotationOptions = [
   { title: "0°", value: 0 },
   { title: "180°", value: 180 },
@@ -810,13 +821,45 @@ function onDrawerToggle(open) {
                 }}
               </v-alert>
               <v-row>
-                <v-col cols="12">
+                <v-col v-if="settingsStore.deviceSettings.orientationMode" cols="12">
+                  <v-select
+                    v-model="settingsStore.deviceSettings.orientationMode"
+                    :items="orientationModeOptions"
+                    item-title="title"
+                    item-value="value"
+                    :label="t('Frame orientation')"
+                    :hint="
+                      t(
+                        'Automatic follows how the frame stands: landscape photos when it lies, portrait photos when it stands up.'
+                      )
+                    "
+                    persistent-hint
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col v-else cols="12">
                   <v-select
                     v-model="settingsStore.deviceSettings.displayOrientation"
                     :items="orientationOptions"
                     item-title="title"
                     item-value="value"
                     :label="t('Display Orientation')"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col v-if="settingsStore.deviceSettings.photoRefresh" cols="12">
+                  <v-select
+                    v-model="settingsStore.deviceSettings.photoRefresh"
+                    :items="photoRefreshOptions"
+                    item-title="title"
+                    item-value="value"
+                    :label="t('Photo change')"
+                    :hint="
+                      t(
+                        'Clean washes the screen black and white first, so no trace of the last photo stays.'
+                      )
+                    "
+                    persistent-hint
                     variant="outlined"
                   />
                 </v-col>

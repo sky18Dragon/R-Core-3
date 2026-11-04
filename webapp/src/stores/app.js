@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { turnUp } from "../utils/orientation";
 
 export const useAppStore = defineStore("app", () => {
   // State
@@ -229,6 +230,45 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // Which way is up for one photo (0/90/180/270). On success the lists update at
+  // once; `redraw` says the frame shows this photo and should show it again.
+  async function setPhotoUp(image, up) {
+    try {
+      const response = await fetch(`${API_BASE}/api/photo`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filepath: `${image.album}/${image.filename}`, up }),
+      });
+      if (!response.ok) return { ok: false };
+      const body = await response.json().catch(() => ({}));
+      const list = imagesByAlbum.value[image.album];
+      if (list) {
+        imagesByAlbum.value = {
+          ...imagesByAlbum.value,
+          [image.album]: list.map((i) => (i.filename === image.filename ? { ...i, up } : i)),
+        };
+      }
+      return { ok: true, redraw: body.redraw === true };
+    } catch (error) {
+      console.error("Failed to set photo orientation:", error);
+      return { ok: false };
+    }
+  }
+
+  // Turns photos `delta` degrees (±90) and shows the one on the frame again
+  // when its way round changed there. Returns how many were turned.
+  async function rotatePhotos(list, delta) {
+    let turned = 0;
+    let redraw = null;
+    for (const image of list) {
+      const result = await setPhotoUp(image, turnUp(image.up, delta));
+      if (result.ok) ++turned;
+      if (result.redraw) redraw = image;
+    }
+    if (redraw) await displayImage(redraw.album, redraw.filename);
+    return turned;
+  }
+
   async function deleteOne(album, filename) {
     try {
       const response = await fetch(`${API_BASE}/api/delete`, {
@@ -355,6 +395,8 @@ export const useAppStore = defineStore("app", () => {
     deleteAlbum,
     deleteImage,
     deleteImages,
+    setPhotoUp,
+    rotatePhotos,
     displayImage,
     enterSleep,
     rotateNow,

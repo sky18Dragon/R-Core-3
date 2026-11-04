@@ -236,6 +236,21 @@ bool config_manager_get_deep_sleep_enabled(void);
 void config_manager_set_debug_log_enabled(bool enabled);
 bool config_manager_get_debug_log_enabled(void);
 
+// How a photo replaces the last one: wash the panel black/white first (no
+// ghosting, about 1 s longer; default) or only flash it white (faster).
+esp_err_t config_manager_set_photo_wash(bool enabled);
+bool config_manager_get_photo_wash(void);
+
+// Which way the frame stands: from the accelerometer (default), or held at
+// normal landscape or portrait (turned 90° clockwise) when it never moves.
+typedef enum {
+    FRAME_ORIENT_AUTO = 0,
+    FRAME_ORIENT_LANDSCAPE = 1,
+    FRAME_ORIENT_PORTRAIT = 2,
+} frame_orient_mode_t;
+esp_err_t config_manager_set_orient_mode(frame_orient_mode_t mode);
+frame_orient_mode_t config_manager_get_orient_mode(void);
+
 // ============================================================================
 // Config Sync
 // ============================================================================

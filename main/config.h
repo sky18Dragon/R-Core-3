@@ -180,6 +180,8 @@ typedef enum { IP_MODE_DHCP = 0, IP_MODE_STATIC = 1 } ip_mode_t;
 
 // Debugging
 #define NVS_DEBUG_LOG_KEY "debug_log"
+#define NVS_PHOTO_WASH_KEY "photo_wash"
+#define NVS_ORIENT_MODE_KEY "orient_mode"
 #define NVS_LAST_CRASH_KEY "last_crash"
 
 // Home Assistant

@@ -282,6 +282,8 @@ Get current device configuration.
 - `ha_url`: Home Assistant URL for integration
 - `openai_api_key`/`google_api_key`: AI API keys for client-side generation
 - `deep_sleep_enabled`: Enable deep sleep between rotations
+- `photo_refresh` (Read Pico): `"clean"` (default) washes the panel black/white before each photo; `"fast"` only flashes it white
+- `orientation_mode` (Read Pico local frame): `"auto"` (default, from the accelerometer), `"landscape"` or `"portrait"` (held at 90° clockwise); the slideshow shows only photos that suit the orientation
 
 ### `POST /api/config`
 
@@ -386,10 +388,15 @@ List images in an album.
   {
     "filename": "photo1.png",
     "album": "Vacation",
-    "thumbnail": "photo1.jpg"
+    "thumbnail": "photo1.jpg",
+    "up": 90,
+    "added": 1793700000
   }
 ]
 ```
+
+- `up`: degrees clockwise the stored frame-shaped image turns to stand upright: `0`/`180` landscape photos, `90`/`270` portrait photos stored on their side. `0` when the album's `.photos.json` index has no entry (old photos, or an unreadable index).
+- `added`: Unix time the photo was uploaded; absent when unknown (clock not set, or uploaded before the index existed).
 
 ### `GET /api/image?filepath=<album/filename>`
 
@@ -401,6 +408,28 @@ Upload an image to an album.
 
 - Content-Type: `multipart/form-data`
 - Fields: `album` (text), `image` (file), `thumbnail` (file, optional)
+
+### `PATCH /api/photo`
+
+Set which way is up for one photo (metadata only; the image file is not changed).
+
+**Request:**
+```json
+{ "filepath": "Vacation/photo.epdgz", "up": 180 }
+```
+
+**Response:** `{"status":"success","up":180,"redraw":true}` — `redraw` (Read Pico local frame) means the frame is showing this photo and it now suits the frame's orientation differently; the page then calls `POST /api/display` for it. Errors: `400` bad path or `up` not 0/90/180/270, `404` no such photo, `500` index not saved.
+
+### `GET /api/orientation` (Read Pico local frame)
+
+Accelerometer reading and the orientation photos are chosen for.
+
+**Response:**
+```json
+{ "sensor": true, "accel_mg": {"x": 986, "y": -34, "z": -260}, "reading": 0, "sensed": 0, "orientation": 0 }
+```
+
+- `reading`: what the latest sample means (`null` lying flat or slanted); `sensed`: the last position held for 2 s; `orientation`: what is used after the `orientation_mode` setting — `0`/`90`/`180`/`270` clockwise from normal landscape.
 
 ### `POST /api/delete`
 

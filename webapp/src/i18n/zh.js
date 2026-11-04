@@ -510,6 +510,26 @@ export default {
   "Home Wi-Fi saved. The frame is restarting to join it.":
     "已保存家里的 Wi-Fi，相框正在重启并连接。",
   // Photo wall, albums and slideshow pages (2026-11 redesign)
+  "Frame orientation": "相框方向",
+  "Automatic follows how the frame stands: landscape photos when it lies, portrait photos when it stands up.":
+    "“自动”会跟着相框的摆放：横放时轮播横图，竖放时轮播竖图。",
+  "Automatic (follows how the frame stands)": "自动（跟着相框摆放）",
+  "Always landscape": "固定横放",
+  "Always portrait": "固定竖放",
+  "The frame stands up: portrait photos take turns ({n}).": "相框现在竖放，轮播竖图（{n} 张）。",
+  "The frame lies sideways: landscape photos take turns ({n}).":
+    "相框现在横放，轮播横图（{n} 张）。",
+  "No photo in the slideshow suits this way round; the frame shows a hint.":
+    "参与轮播的相册里没有这个方向的照片，相框上会显示提示。",
+  "{l} landscape, {p} portrait": "横图 {l} · 竖图 {p}",
+  "Could not turn the photo": "照片没能转过来",
+  "Turned. The frame uses the new way round.": "已旋转，相框也会按新方向显示。",
+  Undo: "撤销",
+  "Photo change": "换图方式",
+  "Clean washes the screen black and white first, so no trace of the last photo stays.":
+    "“干净”会先把屏幕黑白洗几遍再显示新照片，不留上一张的残影。",
+  "Clean (about 3 s, flashes a few times)": "干净（约 3 秒，会闪几下）",
+  "Fast (about 2 s, may leave a faint trace)": "快速（约 2 秒，偶有残影）",
   "Added {n} photos to {album}": "已添加 {n} 张照片到「{album}」",
   Menu: "菜单",
   "Albums in the slideshow": "参与轮播的相册",

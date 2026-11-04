@@ -12,6 +12,7 @@
 #include "power_manager.h"
 #if CONFIG_READ_PICO_HOTSPOT
 #include "read_pico_hotspot.h"
+#include "read_pico_orientation.h"
 #endif
 #include "read_pico_touch.h"
 #include "touch_gesture.h"
@@ -121,7 +122,11 @@ void read_pico_touch_nav_poll(int64_t now_ms)
         return;
     bool landscape = config_manager_get_display_orientation() == DISPLAY_ORIENTATION_LANDSCAPE;
     bool rotated = config_manager_get_display_rotation_deg() % 360 == 180;
-    touch_action_t action = touch_action_for(&gesture, landscape, rotated);
+    // Keys keep their meaning whichever way the frame stands (the same physical
+    // key is "next"); swipes follow what the viewer sees.
+    int stands = gesture.kind == TOUCH_GESTURE_KEY ? 0 : read_pico_orientation_get();
+    touch_action_t action = touch_action_for(&gesture, landscape == (stands % 180 == 0),
+                                             rotated != (stands == 180 || stands == 270));
     ESP_LOGI(TAG, "Gesture %s key=%d (%u,%u)->(%u,%u) %lldms -> %s", touch_gesture_name(gesture.kind),
              gesture.key, gesture.x0, gesture.y0, gesture.x1, gesture.y1, (long long) gesture.hold_ms,
              touch_action_name(action));
