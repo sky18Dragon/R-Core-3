@@ -688,12 +688,14 @@ esp_err_t read_pico_epaper_confirm_white_reference(void)
     return accept_white_reference();
 }
 
-#if CONFIG_READ_PICO_LOCAL_FRAME
+// Every Read Pico profile links the display manager that calls this; only the
+// local frame's photo path reads it.
 void read_pico_epaper_set_photo_wash(bool wash)
 {
     photo_wash = wash;
 }
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
 esp_err_t read_pico_epaper_prepare_local_frame(void)
 {
     // Product startup deliberately accepts a software reference after one clear.
