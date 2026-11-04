@@ -510,6 +510,8 @@ export default {
   "Home Wi-Fi saved. The frame is restarting to join it.":
     "已保存家里的 Wi-Fi，相框正在重启并连接。",
   // Photo wall, albums and slideshow pages (2026-11 redesign)
+  "Portrait photo": "竖图",
+  "Landscape photo": "横图",
   "Frame orientation": "相框方向",
   "Automatic follows how the frame stands: landscape photos when it lies, portrait photos when it stands up.":
     "“自动”会跟着相框的摆放：横放时轮播横图，竖放时轮播竖图。",

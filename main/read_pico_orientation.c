@@ -17,10 +17,13 @@
 
 static const char *TAG = "orientation";
 
-// Sensor axes onto the panel, measured on the board (2026-11-04) by holding the
-// frame in each position: upright x≈+986 mg, turned 90° y≈-951, 180° x≈-960,
-// 270° y≈+986 (z≈-210 while leaning on its stand). Down = +x, right = -y.
-static const frame_axes_t s_axes = {1, -1, 0, 1};
+// Sensor axes onto the panel, measured on the board (2026-11-04) by turning the
+// frame through four positions a quarter turn at a time: x≈+986 mg, y≈-951,
+// x≈-960, y≈+986 (z≈-210 while leaning on its stand). The first pose was held
+// upside down: with down = +x every photo came out half a turn off in both
+// landscape and portrait, so the position where photos stand upright unturned
+// reads x≈-960. Down = -x, right = +y.
+static const frame_axes_t s_axes = {1, 1, 0, -1};
 
 static frame_orientation_tracker_t s_tracker;
 static int64_t s_next_poll_ms;

@@ -11,6 +11,7 @@ import AiImageDialog from "./AiImageDialog.vue";
 import { autoRotateFill } from "../utils/uiPrefs";
 import { albumLabel } from "../utils/albums";
 import { goTo } from "../utils/viewState";
+import { isPortraitUp, upForUpload } from "../utils/orientation";
 
 // The upload dialog: opened by any "+" or a drop with photos already chosen.
 const appStore = useAppStore();
@@ -163,6 +164,14 @@ const dialogTitle = computed(() => {
   const n = uploads.items.filter((i) => !i.unreadable).length;
   return n ? t("Upload {n} photos", { n }) : t("Upload photos");
 });
+
+// How the frame will file this photo (portrait photos take turns when it
+// stands up), so a wrong guess can be turned before it is sent.
+function shapeOf(item) {
+  if (!item.width || !item.height) return "";
+  const up = upForUpload(uploads.rotationOf(item), item.height > item.width);
+  return isPortraitUp(up) ? t("Portrait photo") : t("Landscape photo");
+}
 
 // What the tile preview should look like for the layout this photo will get
 function tileFit(item) {
@@ -389,6 +398,9 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
                   <v-icon v-if="item.unreadable" icon="mdi-image-broken-variant" />
                   <v-progress-circular v-else indeterminate size="22" width="2" />
                 </div>
+                <span v-if="!item.unreadable && shapeOf(item)" class="tile-shape">
+                  {{ shapeOf(item) }}
+                </span>
                 <div v-if="item.status !== 'pending' && !item.unreadable" class="tile-status">
                   <v-progress-circular v-if="item.status === 'working'" indeterminate size="26" />
                   <v-icon
@@ -693,6 +705,17 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
   align-items: center;
   justify-content: center;
   background: rgba(var(--v-theme-on-surface), 0.06);
+}
+.tile-shape {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
 }
 .tile-status {
   position: absolute;
