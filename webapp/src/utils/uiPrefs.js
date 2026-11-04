@@ -45,18 +45,6 @@ watch(rotateDir, (value) => {
   }
 });
 
-// Whether the image-settings panel beside the album list is expanded.
-const IMAGE_SETTINGS_KEY = "photoframe.imageSettingsOpen";
-export const imageSettingsOpen = ref(loadBool(IMAGE_SETTINGS_KEY));
-
-watch(imageSettingsOpen, (value) => {
-  try {
-    localStorage.setItem(IMAGE_SETTINGS_KEY, value ? "true" : "false");
-  } catch {
-    // Not persisted; the choice still applies to this page.
-  }
-});
-
 // Turn portrait photos to fill a landscape frame (and vice versa) automatically
 // when adding them; the user can still rotate any photo by hand.
 const AUTO_ROTATE_KEY = "photoframe.autoRotateFill";

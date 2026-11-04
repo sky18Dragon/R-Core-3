@@ -35,6 +35,37 @@ const paper = {
   },
 };
 
+// "paperDark": the same skin for a dark system setting. Photos read better on a
+// dark page; status still never relies on colour.
+const paperDark = {
+  dark: true,
+  colors: {
+    background: "#121212",
+    surface: "#1c1c1c",
+    "surface-variant": "#2a2a2a",
+    "on-surface-variant": "#a8a8a8",
+    primary: "#f2f2f2",
+    "on-primary": "#111111",
+    secondary: "#a8a8a8",
+    "on-secondary": "#111111",
+    accent: "#f2f2f2",
+    error: "#f2f2f2",
+    "on-error": "#111111",
+    info: "#cccccc",
+    "on-info": "#111111",
+    success: "#f2f2f2",
+    "on-success": "#111111",
+    warning: "#cccccc",
+    "on-warning": "#111111",
+  },
+  variables: {
+    "border-color": "#ffffff",
+    "border-opacity": 0.14,
+    "high-emphasis-opacity": 1,
+    "medium-emphasis-opacity": 0.66,
+  },
+};
+
 export default createVuetify({
   locale: {
     locale: "en",
@@ -56,6 +87,7 @@ export default createVuetify({
         },
       },
       paper,
+      paperDark,
     },
   },
   defaults: {

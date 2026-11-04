@@ -116,8 +116,9 @@ const handoffOpen = computed({
       </div>
     </v-alert>
 
+    <!-- Only on the hotspot: on home Wi-Fi the frame keeps time from the internet -->
     <v-alert
-      v-if="hotspot.clockOff"
+      v-if="hotspot.clockOff && hotspot.on"
       type="warning"
       variant="tonal"
       density="compact"

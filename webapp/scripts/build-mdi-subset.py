@@ -27,8 +27,8 @@ from fontTools.ttLib import TTFont
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "src" / "styles" / "mdi-subset.css"
 NAME_RE = re.compile(r"mdi-[a-z0-9]+(?:-[a-z0-9]+)*")
-# Not icons: the base class, and CSS helpers of the full stylesheet.
-NOT_ICONS = {"mdi-set"}
+# Not icons: the base class, CSS helpers of the full stylesheet, and this file's own name.
+NOT_ICONS = {"mdi-set", "mdi-subset"}
 
 
 def used_icon_names():

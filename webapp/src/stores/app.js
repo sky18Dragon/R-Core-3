@@ -6,6 +6,8 @@ export const useAppStore = defineStore("app", () => {
   const albums = ref([]);
   const selectedAlbum = ref("Default");
   const images = ref([]);
+  // Every album's photos, for the photo wall: { [album]: [{ filename, album, thumbnail }] }
+  const imagesByAlbum = ref({});
   const battery = ref({
     connected: false,
     level: 0,
@@ -35,6 +37,7 @@ export const useAppStore = defineStore("app", () => {
   const loading = ref({
     albums: false,
     images: false,
+    allImages: false,
     battery: false,
     systemInfo: false,
   });
@@ -122,6 +125,46 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  async function fetchAlbumImages(albumName) {
+    const response = await fetch(`${API_BASE}/api/images?album=${encodeURIComponent(albumName)}`);
+    if (!response.ok || response.headers.get("content-type")?.includes("text/html")) return [];
+    const list = await response.json();
+    return Array.isArray(list) ? list : [];
+  }
+
+  // One request per album, in order, so a busy frame is not asked for all at once.
+  async function loadAllImages() {
+    loading.value.allImages = true;
+    try {
+      if (!systemInfo.value.sdcard_inserted && !systemInfo.value.has_flash_storage) {
+        imagesByAlbum.value = {};
+        return;
+      }
+      const next = {};
+      for (const album of sortedAlbums.value) {
+        try {
+          next[album.name] = await fetchAlbumImages(album.name);
+        } catch {
+          next[album.name] = imagesByAlbum.value[album.name] || [];
+        }
+      }
+      imagesByAlbum.value = next;
+    } finally {
+      loading.value.allImages = false;
+    }
+  }
+
+  async function reloadAlbumImages(albumName) {
+    try {
+      imagesByAlbum.value = {
+        ...imagesByAlbum.value,
+        [albumName]: await fetchAlbumImages(albumName),
+      };
+    } catch {
+      // Keep what is shown.
+    }
+  }
+
   function selectAlbum(albumName) {
     selectedAlbum.value = albumName;
     loadImages(albumName);
@@ -171,6 +214,9 @@ export const useAppStore = defineStore("app", () => {
       if (response.ok) {
         await loadAlbums();
         await loadSystemInfo();
+        const rest = { ...imagesByAlbum.value };
+        delete rest[albumName];
+        imagesByAlbum.value = rest;
         if (selectedAlbum.value === albumName) {
           selectAlbum("Default");
         }
@@ -183,24 +229,41 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  async function deleteImage(album, filename) {
+  async function deleteOne(album, filename) {
     try {
-      const fullPath = `${album}/${filename}`;
       const response = await fetch(`${API_BASE}/api/delete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filepath: fullPath }),
+        body: JSON.stringify({ filepath: `${album}/${filename}` }),
       });
-      if (response.ok) {
-        await loadImages(selectedAlbum.value);
-        await loadSystemInfo();
-        return true;
-      }
-      return false;
+      return response.ok;
     } catch (error) {
       console.error("Failed to delete image:", error);
       return false;
     }
+  }
+
+  async function deleteImage(album, filename) {
+    const ok = await deleteOne(album, filename);
+    if (ok) {
+      await loadImages(selectedAlbum.value);
+      await reloadAlbumImages(album);
+      await loadSystemInfo();
+    }
+    return ok;
+  }
+
+  // Deletes one by one and refreshes once; returns how many were deleted.
+  async function deleteImages(list) {
+    let deleted = 0;
+    for (const image of list) {
+      if (await deleteOne(image.album, image.filename)) ++deleted;
+    }
+    const albumsTouched = [...new Set(list.map((image) => image.album))];
+    for (const album of albumsTouched) await reloadAlbumImages(album);
+    if (albumsTouched.includes(selectedAlbum.value)) await loadImages(selectedAlbum.value);
+    await loadSystemInfo();
+    return deleted;
   }
 
   async function displayImage(album, filename) {
@@ -270,6 +333,7 @@ export const useAppStore = defineStore("app", () => {
     albums,
     selectedAlbum,
     images,
+    imagesByAlbum,
     battery,
     systemInfo,
     systemInfoLoaded,
@@ -283,11 +347,14 @@ export const useAppStore = defineStore("app", () => {
     loadBatteryStatus,
     loadAlbums,
     loadImages,
+    loadAllImages,
+    reloadAlbumImages,
     selectAlbum,
     toggleAlbumEnabled,
     createAlbum,
     deleteAlbum,
     deleteImage,
+    deleteImages,
     displayImage,
     enterSleep,
     rotateNow,
