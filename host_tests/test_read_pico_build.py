@@ -713,6 +713,8 @@ class ReadPicoBuildTests(unittest.TestCase):
             ("/api/settings/processing", "HTTP_GET"),
             ("/api/settings/processing", "HTTP_POST"),
             ("/api/settings/processing", "HTTP_DELETE"),
+            ("/api/presets", "HTTP_GET"),
+            ("/api/presets", "HTTP_PUT"),
             ("/api/settings/palette", "HTTP_GET"),
             ("/api/settings/palette", "HTTP_POST"),
             ("/api/settings/palette", "HTTP_DELETE"),

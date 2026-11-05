@@ -175,6 +175,11 @@ target_include_directories(photo_meta_test PRIVATE "${read_pico_cjson_dir}" ../m
 target_link_libraries(photo_meta_test GTest::gtest_main)
 gtest_discover_tests(photo_meta_test)
 
+add_executable(preset_store_test test_preset_store.cpp ../main/preset_store.c "${read_pico_cjson_dir}/cJSON.c")
+target_include_directories(preset_store_test PRIVATE "${read_pico_cjson_dir}" ../main)
+target_link_libraries(preset_store_test GTest::gtest_main)
+gtest_discover_tests(preset_store_test)
+
 add_executable(config_apply_test test_config_apply.cpp ../main/config_apply.c)
 target_include_directories(config_apply_test PRIVATE stubs ../main)
 target_link_libraries(config_apply_test GTest::gtest_main)

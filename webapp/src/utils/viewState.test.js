@@ -6,6 +6,8 @@ describe("routeFromHash", () => {
     expect(routeFromHash("#/albums")).toEqual({ view: "albums", album: null });
     expect(routeFromHash("#albums")).toEqual({ view: "albums", album: null });
     expect(routeFromHash("#/slideshow")).toEqual({ view: "slideshow", album: null });
+    expect(routeFromHash("#/presets")).toEqual({ view: "presets", album: null });
+    expect(routeFromHash("#/tuning")).toEqual({ view: "presets", album: null });
     expect(routeFromHash("#/")).toEqual({ view: "photos", album: null });
     expect(routeFromHash("")).toEqual({ view: "photos", album: null });
     expect(routeFromHash("#/unknown")).toEqual({ view: "photos", album: null });
@@ -28,6 +30,7 @@ describe("routeFromHash", () => {
       ["albums", "Default"],
       ["albums", "a b&c#d"],
       ["slideshow", null],
+      ["presets", null],
     ]) {
       expect(routeFromHash(hashForRoute(view, album))).toEqual({ view, album });
     }

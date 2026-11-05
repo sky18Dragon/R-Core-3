@@ -84,6 +84,29 @@ TEST(PhotoMeta, SetKeepsTheFirstAddedTimeAndForgets)
     EXPECT_EQ(photo_meta_up(index.json, "b.epdgz"), 0);
 }
 
+TEST(PhotoMeta, PresetNameIsKeptAcrossTurns)
+{
+    Index index;
+    EXPECT_EQ(photo_meta_preset(index.json, "a.epdgz"), nullptr);
+    // Recording a preset for an unknown photo adds it as landscape
+    ASSERT_TRUE(photo_meta_set_preset(index.json, "a.epdgz", "人像", 1793800000));
+    EXPECT_STREQ(photo_meta_preset(index.json, "a.epdgz"), "人像");
+    EXPECT_EQ(photo_meta_up(index.json, "a.epdgz"), 0);
+    EXPECT_EQ(photo_meta_added(index.json, "a.epdgz"), 1793800000);
+    // Turning keeps the preset and the time; setting the preset keeps the turn
+    ASSERT_TRUE(photo_meta_set(index.json, "a.epdgz", 90, 5));
+    EXPECT_STREQ(photo_meta_preset(index.json, "a.epdgz"), "人像");
+    EXPECT_EQ(photo_meta_added(index.json, "a.epdgz"), 1793800000);
+    ASSERT_TRUE(photo_meta_set_preset(index.json, "a.epdgz", "夜景", 5));
+    EXPECT_EQ(photo_meta_up(index.json, "a.epdgz"), 90);
+    EXPECT_STREQ(photo_meta_preset(index.json, "a.epdgz"), "夜景");
+    // Too long is refused; empty clears
+    EXPECT_FALSE(photo_meta_set_preset(index.json, "a.epdgz", std::string(65, 'x').c_str(), 0));
+    ASSERT_TRUE(photo_meta_set_preset(index.json, "a.epdgz", "", 0));
+    EXPECT_EQ(photo_meta_preset(index.json, "a.epdgz"), nullptr);
+    EXPECT_EQ(photo_meta_up(index.json, "a.epdgz"), 90);
+}
+
 TEST(PhotoMeta, SaveLoadAndLookupInAnAlbumDirectory)
 {
     std::string dir = make_dir();

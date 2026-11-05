@@ -48,6 +48,7 @@ endif()
 set(SOURCES
     "album_manager.c"
     "photo_meta.c"
+    "preset_store.c"
     "cert_pin.c"
     "http_endpoint.c"
     "color_palette.c"

@@ -19,7 +19,10 @@ const deviceTitle = computed(
   () => settingsStore.deviceSettings.deviceName?.trim() || "ESP32 PhotoFrame"
 );
 const sectionTitle = computed(
-  () => ({ albums: t("Albums"), slideshow: t("Slideshow") })[currentView.value] || t("Photos")
+  () =>
+    ({ albums: t("Albums"), slideshow: t("Slideshow"), presets: t("Presets") })[
+      currentView.value
+    ] || t("Photos")
 );
 
 watch(

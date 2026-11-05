@@ -232,12 +232,14 @@ export const useAppStore = defineStore("app", () => {
 
   // Which way is up for one photo (0/90/180/270). On success the lists update at
   // once; `redraw` says the frame shows this photo and should show it again.
-  async function setPhotoUp(image, up) {
+  // Facts kept with one photo: `up` (which way is up) and/or `preset` (the
+  // processing preset it was made with)
+  async function setPhotoMeta(image, facts) {
     try {
       const response = await fetch(`${API_BASE}/api/photo`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filepath: `${image.album}/${image.filename}`, up }),
+        body: JSON.stringify({ filepath: `${image.album}/${image.filename}`, ...facts }),
       });
       if (!response.ok) return { ok: false };
       const body = await response.json().catch(() => ({}));
@@ -245,14 +247,18 @@ export const useAppStore = defineStore("app", () => {
       if (list) {
         imagesByAlbum.value = {
           ...imagesByAlbum.value,
-          [image.album]: list.map((i) => (i.filename === image.filename ? { ...i, up } : i)),
+          [image.album]: list.map((i) => (i.filename === image.filename ? { ...i, ...facts } : i)),
         };
       }
       return { ok: true, redraw: body.redraw === true };
     } catch (error) {
-      console.error("Failed to set photo orientation:", error);
+      console.error("Failed to update the photo:", error);
       return { ok: false };
     }
+  }
+
+  function setPhotoUp(image, up) {
+    return setPhotoMeta(image, { up });
   }
 
   // Turns photos `delta` degrees (±90) and shows the one on the frame again
@@ -396,6 +402,7 @@ export const useAppStore = defineStore("app", () => {
     deleteImage,
     deleteImages,
     setPhotoUp,
+    setPhotoMeta,
     rotatePhotos,
     displayImage,
     enterSleep,

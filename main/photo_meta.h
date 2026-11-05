@@ -7,8 +7,10 @@
 extern "C" {
 #endif
 // Per-photo facts the image files cannot carry (docs/PRD-PHOTO-ORIENTATION.md):
-// which way is up and when the photo was added. One small index per album,
-// "<album>/.photos.json" = {"name.epdgz": {"up": 90, "added": 1793700000}}.
+// which way is up, when the photo was added and the name of the processing
+// preset it was made with (docs/PRD-PRESETS.md). One small index per album,
+// "<album>/.photos.json" = {"name.epdgz": {"up": 90, "added": 1793700000,
+// "preset": "人像"}}.
 // A photo missing from the index is a landscape photo (up 0) of unknown age, so
 // a lost or unreadable index only returns the frame to its old behaviour.
 //
@@ -17,6 +19,7 @@ extern "C" {
 // turned on their side to fill the panel).
 #define PHOTO_META_FILENAME ".photos.json"
 #define PHOTO_META_MAX_BYTES (64 * 1024)
+#define PHOTO_META_PRESET_MAX 64 // bytes of UTF-8, without the terminator
 
 bool photo_meta_up_valid(int up);
 // Up after an upload turned the source `rotation` degrees clockwise to fill the
@@ -33,8 +36,15 @@ int photo_meta_turn(int up, int device);
 cJSON *photo_meta_parse(const char *text);
 int photo_meta_up(const cJSON *index, const char *name);
 int64_t photo_meta_added(const cJSON *index, const char *name);
-// Sets `up`, keeping `added` when the photo is already known; false on bad input.
+// Sets `up`, keeping `added` and `preset` when the photo is already known;
+// false on bad input.
 bool photo_meta_set(cJSON *index, const char *name, int up, int64_t added_if_new);
+// Preset name the photo was made with; NULL when not recorded.
+const char *photo_meta_preset(const cJSON *index, const char *name);
+// Records the preset name (1-64 bytes), keeping the other facts; NULL or ""
+// clears it. A photo not yet in the index is added as landscape.
+bool photo_meta_set_preset(cJSON *index, const char *name, const char *preset,
+                           int64_t added_if_new);
 void photo_meta_forget(cJSON *index, const char *name);
 
 // Album directory store. Saving writes ".photos.json.new", keeps the previous

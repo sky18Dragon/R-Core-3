@@ -1,11 +1,13 @@
 import { ref } from "vue";
 
 // Where the page is: "photos" (home, every photo grouped by album), "albums"
-// (the album list, or one album when `album` is set) and "slideshow". The URL
+// (the album list, or one album when `album` is set), "slideshow" and
+// "presets" (the processing preset library; "#/tuning" from earlier versions
+// lands there too). The URL
 // hash is the source of truth (#/albums/Trips), so back, refresh and bookmarks
 // work. A hash is used rather than a path because the device serves the page
 // only at "/".
-export const VIEWS = ["photos", "albums", "slideshow"];
+export const VIEWS = ["photos", "albums", "slideshow", "presets"];
 
 export function routeFromHash(hash) {
   const parts = String(hash || "")
@@ -23,12 +25,14 @@ export function routeFromHash(hash) {
     return { view: "albums", album };
   }
   if (parts[0] === "slideshow") return { view: "slideshow", album: null };
+  if (parts[0] === "presets" || parts[0] === "tuning") return { view: "presets", album: null };
   return { view: "photos", album: null };
 }
 
 export function hashForRoute(view, album = null) {
   if (view === "albums") return album ? `#/albums/${encodeURIComponent(album)}` : "#/albums";
   if (view === "slideshow") return "#/slideshow";
+  if (view === "presets") return "#/presets";
   return "#/";
 }
 

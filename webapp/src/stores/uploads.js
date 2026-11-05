@@ -3,6 +3,7 @@ import { ref, computed, watch } from "vue";
 import { t } from "../i18n";
 import { useAppStore } from "./app.js";
 import { useSettingsStore } from "./settings.js";
+import { usePresetsStore } from "./presets.js";
 import { autoRotateFill, rotateDir, lastUploadAlbum } from "../utils/uiPrefs";
 import {
   fitWithin,
@@ -14,6 +15,7 @@ import {
 } from "../utils/imageGeometry";
 import { decodeToCanvas, loadImageFromFile } from "../utils/imageLoad";
 import { relativePhotoPath, upForUpload } from "../utils/orientation";
+import { PROCESSING_KEYS, composeCompareSheet } from "../utils/compareSheet";
 import {
   makeBaseName,
   classifyUploadFailure,
@@ -38,14 +40,56 @@ async function getLib() {
 export const useUploadsStore = defineStore("uploads", () => {
   const appStore = useAppStore();
   const settingsStore = useSettingsStore();
+  const presets = usePresetsStore();
 
   // Queue of photos waiting to go to the frame. Item fields:
   //   id, file, name, status: "pending" | "working" | "done" | "error",
   //   unreadable (browser can't decode it), error (text), thumbUrl,
   //   width/height (original), autoRotation (set when added),
   //   rotation (null = automatic, else explicit degrees clockwise),
-  //   edit (null | {scaleMode, backgroundColor, zoom, panX, panY}) from the editor
+  //   edit (null | {scaleMode, backgroundColor, zoom, panX, panY}) from the editor,
+  //   presetId (null = the batch's preset) chosen for this photo alone
   const items = ref([]);
+
+  // The processing preset for the whole batch (docs/PRD-PRESETS.md): null
+  // means the default. `batchAdjusted` holds values fine-tuned from it for
+  // this batch only; the preset itself is not changed.
+  const batchPresetId = ref(null);
+  const batchAdjusted = ref(null);
+  const batchPreset = computed(
+    () => presets.byId(batchPresetId.value) ?? presets.defaultPreset ?? null
+  );
+  const batchProcessing = computed(
+    () => batchAdjusted.value ?? presets.paramsFor(batchPreset.value?.id ?? null)
+  );
+  const batchName = computed(() => {
+    const name = batchPreset.value?.name ?? "";
+    return batchAdjusted.value && name ? t("{name} (adjusted)", { name }) : name;
+  });
+
+  function chooseBatchPreset(id) {
+    batchPresetId.value = id;
+    batchAdjusted.value = null;
+  }
+
+  function adjustBatch(params) {
+    const next = { ...batchProcessing.value };
+    for (const key of PROCESSING_KEYS) if (params[key] !== undefined) next[key] = params[key];
+    batchAdjusted.value = next;
+  }
+
+  function resetBatch() {
+    batchAdjusted.value = null;
+  }
+
+  // What a photo is rendered with: its own preset, else the batch's
+  function processingFor(presetId) {
+    return presetId && presets.byId(presetId) ? presets.paramsFor(presetId) : batchProcessing.value;
+  }
+
+  function presetNameFor(presetId) {
+    return presetId && presets.byId(presetId) ? presets.byId(presetId).name : batchName.value;
+  }
   const running = ref(false);
   const summary = ref(null); // {album, done, failed, cancelled} after a run
   const lastBatch = ref([]); // [{id, name, album, thumbUrl}] of the latest run
@@ -143,6 +187,7 @@ export const useUploadsStore = defineStore("uploads", () => {
         width: 0,
         height: 0,
         autoRotation: 0,
+        presetId: null,
         rotation: null,
         edit: null,
       };
@@ -190,9 +235,10 @@ export const useUploadsStore = defineStore("uploads", () => {
   }
 
   // Apply what the single-photo editor produced
-  function applyEdit(item, { rotation, edit }) {
+  function applyEdit(item, { rotation, edit, presetId = item.presetId ?? null }) {
     item.rotation = normalizeDeg(rotation);
     item.edit = edit;
+    item.presetId = presetId;
     refreshThumb(item);
   }
 
@@ -237,35 +283,16 @@ export const useUploadsStore = defineStore("uploads", () => {
     }
   }
 
-  // Process one queued photo into the frame's format; returns the form to send.
-  // `override` ({rotation, edit}) lets the editor test unsaved changes.
-  async function buildForm(item, override = null) {
-    const lib = await getLib();
-    const width = appStore.systemInfo.width;
-    const height = appStore.systemInfo.height;
+  // The processing values of a parameter set (layout fields are separate)
+  function processingParams(p) {
+    const params = {};
+    for (const key of PROCESSING_KEYS) params[key] = p[key];
+    return params;
+  }
 
-    const { canvas: base } = await decodeToCanvas(item.file, sourceEdgeCap(width, height));
-    const rotation = override ? normalizeDeg(override.rotation) : rotationOf(item);
-    const source = rotateCanvas(base, rotation);
-    const edit = override ? override.edit : item.edit;
-
-    const p = settingsStore.params;
-    const params = {
-      exposure: p.exposure,
-      saturation: p.saturation,
-      toneMode: p.toneMode,
-      contrast: p.contrast,
-      strength: p.strength,
-      shadowBoost: p.shadowBoost,
-      highlightCompress: p.highlightCompress,
-      midpoint: p.midpoint,
-      colorMethod: p.colorMethod,
-      ditherAlgorithm: p.ditherAlgorithm,
-      compressDynamicRange: p.compressDynamicRange,
-    };
-
-    // Same palette the previews dither with (device-calibrated)
-    const palette = appStore.isGrayscale
+  // Same palette the previews dither with (device-calibrated)
+  function paletteFor(lib) {
+    return appStore.isGrayscale
       ? lib.makeGrayscale16({
           blackY: settingsStore.palette?.black_y ?? 0.009,
           whiteY: settingsStore.palette?.white_y ?? 0.65,
@@ -279,6 +306,24 @@ export const useUploadsStore = defineStore("uploads", () => {
               ? settingsStore.palette
               : lib.SPECTRA6.perceived,
         };
+  }
+
+  // Process one queued photo into the frame's format; returns the form to send.
+  // `override` ({rotation, edit}) lets the editor test unsaved changes.
+  async function buildForm(item, override = null) {
+    const lib = await getLib();
+    const width = appStore.systemInfo.width;
+    const height = appStore.systemInfo.height;
+
+    const { canvas: base } = await decodeToCanvas(item.file, sourceEdgeCap(width, height));
+    const rotation = override ? normalizeDeg(override.rotation) : rotationOf(item);
+    const source = rotateCanvas(base, rotation);
+    const edit = override ? override.edit : item.edit;
+    const presetId = override && "presetId" in override ? override.presetId : item.presetId;
+
+    const p = settingsStore.params; // layout defaults
+    const params = processingParams({ ...p, ...processingFor(presetId) });
+    const palette = paletteFor(lib);
 
     const result = lib.processImage(source, {
       displayWidth: width,
@@ -364,11 +409,16 @@ export const useUploadsStore = defineStore("uploads", () => {
         if (result.ok) {
           // A portrait photo is stored on its side to fill the panel: record
           // which way is up so the page and the frame can stand it upright.
+          // Also record the preset it was made with (shown with the photo).
           const up = upForUpload(rotationOf(item), item.height > item.width);
+          const preset = presets.available ? presetNameFor(item.presetId) : "";
           const relative = relativePhotoPath(result.filepath);
-          if (up && relative) {
+          if ((up || preset) && relative) {
             const [photoAlbum, filename] = relative.split("/");
-            await appStore.setPhotoUp({ album: photoAlbum, filename }, up);
+            await appStore.setPhotoMeta(
+              { album: photoAlbum, filename },
+              { ...(up ? { up } : {}), ...(preset ? { preset } : {}) }
+            );
           }
           item.status = "done";
           done++;
@@ -419,6 +469,67 @@ export const useUploadsStore = defineStore("uploads", () => {
     return result.ok ? { ok: true } : { ok: false, message: failureMessage(result.code) };
   }
 
+  // Side-by-side comparison and tuning: the photo decoded and turned once,
+  // then rendered under one setting (full screen) or up to four (tiled 2×2)
+  // and shown without saving.
+  async function compareSource(item) {
+    const { width, height } = appStore.systemInfo;
+    const { canvas } = await decodeToCanvas(item.file, sourceEdgeCap(width, height));
+    return rotateCanvas(canvas, rotationOf(item));
+  }
+
+  // A photo picked outside the queue, decoded upright
+  async function sourceFromFile(file) {
+    const { width, height } = appStore.systemInfo;
+    const { canvas } = await decodeToCanvas(file, sourceEdgeCap(width, height));
+    return canvas;
+  }
+
+  async function renderSheet(source, slots, { labels, layout = null, framing = null } = {}) {
+    const lib = await getLib();
+    return composeCompareSheet(lib, source, slots, {
+      width: appStore.systemInfo.width,
+      height: appStore.systemInfo.height,
+      orientation: settingsStore.appliedOrientation,
+      palette: paletteFor(lib),
+      layout,
+      framing,
+      labels,
+    });
+  }
+
+  function renderCompare(item, source, slots) {
+    return renderSheet(source, slots, { layout: item.edit });
+  }
+
+  // Send a rendered sheet; waits out a screen that is still refreshing
+  async function displaySheet(sheet, { busyRetries = 4, retryDelayMs = RETRY_DELAY_MS } = {}) {
+    const lib = await getLib();
+    const compressed = await lib.createEPDGZ(sheet.canvas, { grayscale: appStore.isGrayscale });
+    const thumbCanvas = lib.generateThumbnail(sheet.original, GALLERY_THUMB_EDGE);
+    const thumbBlob = await new Promise((resolve) =>
+      thumbCanvas.toBlob(resolve, "image/jpeg", 0.85)
+    );
+    const baseName = makeBaseName("compare", Date.now());
+    let result;
+    for (let attempt = 0; ; attempt++) {
+      const form = new FormData();
+      form.append(
+        "image",
+        new Blob([compressed], { type: "application/gzip" }),
+        `${baseName}.epdgz`
+      );
+      form.append("thumbnail", thumbBlob, `${baseName}.jpg`);
+      result = await post("/api/display-image", form);
+      if (result.ok || result.code !== "busy" || attempt >= busyRetries) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    if (result.ok) appStore.displayVersion++;
+    return result.ok ? { ok: true } : { ok: false, message: failureMessage(result.code) };
+  }
+
+  const displayCompare = displaySheet;
+
   return {
     items,
     running,
@@ -431,6 +542,7 @@ export const useUploadsStore = defineStore("uploads", () => {
     pendingCount,
     failedCount,
     frameAspect,
+    frameSize,
     doneCount,
     hasUnsent,
     rotationOf,
@@ -442,5 +554,21 @@ export const useUploadsStore = defineStore("uploads", () => {
     start,
     cancel,
     displayOnly,
+    compareSource,
+    batchPresetId,
+    batchPreset,
+    batchAdjusted,
+    batchProcessing,
+    batchName,
+    chooseBatchPreset,
+    adjustBatch,
+    resetBatch,
+    processingFor,
+    presetNameFor,
+    sourceFromFile,
+    renderSheet,
+    displaySheet,
+    renderCompare,
+    displayCompare,
   };
 });

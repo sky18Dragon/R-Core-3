@@ -136,7 +136,12 @@ function touchEnd(event) {
           :aria-label="t('Close')"
           @click="open = false"
         />
-        <span v-if="image" class="viewer-title">{{ albumLabel(image.album) }}</span>
+        <div v-if="image" class="viewer-title">
+          <div>{{ albumLabel(image.album) }}</div>
+          <div v-if="image.preset" class="viewer-sub">
+            {{ t("Rendered with: {name}", { name: image.preset }) }}
+          </div>
+        </div>
         <v-spacer />
         <v-btn
           icon="mdi-rotate-right"
@@ -233,6 +238,16 @@ function touchEnd(event) {
 .viewer-title {
   margin-left: 4px;
   font-weight: 600;
+  min-width: 0;
+  line-height: 1.25;
+}
+.viewer-sub {
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .viewer-stage {
   flex: 1;

@@ -390,13 +390,15 @@ List images in an album.
     "album": "Vacation",
     "thumbnail": "photo1.jpg",
     "up": 90,
-    "added": 1793700000
+    "added": 1793700000,
+    "preset": "人像"
   }
 ]
 ```
 
 - `up`: degrees clockwise the stored frame-shaped image turns to stand upright: `0`/`180` landscape photos, `90`/`270` portrait photos stored on their side. `0` when the album's `.photos.json` index has no entry (old photos, or an unreadable index).
 - `added`: Unix time the photo was uploaded; absent when unknown (clock not set, or uploaded before the index existed).
+- `preset`: name of the processing preset the photo was rendered with, as it was called at upload time; absent when not recorded.
 
 ### `GET /api/image?filepath=<album/filename>`
 
@@ -411,14 +413,14 @@ Upload an image to an album.
 
 ### `PATCH /api/photo`
 
-Set which way is up for one photo (metadata only; the image file is not changed).
+Set which way is up for one photo and/or the preset it was made with (metadata only; the image file is not changed). Give `up`, `preset` or both.
 
 **Request:**
 ```json
-{ "filepath": "Vacation/photo.epdgz", "up": 180 }
+{ "filepath": "Vacation/photo.epdgz", "up": 180, "preset": "人像" }
 ```
 
-**Response:** `{"status":"success","up":180,"redraw":true}` — `redraw` (Read Pico local frame) means the frame is showing this photo and it now suits the frame's orientation differently; the page then calls `POST /api/display` for it. Errors: `400` bad path or `up` not 0/90/180/270, `404` no such photo, `500` index not saved.
+**Response:** `{"status":"success","up":180,"redraw":true}` — `redraw` (Read Pico local frame) means the frame is showing this photo and it now suits the frame's orientation differently; the page then calls `POST /api/display` for it. Errors: `400` bad path, neither field, `up` not 0/90/180/270 or `preset` longer than 64 bytes; `404` no such photo; `500` index not saved. An empty `preset` clears it.
 
 ### `GET /api/orientation` (Read Pico local frame)
 
@@ -516,6 +518,38 @@ Update processing parameters.
 ### `DELETE /api/settings/processing`
 
 Reset to defaults.
+
+### `GET /api/presets`
+
+The user's processing presets ([PRD-PRESETS](PRD-PRESETS.md)), kept on the storage card as `/.presets.json`. Without a file: an empty list with `rev` 0. `404` when there is no storage.
+
+**Response:**
+```json
+{
+  "version": 1,
+  "rev": 7,
+  "default": "p2",
+  "presets": [
+    {
+      "id": "p2",
+      "name": "人像",
+      "source": "tuning",
+      "params": { "exposure": 1.0, "contrast": 1.1, "toneMode": "contrast", "colorMethod": "lab",
+                  "ditherAlgorithm": "stucki", "compressDynamicRange": true },
+      "created": 1793800000,
+      "updated": 1793800000
+    }
+  ]
+}
+```
+
+- `params` hold processing values only (the keys of `/api/settings/processing` except `scaleMode` and `backgroundColor`).
+- `default` names the ★ preset or is `null`. Making a preset the default is two calls: this document, then `POST /api/settings/processing` with its values (the frame's own processing reads the latter).
+- `source`: `tuning`, `manual`, `copy` or `migrated` (optional).
+
+### `PUT /api/presets`
+
+Replace the whole document (at most 24 KB). Its `rev` must equal the stored one: the response is the saved document with `rev` one higher. When another browser saved first: `409` with the stored document, so the page can apply its change again. `400` (with the reason) for more than 20 presets, ids that are empty, longer than 32 bytes or repeated, names empty or longer than 64 bytes, unknown modes or algorithms, numbers outside 0–10, or a `default` that names no preset.
 
 ---
 

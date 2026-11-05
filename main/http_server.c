@@ -36,6 +36,7 @@
 #include "nvs_flash.h"
 #include "periodic_tasks.h"
 #include "photo_meta.h"
+#include "preset_store.h"
 #if CONFIG_READ_PICO_LOCAL_FRAME
 #include "read_pico_orientation.h"
 #endif
@@ -1473,9 +1474,10 @@ static esp_err_t orientation_handler(httpd_req_t *req)
 }
 #endif
 
-// PATCH /api/photo {"filepath": "<album>/<name>", "up": 0|90|180|270}: which way
-// is up for one photo. "redraw" tells the page the frame shows this photo and
-// should show it again the new way round.
+// PATCH /api/photo {"filepath": "<album>/<name>", "up": 0|90|180|270,
+// "preset": "<name>"}: which way is up for one photo and/or the processing
+// preset it was made with (at least one of the two). "redraw" tells the page
+// the frame shows this photo and should show it again the new way round.
 static esp_err_t photo_handler(httpd_req_t *req)
 {
     if (!http_requests_ready(req)) {
@@ -1487,7 +1489,7 @@ static esp_err_t photo_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Storage not found");
         return ESP_FAIL;
     }
-    char buf[384];
+    char buf[640];
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data received");
@@ -1497,14 +1499,21 @@ static esp_err_t photo_handler(httpd_req_t *req)
     cJSON *root = cJSON_Parse(buf);
     const cJSON *path_item = cJSON_GetObjectItem(root, "filepath");
     const cJSON *up_item = cJSON_GetObjectItem(root, "up");
+    const cJSON *preset_item = cJSON_GetObjectItem(root, "preset");
     const char *relative = cJSON_GetStringValue(path_item);
-    if (!relative || !cJSON_IsNumber(up_item) || !photo_meta_up_valid(up_item->valueint) ||
-        !is_path_safe(relative) || !strchr(relative, '/')) {
+    bool has_up = cJSON_IsNumber(up_item) && photo_meta_up_valid(up_item->valueint);
+    const char *preset_text = cJSON_GetStringValue(preset_item);
+    bool has_preset = preset_text && strlen(preset_text) <= PHOTO_META_PRESET_MAX;
+    if (!relative || (!has_up && !has_preset) || (up_item && !has_up) ||
+        (preset_item && !has_preset) || !is_path_safe(relative) || !strchr(relative, '/')) {
         cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Need filepath and up (0, 90, 180, 270)");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Need filepath and up (0, 90, 180, 270) or preset (up to 64 bytes)");
         return ESP_FAIL;
     }
-    int up = up_item->valueint;
+    int new_up = has_up ? up_item->valueint : 0;
+    char preset[PHOTO_META_PRESET_MAX + 1] = "";
+    if (has_preset) snprintf(preset, sizeof(preset), "%s", preset_text);
     char image_path[512];
     int n = snprintf(image_path, sizeof(image_path), "%s/%s", IMAGE_DIRECTORY, relative);
     cJSON_Delete(root);
@@ -1517,7 +1526,10 @@ static esp_err_t photo_handler(httpd_req_t *req)
     *slash = '\0'; // image_path is now the album directory
     cJSON *meta = photo_meta_load(image_path);
     int old_up = photo_meta_up(meta, slash + 1);
-    bool saved = photo_meta_set(meta, slash + 1, up, 0) && photo_meta_save(image_path, meta);
+    int up = has_up ? new_up : old_up;
+    bool saved = photo_meta_set(meta, slash + 1, up, 0) &&
+                 (!has_preset || photo_meta_set_preset(meta, slash + 1, preset, 0)) &&
+                 photo_meta_save(image_path, meta);
     cJSON_Delete(meta);
     *slash = '/';
     if (!saved) {
@@ -2602,6 +2614,8 @@ static esp_err_t album_images_handler(httpd_req_t *req)
                 cJSON_AddNumberToObject(image_obj, "up", photo_meta_up(meta, entry->d_name));
                 int64_t added = photo_meta_added(meta, entry->d_name);
                 if (added) cJSON_AddNumberToObject(image_obj, "added", (double) added);
+                const char *preset = photo_meta_preset(meta, entry->d_name);
+                if (preset) cJSON_AddStringToObject(image_obj, "preset", preset);
 
                 // Check if a corresponding JPG thumbnail exists for any image type
                 char thumbnail_name[256];
@@ -3020,6 +3034,92 @@ static esp_err_t processing_settings_handler(httpd_req_t *req)
 #else
     return processing_settings_handler_values(req);
 #endif
+}
+
+static esp_err_t send_preset_document(httpd_req_t *req, const cJSON *doc, const char *status)
+{
+    char *json = cJSON_PrintUnformatted(doc);
+    if (!json) return httpd_resp_send_500(req);
+    if (status) httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t sent = httpd_resp_sendstr(req, json);
+    free(json);
+    return sent;
+}
+
+// The whole body (at most PRESET_STORE_MAX_BYTES), NUL-terminated; NULL on a
+// bad length or a broken connection.
+static char *receive_preset_body(httpd_req_t *req)
+{
+    if (!req->content_len || req->content_len > PRESET_STORE_MAX_BYTES) return NULL;
+    char *body = malloc(req->content_len + 1);
+    if (!body) return NULL;
+    size_t received = 0;
+    unsigned timeouts = 0;
+    while (received < req->content_len) {
+        int got = httpd_req_recv(req, body + received, req->content_len - received);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 8) continue;
+        if (got <= 0) {
+            free(body);
+            return NULL;
+        }
+        received += (size_t) got;
+    }
+    body[received] = '\0';
+    return body;
+}
+
+// GET/PUT /api/presets: the user's processing presets (docs/PRD-PRESETS.md),
+// one document on the storage card. PUT replaces it when its "rev" matches the
+// stored one (409 with the stored document otherwise) and answers the saved
+// copy, whose rev is one higher.
+static esp_err_t presets_handler(httpd_req_t *req)
+{
+    if (!http_requests_ready(req)) {
+        httpd_resp_set_status(req, HTTPD_503);
+        httpd_resp_sendstr(req, "System is still initializing");
+        return ESP_FAIL;
+    }
+    if (!storage_has_persistent_storage()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Storage not found");
+        return ESP_FAIL;
+    }
+    if (req->method == HTTP_GET) {
+        cJSON *doc = preset_store_load(FS_MOUNT_POINT);
+        esp_err_t sent = doc ? send_preset_document(req, doc, NULL) : httpd_resp_send_500(req);
+        cJSON_Delete(doc);
+        return sent;
+    }
+    char *body = receive_preset_body(req);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Preset document missing or too large");
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    const char *problem = NULL;
+    cJSON *doc = root ? preset_store_normalize(root, &problem) : NULL;
+    cJSON_Delete(root);
+    if (!doc) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, problem ? problem : "Invalid JSON");
+        return ESP_FAIL;
+    }
+    cJSON *stored = preset_store_load(FS_MOUNT_POINT);
+    int rev = preset_store_rev(stored);
+    esp_err_t sent;
+    if (preset_store_rev(doc) != rev) {
+        // Changed elsewhere since the page read it: the page reloads and retries
+        sent = send_preset_document(req, stored, "409 Conflict");
+    } else {
+        preset_store_set_rev(doc, rev + 1);
+        sent = preset_store_save(FS_MOUNT_POINT, doc)
+                   ? send_preset_document(req, doc, NULL)
+                   : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                         "Could not save the presets");
+    }
+    cJSON_Delete(stored);
+    cJSON_Delete(doc);
+    return sent;
 }
 
 #if CONFIG_BOARD_DRIVER_READ_PICO
@@ -3668,6 +3768,8 @@ static esp_err_t register_http_routes(httpd_handle_t handle)
         HTTP_REGISTER("/api/settings/processing", HTTP_POST, processing_settings_handler);
 
         HTTP_REGISTER("/api/settings/processing", HTTP_DELETE, processing_settings_handler);
+        HTTP_REGISTER("/api/presets", HTTP_GET, presets_handler);
+        HTTP_REGISTER("/api/presets", HTTP_PUT, presets_handler);
 
         HTTP_REGISTER("/api/settings/palette", HTTP_GET, color_palette_handler);
 

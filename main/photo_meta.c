@@ -47,20 +47,53 @@ int64_t photo_meta_added(const cJSON *index, const char *name)
     return cJSON_IsNumber(added) && added->valuedouble > 0 ? (int64_t) added->valuedouble : 0;
 }
 
-bool photo_meta_set(cJSON *index, const char *name, int up, int64_t added_if_new)
+const char *photo_meta_preset(const cJSON *index, const char *name)
 {
-    if (!cJSON_IsObject(index) || !name || !name[0] || !photo_meta_up_valid(up)) return false;
-    int64_t added = photo_meta_added(index, name);
-    if (!added) added = added_if_new > 0 ? added_if_new : 0;
+    const cJSON *preset = cJSON_GetObjectItemCaseSensitive(entry_of(index, name), "preset");
+    return cJSON_IsString(preset) && preset->valuestring && preset->valuestring[0]
+               ? preset->valuestring
+               : NULL;
+}
+
+// One entry from its facts; `preset` NULL leaves it out.
+static bool put_entry(cJSON *index, const char *name, int up, int64_t added, const char *preset)
+{
     cJSON *entry = cJSON_CreateObject();
     if (!entry || !cJSON_AddNumberToObject(entry, "up", up) ||
-        (added && !cJSON_AddNumberToObject(entry, "added", (double) added))) {
+        (added && !cJSON_AddNumberToObject(entry, "added", (double) added)) ||
+        (preset && !cJSON_AddStringToObject(entry, "preset", preset))) {
         cJSON_Delete(entry);
         return false;
     }
     if (cJSON_GetObjectItemCaseSensitive(index, name))
         return cJSON_ReplaceItemInObjectCaseSensitive(index, name, entry);
     return cJSON_AddItemToObject(index, name, entry);
+}
+
+static int64_t added_for(const cJSON *index, const char *name, int64_t added_if_new)
+{
+    int64_t added = photo_meta_added(index, name);
+    return added ? added : (added_if_new > 0 ? added_if_new : 0);
+}
+
+bool photo_meta_set(cJSON *index, const char *name, int up, int64_t added_if_new)
+{
+    if (!cJSON_IsObject(index) || !name || !name[0] || !photo_meta_up_valid(up)) return false;
+    // Copied before the entry is replaced, which frees the old string
+    char preset[PHOTO_META_PRESET_MAX + 1] = "";
+    const char *kept = photo_meta_preset(index, name);
+    if (kept) snprintf(preset, sizeof(preset), "%s", kept);
+    return put_entry(index, name, up, added_for(index, name, added_if_new),
+                     preset[0] ? preset : NULL);
+}
+
+bool photo_meta_set_preset(cJSON *index, const char *name, const char *preset,
+                           int64_t added_if_new)
+{
+    if (!cJSON_IsObject(index) || !name || !name[0]) return false;
+    if (preset && strlen(preset) > PHOTO_META_PRESET_MAX) return false;
+    return put_entry(index, name, photo_meta_up(index, name),
+                     added_for(index, name, added_if_new), preset && preset[0] ? preset : NULL);
 }
 
 void photo_meta_forget(cJSON *index, const char *name)

@@ -2,7 +2,13 @@
 import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
-import { useAppStore, useHotspotStore, useSettingsStore, useUploadsStore } from "../stores";
+import {
+  useAppStore,
+  useHotspotStore,
+  usePresetsStore,
+  useSettingsStore,
+  useUploadsStore,
+} from "../stores";
 import AppHeader from "../components/AppHeader.vue";
 import AppNav from "../components/AppNav.vue";
 import HotspotBanner from "../components/HotspotBanner.vue";
@@ -12,6 +18,7 @@ import SystemSettings from "../components/SystemSettings.vue";
 import PhotosView from "./PhotosView.vue";
 import AlbumsView from "./AlbumsView.vue";
 import SlideshowView from "./SlideshowView.vue";
+import PresetsView from "./PresetsView.vue";
 import { currentAlbum, currentView } from "../utils/viewState";
 import { clearSelection } from "../utils/selection";
 import { prefersDark } from "../utils/colorScheme";
@@ -20,6 +27,7 @@ import "../styles/paper.css";
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
 const hotspotStore = useHotspotStore();
+const presetsStore = usePresetsStore();
 const uploads = useUploadsStore();
 const { mdAndUp } = useDisplay();
 const navOpen = ref(false); // the phone drawer
@@ -93,6 +101,11 @@ onMounted(async () => {
   // Grayscale frames default to the grayscale preset (if not yet customized).
   if (appStore.isGrayscale) {
     settingsStore.applyGrayscaleDefaultIfUntouched();
+  }
+  // The preset library; a frame without one gets "My default" from its setting
+  if (appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage) {
+    await presetsStore.load();
+    await presetsStore.ensureMigrated();
   }
 
   // Refresh battery every 30s
@@ -211,6 +224,7 @@ onUnmounted(() => {
         <PhotosView v-show="currentView === 'photos'" />
         <AlbumsView v-if="hasStorage" v-show="currentView === 'albums'" />
         <SlideshowView v-show="currentView === 'slideshow'" />
+        <PresetsView v-show="currentView === 'presets'" />
       </v-container>
     </v-main>
 
