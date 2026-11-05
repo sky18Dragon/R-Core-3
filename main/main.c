@@ -66,6 +66,9 @@
 #if CONFIG_READ_PICO_HOTSPOT
 #include "read_pico_hotspot.h"
 #endif
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_orientation.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -507,6 +510,9 @@ static void button_task(void *arg)
 #endif
 #if CONFIG_READ_PICO_HOTSPOT
         read_pico_hotspot_poll(esp_timer_get_time() / 1000);
+#endif
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        read_pico_orientation_poll(esp_timer_get_time() / 1000);
 #endif
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -978,6 +984,9 @@ void app_main(void)
                  esp_err_to_name(display_start));
         return;
     }
+    display_manager_set_photo_wash(config_manager_get_photo_wash());
+    if (read_pico_orientation_init() != ESP_OK)
+        ESP_LOGW(TAG, "No accelerometer: the frame keeps its normal landscape position");
 #else
     ESP_ERROR_CHECK(display_manager_init());
 #endif

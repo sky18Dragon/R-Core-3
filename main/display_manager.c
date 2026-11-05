@@ -40,6 +40,11 @@
 #include "read_pico_upload.h"
 #endif
 #if CONFIG_BOARD_DRIVER_READ_PICO
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "photo_meta.h"
+#include "read_pico_orientation.h"
+#include "wifi_manager.h"
+#endif
 #include "read_pico_epaper.h"
 #endif
 
@@ -209,6 +214,15 @@ esp_err_t display_manager_init(void)
     return ESP_OK;
 }
 
+void display_manager_set_photo_wash(bool wash)
+{
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    read_pico_epaper_set_photo_wash(wash);
+#else
+    (void) wash;
+#endif
+}
+
 void display_manager_initialize_paint(void)
 {
     Paint_NewImage(epd_image_buffer, BOARD_HAL_DISPLAY_WIDTH, BOARD_HAL_DISPLAY_HEIGHT,
@@ -216,6 +230,22 @@ void display_manager_initialize_paint(void)
     Paint_SetScale(display_is_grayscale() ? 16 : 6);
     Paint_SelectImage(epd_image_buffer);
 }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+// Screens drawn on the frame (hotspot, setup, hints) read the way the frame
+// stands; photos keep initialize_paint, since their files are panel-shaped.
+static void initialize_screen_paint(void)
+{
+    int rotation = config_manager_get_display_rotation_deg();
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    rotation += read_pico_orientation_get();
+#endif
+    Paint_NewImage(epd_image_buffer, BOARD_HAL_DISPLAY_WIDTH, BOARD_HAL_DISPLAY_HEIGHT,
+                   rotation % 360, display_white_color());
+    Paint_SetScale(display_is_grayscale() ? 16 : 6);
+    Paint_SelectImage(epd_image_buffer);
+}
+#endif
 
 esp_err_t display_manager_show_image(const char *filename)
 {
@@ -234,6 +264,9 @@ esp_err_t display_manager_show_image(const char *filename)
     ESP_LOGI(TAG, "Displaying image: %s", filename);
     ESP_LOGI(TAG, "Free heap before display: %lu bytes", esp_get_free_heap_size());
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    display_manager_initialize_paint();  // a screen may have left the paint turned
+#endif
     ESP_LOGI(TAG, "Clearing display buffer");
     Paint_Clear(display_white_color());
 
@@ -250,6 +283,13 @@ esp_err_t display_manager_show_image(const char *filename)
             xSemaphoreGive(display_mutex);
             return ESP_FAIL;
         }
+#if CONFIG_READ_PICO_LOCAL_FRAME
+        // A photo that stands upside down the way the frame stands is turned half way.
+        if (photo_meta_turn(photo_meta_lookup_up(filename), read_pico_orientation_get()) == 180) {
+            photo_meta_rotate180_4bpp(epd_image_buffer, image_buffer_size);
+            ESP_LOGI(TAG, "Photo turned half way to stand upright");
+        }
+#endif
     } else if (is_png) {
         ESP_LOGI(TAG, "Reading PNG file into buffer");
         UBYTE result = display_is_grayscale() ? GUI_ReadPng_Gray16(filename, 0, 0)
@@ -316,6 +356,9 @@ esp_err_t display_manager_show_rgb_buffer(const uint8_t *rgb_buffer, int width, 
     ESP_LOGI(TAG, "Displaying RGB buffer: %dx%d", width, height);
     ESP_LOGI(TAG, "Free heap before display: %lu bytes", esp_get_free_heap_size());
 
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    display_manager_initialize_paint();  // a screen may have left the paint turned
+#endif
     ESP_LOGI(TAG, "Clearing display buffer");
     Paint_Clear(display_white_color());
 
@@ -368,6 +411,9 @@ esp_err_t display_manager_begin_rgb_stream(void)
     }
 
     ESP_LOGI(TAG, "Beginning streamed RGB display");
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    display_manager_initialize_paint();  // a screen may have left the paint turned
+#endif
     Paint_Clear(display_white_color());
     return ESP_OK;
 }
@@ -737,7 +783,7 @@ esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
         ESP_LOGE(TAG, "Failed to acquire display mutex for hotspot screen");
         return ESP_FAIL;
     }
-    display_manager_initialize_paint();  // follows the configured orientation
+    initialize_screen_paint();  // reads the way the frame stands
     Paint_Clear(display_white_color());
     UWORD width = Paint.Width, height = Paint.Height;
     bool landscape = width >= height;
@@ -785,6 +831,7 @@ esp_err_t display_manager_show_hotspot(const display_hotspot_screen_t *screen)
         return refresh;
     }
     bool linked = clear_image_record();
+    display_manager_initialize_paint();  // photos decode with the panel-shaped paint
     xSemaphoreGive(display_mutex);
     ESP_LOGI(TAG, "Hotspot screen displayed");
     return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
@@ -876,7 +923,7 @@ esp_err_t display_manager_show_setup_complete(const display_setup_screen_t *scre
         ESP_LOGE(TAG, "Failed to acquire display mutex for setup screen");
         return ESP_FAIL;
     }
-    display_manager_initialize_paint();  // follows the configured orientation
+    initialize_screen_paint();  // reads the way the frame stands
     Paint_Clear(display_white_color());
     UWORD width = Paint.Width, height = Paint.Height, line = Font24.Height;
     UWORD inner = width - 2 * SETUP_MARGIN;
@@ -959,10 +1006,55 @@ esp_err_t display_manager_show_setup_complete(const display_setup_screen_t *scre
         return refresh;
     }
     bool linked = clear_image_record();
+    display_manager_initialize_paint();  // photos decode with the panel-shaped paint
     xSemaphoreGive(display_mutex);
     ESP_LOGI(TAG, "Setup complete screen displayed");
     return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
 }
+
+#if CONFIG_READ_PICO_LOCAL_FRAME
+esp_err_t display_manager_show_orientation_hint(int orientation)
+{
+    if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(DISPLAY_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire display mutex for orientation hint");
+        return ESP_FAIL;
+    }
+    initialize_screen_paint();  // reads the way the frame stands
+    Paint_Clear(display_white_color());
+    UWORD width = Paint.Width, height = Paint.Height, line = Font24.Height;
+    UWORD inner = width - 2 * SETUP_MARGIN;
+    bool portrait = orientation % 180 != 0;
+    const char *title = portrait ? "No portrait photos" : "No landscape photos";
+    UBYTE scale = setup_fit_scale(title, inner, 3);
+    UWORD y = hotspot_draw_text(SETUP_MARGIN, 64, inner, title, scale) + 20;
+    y = setup_draw_words(SETUP_MARGIN, y, inner,
+                         portrait ? "The frame is standing up, but no photo in the slideshow is "
+                                    "a portrait photo."
+                                  : "The frame is lying sideways, but no photo in the slideshow is "
+                                    "a landscape photo.") + 16;
+    y = setup_draw_words(SETUP_MARGIN, y, inner,
+                         "Turn the frame back, or open the web page and turn photos the right "
+                         "way round with the rotate button.") + 32;
+    char ip[16] = {0};
+    if (wifi_manager_get_ip(ip, sizeof(ip)) == ESP_OK && ip[0]) {
+        char url[32];
+        snprintf(url, sizeof(url), "http://%s", ip);
+        UWORD room = height > y + SETUP_MARGIN + line * 4 ? height - y - SETUP_MARGIN - line * 4 : 0;
+        UWORD qr = room < 300 ? room : 300;
+        if (qr >= 120 && hotspot_draw_qr(url, SETUP_MARGIN, y, qr) == ESP_OK)
+            y = s_hotspot_qr.bottom + 20;
+        y = hotspot_draw_text(SETUP_MARGIN, y, inner, ip, setup_fit_scale(ip, inner, 2));
+    }
+    (void) y;
+    esp_err_t refresh = refresh_panel();
+    bool linked = refresh == ESP_OK && clear_image_record();
+    display_manager_initialize_paint();  // photos decode with the panel-shaped paint
+    xSemaphoreGive(display_mutex);
+    if (refresh != ESP_OK) return refresh;
+    ESP_LOGI(TAG, "Orientation hint displayed (%d deg)", orientation);
+    return linked ? ESP_OK : ESP_ERR_NOT_FINISHED;
+}
+#endif
 
 bool display_manager_take_previous(char *out, size_t capacity)
 {
@@ -1012,6 +1104,40 @@ bool display_manager_copy_current_image(char *out, size_t capacity, bool *known)
 }
 #endif
 
+#if CONFIG_READ_PICO_LOCAL_FRAME
+// Only photos that suit the way the frame stands take part (portrait photos
+// when it stands up); a photo without a record counts as landscape.
+static bool photo_suits(const cJSON *meta, const char *name)
+{
+    return photo_meta_turn(photo_meta_up(meta, name), read_pico_orientation_get()) % 180 == 0;
+}
+#define ALBUM_META_LOAD(meta, path) cJSON *meta = photo_meta_load(path)
+#define ALBUM_META_FREE(meta) cJSON_Delete(meta)
+#define SKIP_UNSUITED(meta, name, counter) \
+    if (!photo_suits(meta, name)) {        \
+        ++(counter);                       \
+        continue;                          \
+    }
+#else
+#define ALBUM_META_LOAD(meta, path) (void) 0
+#define ALBUM_META_FREE(meta) (void) 0
+#define SKIP_UNSUITED(meta, name, counter) (void) (counter)
+#endif
+
+// Every photo in the slideshow suits the other orientation: say so on the frame.
+static esp_err_t show_unsuited_hint(int unsuited)
+{
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    if (unsuited > 0) {
+        ESP_LOGW(TAG, "No photo suits %d deg (%d do not)", read_pico_orientation_get(), unsuited);
+        return display_manager_show_orientation_hint(read_pico_orientation_get());
+    }
+#else
+    (void) unsuited;
+#endif
+    return ESP_ERR_NOT_FOUND;
+}
+
 static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
 {
     ESP_LOGI(TAG, "Sequential rotation mode");
@@ -1020,6 +1146,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
     int32_t current_idx = 0;
     char first_image[512] = {0};
     bool found_target = false;
+    int unsuited = 0;
 
     for (int i = 0; i < album_count; i++) {
         char album_path[256];
@@ -1029,6 +1156,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
         if (!dir) {
             continue;
         }
+        ALBUM_META_LOAD(meta, album_path);
 
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
@@ -1040,6 +1168,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
                 const char *ext = strrchr(entry->d_name, '.');
                 if (ext && (strcasecmp(ext, ".bmp") == 0 || strcasecmp(ext, ".png") == 0 ||
                             strcasecmp(ext, ".epdgz") == 0)) {
+                    SKIP_UNSUITED(meta, entry->d_name, unsuited);
                     char fullpath[512];
                     snprintf(fullpath, sizeof(fullpath), "%s/%s", album_path, entry->d_name);
                     ESP_LOGD(TAG, "  Found image [%ld]: %s", (long) current_idx, fullpath);
@@ -1054,6 +1183,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
                         esp_err_t displayed = display_manager_show_image(fullpath);
 #if CONFIG_BOARD_DRIVER_READ_PICO
                         if (displayed != ESP_OK) {
+                            ALBUM_META_FREE(meta);
                             closedir(dir);
                             return displayed;
                         }
@@ -1063,6 +1193,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
                         save_last_displayed_image(fullpath);
                         config_manager_set_last_index(target_idx);
                         found_target = true;
+                        ALBUM_META_FREE(meta);
                         closedir(dir);
                         return ESP_OK;
                     }
@@ -1070,6 +1201,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
                 }
             }
         }
+        ALBUM_META_FREE(meta);
         closedir(dir);
     }
 
@@ -1095,7 +1227,7 @@ static esp_err_t rotate_sequential(char **enabled_albums, int album_count)
             config_manager_set_last_index(0);  // Reset index to 0
         } else {
             ESP_LOGW(TAG, "No images found in any enabled albums.");
-            return ESP_ERR_NOT_FOUND;
+            return show_unsuited_hint(unsuited);
         }
     }
     return ESP_OK;
@@ -1107,6 +1239,7 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
 
     // Count total images across all enabled albums
     int total_image_count = 0;
+    int unsuited = 0;
     for (int i = 0; i < album_count; i++) {
         char album_path[256];
         album_manager_get_album_path(enabled_albums[i], album_path, sizeof(album_path));
@@ -1116,6 +1249,7 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
             ESP_LOGW(TAG, "Failed to open album: %s", enabled_albums[i]);
             continue;
         }
+        ALBUM_META_LOAD(meta, album_path);
 
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
@@ -1126,16 +1260,18 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
                 const char *ext = strrchr(entry->d_name, '.');
                 if (ext && (strcasecmp(ext, ".bmp") == 0 || strcasecmp(ext, ".png") == 0 ||
                             strcasecmp(ext, ".epdgz") == 0)) {
+                    SKIP_UNSUITED(meta, entry->d_name, unsuited);
                     total_image_count++;
                 }
             }
         }
+        ALBUM_META_FREE(meta);
         closedir(dir);
     }
 
     if (total_image_count == 0) {
         ESP_LOGW(TAG, "No images found in enabled albums");
-        return ESP_ERR_NOT_FOUND;
+        return show_unsuited_hint(unsuited);
     }
 
     // Build image list with absolute paths from all enabled albums
@@ -1154,6 +1290,8 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
         if (!dir) {
             continue;
         }
+        ALBUM_META_LOAD(meta, album_path);
+        int skipped = 0;
 
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL && idx < total_image_count) {
@@ -1165,6 +1303,7 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
                 const char *ext = strrchr(entry->d_name, '.');
                 if (ext && (strcasecmp(ext, ".bmp") == 0 || strcasecmp(ext, ".png") == 0 ||
                             strcasecmp(ext, ".epdgz") == 0)) {
+                    SKIP_UNSUITED(meta, entry->d_name, skipped);
                     char *fullpath = malloc(512);
                     if (!fullpath) {
                         ESP_LOGE(TAG, "Failed to allocate path buffer");
@@ -1176,6 +1315,8 @@ static esp_err_t rotate_random(char **enabled_albums, int album_count)
                 }
             }
         }
+        (void) skipped;
+        ALBUM_META_FREE(meta);
         closedir(dir);
     }
 

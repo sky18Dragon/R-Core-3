@@ -170,6 +170,8 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t)
     locked = false;
     return pdTRUE;
 }
+bool photo_wash_setting = true;
+void read_pico_epaper_set_photo_wash(bool wash) { photo_wash_setting = wash; }
 read_pico_refresh_result_t read_pico_epaper_display(const uint8_t *frame, size_t length)
 {
     EXPECT_TRUE(locked);
@@ -605,6 +607,14 @@ TEST_F(DisplayCommit, HotspotScreenFailureKeepsPhotoAndReleasesLock)
     screen.password = nullptr;
     EXPECT_EQ(display_manager_show_hotspot(&screen), ESP_ERR_INVALID_ARG);
     EXPECT_EQ(display_manager_show_hotspot(nullptr), ESP_ERR_INVALID_ARG);
+}
+
+TEST_F(DisplayCommit, PhotoWashSettingReachesTheDriver)
+{
+    display_manager_set_photo_wash(false);
+    EXPECT_FALSE(photo_wash_setting);
+    display_manager_set_photo_wash(true);
+    EXPECT_TRUE(photo_wash_setting);
 }
 
 TEST_F(DisplayCommit, SetupScreenEncodesTheAddressAndUnlinksThePhoto)

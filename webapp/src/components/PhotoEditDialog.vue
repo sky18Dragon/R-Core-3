@@ -2,7 +2,7 @@
 import { t } from "../i18n";
 import { ref, computed, watch } from "vue";
 import { useDisplay } from "vuetify";
-import { useSettingsStore, useUploadsStore } from "../stores";
+import { usePresetsStore, useSettingsStore, useUploadsStore } from "../stores";
 import ImageProcessing from "./ImageProcessing.vue";
 
 const props = defineProps({
@@ -13,18 +13,31 @@ const emit = defineEmits(["close"]);
 
 const settingsStore = useSettingsStore();
 const uploads = useUploadsStore();
+const presets = usePresetsStore();
 const { xs } = useDisplay();
 
 const editor = ref(null);
 const showing = ref(false);
 const notice = ref(null); // {type, text} from "show only"
+const presetId = ref(null); // null: the batch's preset
 
 watch(
   () => props.item,
-  () => {
+  (item) => {
     notice.value = null;
+    presetId.value = item?.presetId ?? null;
   }
 );
+
+// Which preset this photo alone uses (docs/PRD-PRESETS.md)
+const presetItems = computed(() => [
+  { value: null, title: t("Same as the batch ({name})", { name: uploads.batchName }) },
+  ...presets.list.map((p) => ({ value: p.id, title: p.name })),
+]);
+const previewParams = computed(() => ({
+  ...settingsStore.params,
+  ...uploads.processingFor(presetId.value),
+}));
 
 const initialEdit = computed(() =>
   props.item
@@ -48,6 +61,7 @@ function collect() {
   const custom = mode === "custom";
   const isDefault = mode === defaultMode && !custom && upload.backgroundColorName === defaultBg;
   return {
+    presetId: presetId.value,
     rotation: view.rotation,
     edit: isDefault
       ? null
@@ -92,10 +106,20 @@ async function showOnly() {
       </v-toolbar>
       <v-divider />
       <v-card-text class="px-2 px-sm-4">
+        <v-select
+          v-if="presets.available && presets.list.length"
+          v-model="presetId"
+          :items="presetItems"
+          :label="t('Preset for this photo')"
+          variant="outlined"
+          density="comfortable"
+          hide-details
+          class="preset-select mb-3"
+        />
         <ImageProcessing
           ref="editor"
           :image-file="item.file"
-          :params="settingsStore.params"
+          :params="previewParams"
           :palette="settingsStore.palette"
           :initial-edit="initialEdit"
         />
@@ -116,3 +140,9 @@ async function showOnly() {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.preset-select {
+  max-width: 360px;
+}
+</style>

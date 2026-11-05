@@ -47,6 +47,8 @@ endif()
 
 set(SOURCES
     "album_manager.c"
+    "photo_meta.c"
+    "preset_store.c"
     "cert_pin.c"
     "http_endpoint.c"
     "color_palette.c"
@@ -104,6 +106,9 @@ if(CONFIG_BOARD_DRIVER_READ_PICO)
     if(CONFIG_READ_PICO_HOTSPOT)
         list(APPEND SOURCES "hotspot_policy.c" "read_pico_hotspot.c")
     endif()
+    if(CONFIG_READ_PICO_LOCAL_FRAME)
+        list(APPEND SOURCES "frame_orientation.c" "read_pico_orientation.c")
+    endif()
     if(CONFIG_READ_PICO_PMU_SLEEP)
         list(APPEND SOURCES "read_pico_frame_sleep.c")
     endif()
@@ -120,6 +125,7 @@ set(PRIV_REQUIRES
     esp_hw_support
     read_pico_display
     read_pico_touch
+    read_pico_accel
     esp_driver_gpio
     esp_driver_usb_serial_jtag
     vfs

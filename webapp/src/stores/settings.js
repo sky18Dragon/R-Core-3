@@ -36,6 +36,8 @@ export const useSettingsStore = defineStore("settings", () => {
     dnsServer: "",
     displayOrientation: "landscape",
     displayRotationDeg: 180,
+    photoRefresh: null, // "clean" | "fast" on frames that offer it; null = not offered
+    orientationMode: null, // "auto" | "landscape" | "portrait" on frames that sense it
     wifiSsid: "",
     wifiPassword: "",
     // Auto Rotate
@@ -226,6 +228,13 @@ export const useSettingsStore = defineStore("settings", () => {
       deviceSettings.value.httpHeaderValue = data.http_header_value || "";
       deviceSettings.value.displayOrientation = data.display_orientation || "landscape";
       appliedOrientation.value = deviceSettings.value.displayOrientation;
+      deviceSettings.value.photoRefresh =
+        data.photo_refresh === "clean" || data.photo_refresh === "fast" ? data.photo_refresh : null;
+      deviceSettings.value.orientationMode = ["auto", "landscape", "portrait"].includes(
+        data.orientation_mode
+      )
+        ? data.orientation_mode
+        : null;
       deviceSettings.value.rotationMode = data.rotation_mode || "storage";
       deviceSettings.value.sdRotationMode = data.sd_rotation_mode || "random";
       deviceSettings.value.deviceName = data.device_name || "PhotoFrame";
@@ -307,6 +316,10 @@ export const useSettingsStore = defineStore("settings", () => {
       openai_api_key: deviceSettings.value.aiCredentials.openaiApiKey,
       google_api_key: deviceSettings.value.aiCredentials.googleApiKey,
     };
+    if (deviceSettings.value.photoRefresh)
+      currentConfig.photo_refresh = deviceSettings.value.photoRefresh;
+    if (deviceSettings.value.orientationMode)
+      currentConfig.orientation_mode = deviceSettings.value.orientationMode;
 
     // Only include password if it's been changed (not empty)
     if (deviceSettings.value.wifiPassword && deviceSettings.value.wifiPassword.length > 0) {

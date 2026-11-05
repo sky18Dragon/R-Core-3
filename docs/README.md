@@ -54,6 +54,8 @@
 | [READ-PICO-PHOTO-VALIDATION](READ-PICO-PHOTO-VALIDATION.md) | 修改单张照片诊断profile时 |
 | [GRAY16-VALIDATION-PLAN](GRAY16-VALIDATION-PLAN.md) | 修改显示后端/波形/供电时序时 |
 | [PRD-HOTSPOT-SETTINGS](PRD-HOTSPOT-SETTINGS.md) | 热点传图与屏上设置的产品设计与决策（R2，非R1） |
+| [PRD-PHOTO-ORIENTATION](PRD-PHOTO-ORIENTATION.md) | 照片方向调整、横竖自适应轮播与换图残影的方案与决策（R2，非R1） |
+| [PRD-PRESETS](PRD-PRESETS.md) | 处理预设库：调参保存为预设、上传按预设渲染的方案与决策（R2，非R1） |
 
 分类依据是各文档摘要与TODO的R1范围，未逐份重写。
 

@@ -21,6 +21,9 @@ const props = defineProps({
     type: String,
     default: "custom",
   },
+  // The device page has its own preset library and shows layout separately
+  showPresets: { type: Boolean, default: true },
+  showLayout: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["update:params", "update:preset", "preset-change"]);
@@ -67,7 +70,7 @@ function updateParam(key, value) {
 <template>
   <div class="processing-controls">
     <!-- Preset Selection -->
-    <v-row>
+    <v-row v-if="showPresets">
       <v-col cols="12">
         <v-card variant="outlined" class="mb-6">
           <v-card-subtitle class="pt-3"> {{ t("Processing Preset") }} </v-card-subtitle>
@@ -102,7 +105,7 @@ function updateParam(key, value) {
     </v-row>
 
     <!-- Layout: scale mode first; background only matters in fit mode -->
-    <v-row>
+    <v-row v-if="showLayout">
       <v-col cols="12" md="4">
         <v-select
           :model-value="params.scaleMode || 'cover'"

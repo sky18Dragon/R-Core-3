@@ -2,21 +2,24 @@
 import { t } from "../i18n";
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useDisplay } from "vuetify";
-import { getPresetOptions } from "@aitjcize/epaper-image-convert";
-import { useAppStore, useSettingsStore, useUploadsStore } from "../stores";
+import { useAppStore, usePresetsStore, useSettingsStore, useUploadsStore } from "../stores";
 import ProcessingControls from "./ProcessingControls.vue";
+import SavePresetDialog from "./SavePresetDialog.vue";
 import PhotoEditDialog from "./PhotoEditDialog.vue";
+import CompareDialog from "./CompareDialog.vue";
 import NewAlbumDialog from "./NewAlbumDialog.vue";
 import AiImageDialog from "./AiImageDialog.vue";
 import { autoRotateFill } from "../utils/uiPrefs";
 import { albumLabel } from "../utils/albums";
 import { goTo } from "../utils/viewState";
+import { isPortraitUp, upForUpload } from "../utils/orientation";
 
 // The upload dialog: opened by any "+" or a drop with photos already chosen.
 const appStore = useAppStore();
 const { xs } = useDisplay();
 const settingsStore = useSettingsStore();
 const uploads = useUploadsStore();
+const presets = usePresetsStore();
 
 const fileInput = ref(null);
 const dragging = ref(false);
@@ -164,6 +167,14 @@ const dialogTitle = computed(() => {
   return n ? t("Upload {n} photos", { n }) : t("Upload photos");
 });
 
+// How the frame will file this photo (portrait photos take turns when it
+// stands up), so a wrong guess can be turned before it is sent.
+function shapeOf(item) {
+  if (!item.width || !item.height) return "";
+  const up = upForUpload(uploads.rotationOf(item), item.height > item.width);
+  return isPortraitUp(up) ? t("Portrait photo") : t("Landscape photo");
+}
+
 // What the tile preview should look like for the layout this photo will get
 function tileFit(item) {
   const mode = item.edit?.scaleMode ?? settingsStore.params.scaleMode ?? "cover";
@@ -245,30 +256,59 @@ onBeforeUnmount(() => clearTimeout(resultTimer));
 
 // --- processing defaults ---------------------------------------------------
 
-const presetTitle = computed(() => {
-  // Before the device answers, the store holds placeholder defaults, not the real preset.
-  if (!settingsStore.processingLoaded) return "";
-  const option = getPresetOptions().find((p) => p.value === settingsStore.preset);
-  return option ? t(option.title) : t("Custom");
-});
+// The batch renders with a preset (docs/PRD-PRESETS.md); fine-tuning changes
+// this batch only and can be kept as a new preset.
+const presetItems = computed(() =>
+  presets.list.map((p) => ({
+    value: p.id,
+    title: p.id === presets.defaultId ? `★ ${p.name}` : p.name,
+  }))
+);
+const showPresets = computed(() => presets.available && presets.list.length > 0);
+const fineParams = computed(() => ({ ...settingsStore.params, ...uploads.batchProcessing }));
+const savingPreset = ref(false);
 
-function onParamsUpdate(newParams) {
-  Object.assign(settingsStore.params, newParams);
-}
-function onPresetChange(preset) {
-  if (preset !== "custom") settingsStore.applyPreset(preset);
+function onPresetSaved(id) {
+  savingPreset.value = false;
+  uploads.chooseBatchPreset(id);
+  notify(t("Saved “{name}”", { name: presets.byId(id)?.name ?? "" }), "success");
 }
 
-const savingDefaults = ref(false);
-async function saveAsDefault() {
-  savingDefaults.value = true;
-  const ok = await settingsStore.saveSettings();
-  savingDefaults.value = false;
+const makingDefault = ref(false);
+async function makeBatchDefault() {
+  makingDefault.value = true;
+  const ok = await presets.setDefault(uploads.batchPreset.id);
+  makingDefault.value = false;
   notify(
-    ok ? t("Saved as the default for new uploads") : t("Failed to save settings"),
+    ok
+      ? t("“{name}” is now the default", { name: uploads.batchPreset.name })
+      : t("Could not save the preset on the frame"),
     ok ? "success" : "error"
   );
 }
+
+// Layout is not part of a preset: a change here becomes the frame's default
+const scaleModeOptions = computed(() => [
+  { title: t("Cover (crop to fill)"), value: "cover" },
+  { title: t("Fit (letterbox)"), value: "fit" },
+]);
+const backgroundOptions = computed(() => [
+  { title: t("White"), value: "white" },
+  { title: t("Black"), value: "black" },
+]);
+async function setLayout(key, value) {
+  settingsStore.params[key] = value;
+  if (!(await settingsStore.saveSettings())) notify(t("Failed to save settings"), "error");
+}
+
+// Each photo can use a preset of its own; the tile shows which
+function tilePreset(item) {
+  return item.presetId && presets.byId(item.presetId) ? presets.byId(item.presetId).name : "";
+}
+
+// Side-by-side comparison uses the first photo in the queue
+const comparing = ref(null);
+const compareItem = computed(() => uploads.items.find((i) => !i.unreadable) ?? null);
 
 // --- misc ------------------------------------------------------------------
 
@@ -389,6 +429,12 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
                   <v-icon v-if="item.unreadable" icon="mdi-image-broken-variant" />
                   <v-progress-circular v-else indeterminate size="22" width="2" />
                 </div>
+                <span v-if="!item.unreadable && shapeOf(item)" class="tile-shape">
+                  {{ shapeOf(item) }}
+                </span>
+                <span v-if="!item.unreadable && tilePreset(item)" class="tile-preset">
+                  {{ tilePreset(item) }}
+                </span>
                 <div v-if="item.status !== 'pending' && !item.unreadable" class="tile-status">
                   <v-progress-circular v-if="item.status === 'working'" indeterminate size="26" />
                   <v-icon
@@ -488,7 +534,9 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
               <v-expansion-panel-title>
                 <v-icon icon="mdi-tune" class="mr-3" />
                 {{ t("Processing") }}
-                <span class="text-caption text-medium-emphasis ml-3">{{ presetTitle }}</span>
+                <span class="text-caption text-medium-emphasis ml-3 text-truncate">
+                  {{ uploads.batchName }}
+                </span>
               </v-expansion-panel-title>
               <v-expansion-panel-text>
                 <v-switch
@@ -499,22 +547,96 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
                   hide-details
                   class="mb-2"
                 />
-                <ProcessingControls
-                  :params="settingsStore.params"
-                  :preset="settingsStore.preset"
-                  @update:params="onParamsUpdate"
-                  @update:preset="settingsStore.preset = $event"
-                  @preset-change="onPresetChange"
+                <v-select
+                  v-if="showPresets"
+                  :model-value="uploads.batchPreset?.id"
+                  :items="presetItems"
+                  :label="t('Preset')"
+                  :hint="
+                    uploads.batchAdjusted
+                      ? t('Adjusted for this upload only')
+                      : t('For every photo here')
+                  "
+                  persistent-hint
+                  variant="outlined"
+                  density="comfortable"
+                  class="mb-5"
+                  @update:model-value="uploads.chooseBatchPreset($event)"
                 />
-                <div class="d-flex justify-end mt-2">
+                <div class="layout-row">
+                  <v-select
+                    :model-value="settingsStore.params.scaleMode || 'cover'"
+                    :items="scaleModeOptions"
+                    :label="t('Scale Mode')"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                    @update:model-value="setLayout('scaleMode', $event)"
+                  />
+                  <v-select
+                    v-if="(settingsStore.params.scaleMode || 'cover') === 'fit'"
+                    :model-value="settingsStore.params.backgroundColor || 'white'"
+                    :items="backgroundOptions"
+                    :label="t('Background Color')"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                    @update:model-value="setLayout('backgroundColor', $event)"
+                  />
+                </div>
+                <v-expansion-panels variant="accordion" elevation="0" class="mt-3 fine-tune">
+                  <v-expansion-panel>
+                    <v-expansion-panel-title class="px-3">
+                      {{ t("Fine-tune") }}
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text>
+                      <ProcessingControls
+                        :params="fineParams"
+                        :show-presets="false"
+                        :show-layout="false"
+                        @update:params="uploads.adjustBatch($event)"
+                      />
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+                </v-expansion-panels>
+                <div v-if="uploads.batchAdjusted" class="adjusted-row">
+                  <span class="text-body-2">{{ t("Adjusted for this upload only.") }}</span>
+                  <v-btn size="small" variant="text" @click="uploads.resetBatch()">
+                    {{ t("Undo changes") }}
+                  </v-btn>
+                  <v-btn
+                    v-if="presets.available"
+                    size="small"
+                    variant="text"
+                    @click="savingPreset = true"
+                  >
+                    {{ t("Save as a new preset") }}
+                  </v-btn>
+                </div>
+                <div class="d-flex justify-end flex-wrap ga-1 mt-2">
                   <v-btn
                     variant="text"
                     size="small"
-                    :loading="savingDefaults"
-                    :disabled="!settingsStore.processingDirty"
-                    @click="saveAsDefault"
+                    :disabled="!compareItem || uploads.running"
+                    :title="t('Try four settings on the frame at once')"
+                    @click="comparing = compareItem"
                   >
-                    {{ t("Set as default") }}
+                    <v-icon icon="mdi-view-grid-outline" start />
+                    {{ t("Compare side by side") }}
+                  </v-btn>
+                  <v-btn
+                    v-if="
+                      showPresets &&
+                      !uploads.batchAdjusted &&
+                      uploads.batchPreset &&
+                      (uploads.batchPreset.id !== presets.defaultId || presets.defaultModified)
+                    "
+                    variant="text"
+                    size="small"
+                    :loading="makingDefault"
+                    @click="makeBatchDefault"
+                  >
+                    {{ t("Make this preset the default") }}
                   </v-btn>
                 </div>
               </v-expansion-panel-text>
@@ -554,6 +676,15 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
       </v-card-actions>
 
       <PhotoEditDialog :item="editing" @close="editing = null" />
+      <CompareDialog :item="comparing" @close="comparing = null" />
+      <SavePresetDialog
+        :open="savingPreset"
+        :params="uploads.batchProcessing"
+        :suggested-name="uploads.batchPreset?.name ?? ''"
+        source="manual"
+        @close="savingPreset = false"
+        @saved="onPresetSaved"
+      />
       <NewAlbumDialog v-model="newAlbumOpen" @created="onAlbumCreated" />
       <AiImageDialog v-model="aiOpen" @generated="(file) => addFiles([file])" />
 
@@ -693,6 +824,49 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", warnBeforeLeavi
   align-items: center;
   justify-content: center;
   background: rgba(var(--v-theme-on-surface), 0.06);
+}
+.tile-preset {
+  z-index: 1;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 12px);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+}
+.layout-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.fine-tune {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+}
+.adjusted-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+.tile-shape {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
 }
 .tile-status {
   position: absolute;

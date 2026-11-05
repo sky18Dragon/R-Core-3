@@ -40,6 +40,9 @@ esp_err_t read_pico_epaper_confirm_white_reference(void);
 esp_err_t read_pico_epaper_prepare_local_frame(void);
 #endif
 bool read_pico_epaper_faulted(void);
+// Photo changes: true washes the panel black/white first (default), false only
+// flashes it white. Used by the local frame; other profiles ignore it.
+void read_pico_epaper_set_photo_wash(bool wash);
 
 #ifdef __cplusplus
 }

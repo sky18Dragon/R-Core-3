@@ -282,6 +282,8 @@ Get current device configuration.
 - `ha_url`: Home Assistant URL for integration
 - `openai_api_key`/`google_api_key`: AI API keys for client-side generation
 - `deep_sleep_enabled`: Enable deep sleep between rotations
+- `photo_refresh` (Read Pico): `"clean"` (default) washes the panel black/white before each photo; `"fast"` only flashes it white
+- `orientation_mode` (Read Pico local frame): `"auto"` (default, from the accelerometer), `"landscape"` or `"portrait"` (held at 90° clockwise); the slideshow shows only photos that suit the orientation
 
 ### `POST /api/config`
 
@@ -386,10 +388,17 @@ List images in an album.
   {
     "filename": "photo1.png",
     "album": "Vacation",
-    "thumbnail": "photo1.jpg"
+    "thumbnail": "photo1.jpg",
+    "up": 90,
+    "added": 1793700000,
+    "preset": "人像"
   }
 ]
 ```
+
+- `up`: degrees clockwise the stored frame-shaped image turns to stand upright: `0`/`180` landscape photos, `90`/`270` portrait photos stored on their side. `0` when the album's `.photos.json` index has no entry (old photos, or an unreadable index).
+- `added`: Unix time the photo was uploaded; absent when unknown (clock not set, or uploaded before the index existed).
+- `preset`: name of the processing preset the photo was rendered with, as it was called at upload time; absent when not recorded.
 
 ### `GET /api/image?filepath=<album/filename>`
 
@@ -401,6 +410,28 @@ Upload an image to an album.
 
 - Content-Type: `multipart/form-data`
 - Fields: `album` (text), `image` (file), `thumbnail` (file, optional)
+
+### `PATCH /api/photo`
+
+Set which way is up for one photo and/or the preset it was made with (metadata only; the image file is not changed). Give `up`, `preset` or both.
+
+**Request:**
+```json
+{ "filepath": "Vacation/photo.epdgz", "up": 180, "preset": "人像" }
+```
+
+**Response:** `{"status":"success","up":180,"redraw":true}` — `redraw` (Read Pico local frame) means the frame is showing this photo and it now suits the frame's orientation differently; the page then calls `POST /api/display` for it. Errors: `400` bad path, neither field, `up` not 0/90/180/270 or `preset` longer than 64 bytes; `404` no such photo; `500` index not saved. An empty `preset` clears it.
+
+### `GET /api/orientation` (Read Pico local frame)
+
+Accelerometer reading and the orientation photos are chosen for.
+
+**Response:**
+```json
+{ "sensor": true, "accel_mg": {"x": 986, "y": -34, "z": -260}, "reading": 0, "sensed": 0, "orientation": 0 }
+```
+
+- `reading`: what the latest sample means (`null` lying flat or slanted); `sensed`: the last position held for 2 s; `orientation`: what is used after the `orientation_mode` setting — `0`/`90`/`180`/`270` clockwise from normal landscape.
 
 ### `POST /api/delete`
 
@@ -487,6 +518,38 @@ Update processing parameters.
 ### `DELETE /api/settings/processing`
 
 Reset to defaults.
+
+### `GET /api/presets`
+
+The user's processing presets ([PRD-PRESETS](PRD-PRESETS.md)), kept on the storage card as `/.presets.json`. Without a file: an empty list with `rev` 0. `404` when there is no storage.
+
+**Response:**
+```json
+{
+  "version": 1,
+  "rev": 7,
+  "default": "p2",
+  "presets": [
+    {
+      "id": "p2",
+      "name": "人像",
+      "source": "tuning",
+      "params": { "exposure": 1.0, "contrast": 1.1, "toneMode": "contrast", "colorMethod": "lab",
+                  "ditherAlgorithm": "stucki", "compressDynamicRange": true },
+      "created": 1793800000,
+      "updated": 1793800000
+    }
+  ]
+}
+```
+
+- `params` hold processing values only (the keys of `/api/settings/processing` except `scaleMode` and `backgroundColor`).
+- `default` names the ★ preset or is `null`. Making a preset the default is two calls: this document, then `POST /api/settings/processing` with its values (the frame's own processing reads the latter).
+- `source`: `tuning`, `manual`, `copy` or `migrated` (optional).
+
+### `PUT /api/presets`
+
+Replace the whole document (at most 24 KB). Its `rev` must equal the stored one: the response is the saved document with `rev` one higher. When another browser saved first: `409` with the stored document, so the page can apply its change again. `400` (with the reason) for more than 20 presets, ids that are empty, longer than 32 bytes or repeated, names empty or longer than 64 bytes, unknown modes or algorithms, numbers outside 0–10, or a `default` that names no preset.
 
 ---
 

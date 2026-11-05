@@ -17,6 +17,9 @@
 #include "debug_log.h"
 #include "display_flow.h"
 #include "display_manager.h"
+#if CONFIG_READ_PICO_LOCAL_FRAME
+#include "read_pico_orientation.h"
+#endif
 #include "esp_app_desc.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -719,6 +722,47 @@ static esp_err_t apply_config_values(cJSON *root, bool from_remote)
     if (item && cJSON_IsBool(item)) {
         debug_log_set_enabled(cJSON_IsTrue(item));
     }
+
+#if CONFIG_BOARD_DRIVER_READ_PICO
+    // How photos change: "clean" washes the panel first, "fast" only flashes it white
+    item = cJSON_GetObjectItem(root, "photo_refresh");
+    if (item) {
+        const char *mode = cJSON_GetStringValue(item);
+        if (!mode || (strcmp(mode, "clean") && strcmp(mode, "fast"))) {
+            utils_set_config_error("Photo change mode must be \"clean\" or \"fast\"");
+            return ESP_FAIL;
+        }
+        bool wash = !strcmp(mode, "clean");
+        if (config_manager_set_photo_wash(wash) != ESP_OK) {
+            utils_set_config_error("Could not save the photo change mode");
+            return ESP_FAIL;
+        }
+        display_manager_set_photo_wash(wash);
+    }
+#endif
+#if CONFIG_READ_PICO_LOCAL_FRAME
+    // Which way the frame stands: from the accelerometer, or held fixed
+    item = cJSON_GetObjectItem(root, "orientation_mode");
+    if (item) {
+        const char *name = cJSON_GetStringValue(item);
+        frame_orient_mode_t mode = !name                          ? (frame_orient_mode_t) -1
+                                   : !strcmp(name, "auto")        ? FRAME_ORIENT_AUTO
+                                   : !strcmp(name, "landscape")   ? FRAME_ORIENT_LANDSCAPE
+                                   : !strcmp(name, "portrait")    ? FRAME_ORIENT_PORTRAIT
+                                                                  : (frame_orient_mode_t) -1;
+        if ((int) mode < 0) {
+            utils_set_config_error("Orientation must be \"auto\", \"landscape\" or \"portrait\"");
+            return ESP_FAIL;
+        }
+        if (mode != config_manager_get_orient_mode()) {
+            if (config_manager_set_orient_mode(mode) != ESP_OK) {
+                utils_set_config_error("Could not save the orientation");
+                return ESP_FAIL;
+            }
+            read_pico_orientation_setting_changed();
+        }
+    }
+#endif
 
     return ESP_OK;
 }

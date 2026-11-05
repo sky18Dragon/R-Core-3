@@ -1,7 +1,25 @@
 import { fitWithin } from "./imageGeometry";
+import {
+  browserAppliesExifOrientation,
+  orientUpright,
+  readExifOrientation,
+} from "./exifOrientation";
 
-// Decode an image File into an <img> (rejects when the browser can't read it).
-export function loadImageFromFile(file) {
+// Long edge of the canvas used when we turn a photo upright ourselves: enough
+// for every later step (processing uses at most twice the panel's long edge).
+const UPRIGHT_MAX_EDGE = 4096;
+
+// Decode an image File the way it should be seen: an <img>, or a canvas turned
+// upright when the photo's EXIF orientation is something the browser ignored
+// (rejects when the browser can't read it). Both have width/height and draw.
+export async function loadImageFromFile(file) {
+  const img = await loadRawImage(file);
+  const orientation = await readExifOrientation(file);
+  if (orientation === 1 || (await browserAppliesExifOrientation())) return img;
+  return orientUpright(img, orientation, UPRIGHT_MAX_EDGE);
+}
+
+function loadRawImage(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();

@@ -152,6 +152,10 @@ static bool deep_sleep_enabled = true;  // Enabled by default
 
 // Debugging
 static bool debug_log_enabled = false;
+// Read Pico: wash the panel black/white before each photo (no ghosting) or not.
+static bool photo_wash_enabled = true;
+// Read Pico: follow the accelerometer, or hold one position (frame_orient_mode_t).
+static uint8_t orient_mode = FRAME_ORIENT_AUTO;
 
 // Config sync
 static int64_t config_last_updated = 0;
@@ -312,6 +316,8 @@ static void reset_load_defaults(void)
     display_orientation = DISPLAY_ORIENTATION_LANDSCAPE;
     display_rotation_deg = BOARD_HAL_DISPLAY_ROTATION_DEG;
     auto_rotate_enabled = save_downloaded_images = debug_log_enabled = false;
+    photo_wash_enabled = true;
+    orient_mode = FRAME_ORIENT_AUTO;
     deep_sleep_enabled = true;
     ip_mode = IP_MODE_DHCP;
     // The Read Pico product requires SD and has no volatile/flash fallback.
@@ -631,6 +637,16 @@ static esp_err_t config_manager_load(void)
             debug_log_enabled = (debug_log_val != 0);
             ESP_LOGI(TAG, "Loaded debug log setting from NVS: %s",
                      debug_log_enabled ? "enabled" : "disabled");
+        }
+
+        uint8_t photo_wash_val = 1;
+        if (nvs_get_u8(nvs_handle, NVS_PHOTO_WASH_KEY, &photo_wash_val) == ESP_OK) {
+            photo_wash_enabled = (photo_wash_val != 0);
+        }
+        uint8_t orient_val = FRAME_ORIENT_AUTO;
+        if (nvs_get_u8(nvs_handle, NVS_ORIENT_MODE_KEY, &orient_val) == ESP_OK &&
+            orient_val <= FRAME_ORIENT_PORTRAIT) {
+            orient_mode = orient_val;
         }
 
         // Config sync timestamp
@@ -2050,6 +2066,42 @@ void config_manager_set_debug_log_enabled(bool enabled)
 bool config_manager_get_debug_log_enabled(void)
 {
     return debug_log_enabled;
+}
+
+esp_err_t config_manager_set_photo_wash(bool enabled)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) return err;
+    err = nvs_set_u8(nvs_handle, NVS_PHOTO_WASH_KEY, enabled ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    if (err == ESP_OK) photo_wash_enabled = enabled;
+    ESP_LOGI(TAG, "Photo change: %s (%s)", enabled ? "wash" : "fast", esp_err_to_name(err));
+    return err;
+}
+
+bool config_manager_get_photo_wash(void)
+{
+    return photo_wash_enabled;
+}
+
+esp_err_t config_manager_set_orient_mode(frame_orient_mode_t mode)
+{
+    if (mode > FRAME_ORIENT_PORTRAIT) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) return err;
+    err = nvs_set_u8(nvs_handle, NVS_ORIENT_MODE_KEY, (uint8_t) mode);
+    if (err == ESP_OK) err = nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    if (err == ESP_OK) orient_mode = (uint8_t) mode;
+    return err;
+}
+
+frame_orient_mode_t config_manager_get_orient_mode(void)
+{
+    return (frame_orient_mode_t) orient_mode;
 }
 
 #if CONFIG_BOARD_DRIVER_READ_PICO

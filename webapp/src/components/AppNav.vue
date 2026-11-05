@@ -26,6 +26,7 @@ const items = computed(() => [
   { view: "photos", icon: "mdi-image-outline", title: t("Photos") },
   ...(hasStorage.value ? [{ view: "albums", icon: "mdi-image-album", title: t("Albums") }] : []),
   { view: "slideshow", icon: "mdi-play-box-multiple-outline", title: t("Slideshow") },
+  { view: "presets", icon: "mdi-tune-variant", title: t("Presets") },
 ]);
 
 const open = computed({

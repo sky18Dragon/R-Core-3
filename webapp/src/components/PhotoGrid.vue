@@ -1,17 +1,33 @@
 <script setup>
 import { t } from "../i18n";
+import { computed } from "vue";
+import { useDisplay } from "vuetify";
 import { useUploadsStore } from "../stores";
+import UprightPhoto from "./UprightPhoto.vue";
 import { isSelected, selecting, toggleSelected } from "../utils/selection";
+import { uprightAspect } from "../utils/orientation";
 
-// Frame-shaped tiles (square on phones), edge to edge. Hover (or a long press on touch) shows a
-// check to pick photos; while anything is picked, a tap picks instead of opening.
+// Photos standing upright in rows of equal height (portrait photos as portrait
+// tiles); square tiles edge to edge on phones. Hover (or a long press on touch)
+// shows a check to pick photos; while anything is picked, a tap picks instead of
+// opening.
 defineProps({
   images: { type: Array, required: true },
 });
 const emit = defineEmits(["open"]);
 
 const uploads = useUploadsStore();
+const { xs } = useDisplay();
 const LONG_PRESS_MS = 450;
+
+// The stored photos' shape (frame width / height)
+const frameRatio = computed(() => {
+  const [w, h] = String(uploads.frameAspect).split("/").map(Number);
+  return w && h ? w / h : 16 / 9;
+});
+function tileAspect(image) {
+  return xs.value ? 1 : uprightAspect(image.up, frameRatio.value);
+}
 let pressTimer = null;
 let longPressed = false;
 
@@ -50,7 +66,7 @@ function pressEnd() {
       :key="image.album + '/' + image.filename"
       class="photo-tile"
       :class="{ 'photo-tile--picked': isSelected(image) }"
-      :style="{ '--tile-aspect': uploads.frameAspect }"
+      :style="{ '--a': uprightAspect(image.up, frameRatio) }"
       role="button"
       tabindex="0"
       :aria-label="selecting ? t('Select photo') : t('Open photo')"
@@ -63,7 +79,7 @@ function pressEnd() {
       @pointerleave="pressEnd"
       @contextmenu.prevent
     >
-      <img :src="thumbUrl(image)" alt="" loading="lazy" draggable="false" />
+      <UprightPhoto :src="thumbUrl(image)" :up="image.up || 0" :box-aspect="tileAspect(image)" />
       <button
         type="button"
         class="photo-check"
@@ -80,38 +96,49 @@ function pressEnd() {
 </template>
 
 <style scoped>
+/* Rows of equal height: each tile grows in proportion to its width/height, so a
+   row stays level; the trailing filler keeps the last row from stretching. */
 .photo-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start; /* heights come from each tile's shape, not the row */
   gap: 4px;
+}
+.photo-grid::after {
+  content: "";
+  flex-grow: 1000000;
 }
 /* Phones: edge to edge (the page has a 12px gutter) in square tiles, like a
    camera roll; the full frame-shaped photo shows when one is opened. */
 @media (max-width: 600px) {
   .photo-grid {
+    display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 2px;
     margin: 0 -12px;
   }
+  .photo-grid::after {
+    content: none;
+  }
   .photo-grid .photo-tile {
+    flex: none;
     aspect-ratio: 1;
   }
 }
 .photo-tile {
   position: relative;
-  aspect-ratio: var(--tile-aspect, 16 / 9);
+  flex: var(--a, 1.78) 1 calc(var(--a, 1.78) * 150px);
+  aspect-ratio: var(--a, 1.78);
   overflow: hidden;
   cursor: pointer;
   background: rgba(var(--v-theme-on-surface), 0.06);
   user-select: none;
   -webkit-touch-callout: none;
 }
-.photo-tile img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform 0.12s ease;
+.photo-tile :deep(.upright) {
+  transition:
+    inset 0.12s ease,
+    border-radius 0.12s ease;
 }
 .photo-tile:focus-visible {
   outline: 2px solid rgb(var(--v-theme-on-surface));
@@ -156,8 +183,8 @@ function pressEnd() {
 .photo-tile--picked {
   background: rgba(var(--v-theme-on-surface), 0.12);
 }
-.photo-tile--picked img {
-  transform: scale(0.86);
+.photo-tile--picked :deep(.upright) {
+  inset: 7%;
   border-radius: 6px;
 }
 .photo-tile--picked .photo-check {
@@ -165,7 +192,7 @@ function pressEnd() {
   background: rgb(var(--v-theme-surface));
 }
 @media (prefers-reduced-motion: reduce) {
-  .photo-tile img,
+  .photo-tile :deep(.upright),
   .photo-check,
   .photo-tile::before {
     transition: none;
